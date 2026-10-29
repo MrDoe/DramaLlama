@@ -347,8 +347,9 @@ function RenderBoard({
             Render queue
           </h2>
           <p className="panel-sub">
-            {ready}/{project.stems.length} stems have a reference voice · Breeze
-            on GPU · Whisper on CPU
+            {ready}/{project.stems.length} stems have a{" "}
+            {project.language === "de" ? "preset voice" : "reference voice"} ·{" "}
+            {project.language === "de" ? "Qwen3" : "Breeze"} on GPU · Whisper on CPU
           </p>
         </div>
         <div className="panel-actions">

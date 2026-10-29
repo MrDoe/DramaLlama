@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from drama_studio import handlers as handler_module
 from drama_studio.engines.fake import FakeEngine
 from drama_studio.jobs import JobQueue

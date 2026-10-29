@@ -148,7 +148,11 @@ export const api = {
     const source = new EventSource(`${BASE}/jobs/${jobId}/events`);
     source.addEventListener("job", (event) => {
       try {
-        onUpdate(JSON.parse((event as MessageEvent).data) as Job);
+        const job = JSON.parse((event as MessageEvent).data) as Job;
+        onUpdate(job);
+        if (["succeeded", "failed", "cancelled"].includes(job.status)) {
+          source.close();
+        }
       } catch {
         // ignore malformed event
       }

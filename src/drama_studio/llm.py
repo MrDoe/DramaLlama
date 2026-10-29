@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field

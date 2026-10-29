@@ -4,7 +4,6 @@ import argparse
 import json
 import sys
 import threading
-from pathlib import Path
 
 from .config import DATA_DIR, DB_PATH, HOST, PORT, PROJECTS_DIR, ensure_dirs
 from .handlers import default_handlers

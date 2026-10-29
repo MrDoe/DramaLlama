@@ -23,6 +23,10 @@ class EngineManager:
     def get(self, name: str) -> BaseEngine:
         engine = self._engines.get(name)
         if engine is None:
+            # Breeze and Qwen3 must never be resident together on a 16 GB card.
+            for other in list(self._engines):
+                if other != name:
+                    self.unload(other)
             factory = ENGINES.get(name)
             if factory is None:
                 raise EngineNotAvailable(f"unknown engine {name!r}")

@@ -36,3 +36,8 @@ pythonpath = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# Broad exception handling is deliberate around optional ffmpeg/Ollama calls;
+# FastAPI's File(...) default is the documented idiom.
+ignore = ["B008", "BLE001", "S110", "PLW1510"]

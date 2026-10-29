@@ -13,7 +13,7 @@ def make_client(tmp_path):
 
 
 def test_health(tmp_path):
-    app, client = make_client(tmp_path)
+    _app, client = make_client(tmp_path)
     response = client.get("/api/health")
     assert response.status_code == 200
     body = response.json()
@@ -23,7 +23,7 @@ def test_health(tmp_path):
 
 
 def test_create_get_list_cancel(tmp_path):
-    app, client = make_client(tmp_path)
+    _app, client = make_client(tmp_path)
     created = client.post("/api/jobs", json={"type": "demo.echo", "payload": {"x": 1}})
     assert created.status_code == 201
     job = created.json()

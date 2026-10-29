@@ -5,7 +5,6 @@ import pytest
 from drama_studio.jobs import JobQueue
 from drama_studio.models import Job
 from drama_studio.worker import (
-    JobCancelled,
     JobContext,
     PermanentJobError,
     Worker,

@@ -202,6 +202,14 @@ def create_app(
         if body.method not in {"deterministic", "llm"}:
             raise HTTPException(status_code=400, detail="method must be deterministic or llm")
         if body.method == "llm":
+            if any(
+                job.type in {"stem.render", "reference.design"}
+                for job in queue.list_jobs("running", 50)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="GPU is rendering; wait for the stem to finish before LLM parse",
+                )
             try:
                 result = llm_parse_script(
                     project.raw_script, project.language, client=llm

@@ -294,10 +294,10 @@ class BreezeEngine(BaseEngine):
 
     @staticmethod
     def _choose(takes: list[Take], ref_f0: float) -> Take:
-        return sorted(
+        return min(
             takes,
             key=lambda take: (
                 (take.mfcc_sim or 0.0) < 0.98,
                 abs((take.f0_hz or 0.0) - ref_f0),
             ),
-        )[0]
+        )

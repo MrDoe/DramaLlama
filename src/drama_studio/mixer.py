@@ -4,10 +4,10 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
-from scipy.signal import butter, resample_poly, sosfilt
 import soundfile as sf
+from scipy.signal import butter, resample_poly, sosfilt
 
-from .models import Cue, MixResult, Project
+from .models import MixResult, Project
 
 SR = 24000
 TAIL_S = 2.0
@@ -58,7 +58,7 @@ def _telephone(samples: np.ndarray) -> np.ndarray:
 
 
 def _place(buffer: np.ndarray, clip: np.ndarray, start_s: float, gain: float = 1.0) -> None:
-    start = max(0, int(round(start_s * SR)))
+    start = max(0, round(start_s * SR))
     if start >= len(buffer) or clip.size == 0:
         return
     length = min(len(clip), len(buffer) - start)

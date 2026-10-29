@@ -101,14 +101,16 @@ class SfxLibrary:
         if tokens:
             scored: list[tuple[int, SfxItem]] = []
             for item in items:
-                haystack = f"{item.name} {item.folder} {' '.join(item.tags)}".lower()
+                name_tokens = set(re.split(r"[^a-z0-9]+", item.name.lower()))
+                folder_tokens = set(re.split(r"[^a-z0-9]+", item.folder.lower()))
+                tag_tokens = set(item.tags)
                 score = 0
                 for token in tokens:
-                    if token in item.name.lower():
+                    if token in name_tokens:
                         score += 6
-                    elif token in item.folder.lower():
+                    elif token in folder_tokens:
                         score += 3
-                    elif token in haystack:
+                    elif token in tag_tokens:
                         score += 2
                     else:
                         score -= 4

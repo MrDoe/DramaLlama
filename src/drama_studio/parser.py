@@ -113,12 +113,7 @@ def _looks_like_metadata(line: str) -> bool:
     text = line.strip()
     return (
         not text
-        or text.startswith(">")
-        or text.startswith("|")
-        or text.startswith("---")
-        or text.startswith("## ")
-        or text.startswith("### ")
-        or text.startswith("**")
+        or text.startswith((">", "|", "---", "## ", "### ", "**"))
         or text.lower().startswith("cast")
         or text.lower().startswith("tag")
     )
@@ -323,7 +318,7 @@ def parse_script(raw: str, language: str = "en", title: str | None = None) -> Pa
 
         # A non-scene heading after the script starts an appendix. Skip it so
         # rendering notes and tag tables never become dialogue.
-        if line.startswith("## ") or line.startswith("### ") or line.startswith("# "):
+        if line.startswith(("## ", "### ", "# ")):
             builder.finalize()
             builder.appendix = True
             builder.report.ignored_lines += 1
@@ -344,7 +339,7 @@ def parse_script(raw: str, language: str = "en", title: str | None = None) -> Pa
             builder._accounted += 1
             continue
 
-        if line.startswith("---") or line.startswith(">") or line.startswith("|"):
+        if line.startswith(("---", ">", "|")):
             builder.finalize()
             builder.report.ignored_lines += 1
             builder._accounted += 1
