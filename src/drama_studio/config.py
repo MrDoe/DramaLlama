@@ -14,6 +14,8 @@ PORT = int(os.environ.get("DRAMA_STUDIO_PORT", "8770"))
 
 # Ollama / local LLM defaults. The app never runs the LLM while Breeze is loaded.
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+SUNO_BRIDGE_URL = os.environ.get("SUNO_BRIDGE_URL", "http://127.0.0.1:9430")
+CHATTERBOX_URL = os.environ.get("CHATTERBOX_URL", "http://127.0.0.1:4123")
 LLM_MODEL = os.environ.get("DRAMA_STUDIO_LLM", "gemma4:12b-16k")
 LLM_KEEP_ALIVE = os.environ.get("DRAMA_STUDIO_LLM_KEEP_ALIVE", "0")
 

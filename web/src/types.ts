@@ -1,5 +1,5 @@
 export type Language = "en" | "de";
-export type EngineName = "breeze" | "qwen3" | "fake";
+export type EngineName = "breeze" | "chatterbox" | "fake";
 
 export interface Character {
   id: string;
@@ -9,7 +9,6 @@ export interface Character {
   ref_text?: string | null;
   ref_instruction?: string | null;
   ref_file?: string | null;
-  qwen_speaker?: string | null;
   baseline_instruct: string;
   locked: boolean;
   f0_hz?: number | null;
@@ -90,6 +89,16 @@ export interface Cue {
   filter: "none" | "telephone" | "radio";
 }
 
+export interface SunoTrack {
+  clip_id: string;
+  title: string;
+  file: string;
+  sfx_id: string;
+  duration_s?: number | null;
+  prompt: string;
+  created_at: string;
+}
+
 export interface MixResult {
   file: string;
   mp3?: string | null;
@@ -112,6 +121,7 @@ export interface ProjectSettings {
 export interface Take {
   id: string;
   file: string;
+  engine: string;
   duration_s: number;
   sample_rate: number;
   seed: number;
@@ -128,6 +138,7 @@ export interface Stem {
   line_ids: string[];
   text: string;
   instruction: string;
+  engine?: string | null;
   cfg_scale: number;
   seed: number;
   takes: Take[];
@@ -178,6 +189,7 @@ export interface Project {
   stems: Stem[];
   alignments: Record<string, AlignmentResult>;
   cues: Cue[];
+  suno: SunoTrack[];
   mix?: MixResult | null;
   settings: ProjectSettings;
   created_at: string;

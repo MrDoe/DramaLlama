@@ -160,6 +160,41 @@ def test_select_take_queues_realign(tmp_path):
     assert selected[0]["id"] == "take-b"
 
 
+def test_engine_selection_and_suno_queue(tmp_path):
+    _, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "API Test", "language": "en", "script_text": SCRIPT},
+    ).json()
+    project = client.post(f"/api/projects/{project['id']}/stems").json()
+    stem = project["stems"][0]
+
+    changed = client.patch(
+        f"/api/projects/{project['id']}/stems/{stem['id']}",
+        json={"engine": "chatterbox"},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["stems"][0]["engine"] == "chatterbox"
+
+    german = client.post(
+        "/api/projects",
+        json={"title": "German Test", "language": "de", "script_text": SCRIPT},
+    ).json()
+    german = client.post(f"/api/projects/{german['id']}/stems").json()
+    invalid = client.patch(
+        f"/api/projects/{german['id']}/stems/{german['stems'][0]['id']}",
+        json={"engine": "breeze"},
+    )
+    assert invalid.status_code == 400
+
+    suno = client.post(
+        f"/api/projects/{project['id']}/suno/generate",
+        json={"kind": "instrumental", "prompt": "slow rain jazz", "duration": 60},
+    )
+    assert suno.status_code == 202
+    assert suno.json()["type"] == "suno.generate"
+
+
 def test_mix_queue_and_project_files(tmp_path):
     app, client = make_client(tmp_path)
     project = client.post(

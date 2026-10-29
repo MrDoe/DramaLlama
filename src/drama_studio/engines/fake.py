@@ -114,8 +114,9 @@ class FakeEngine(BaseEngine):
             path = write_mono(take_dir / filename, audio, self.info.sample_rate)
             takes.append(
                 Take(
-                    id=f"{request.stem_id}-{request.seed}-{index}",
+                    id=f"fake-{request.stem_id}-{request.seed}-{index}",
                     file=str(path.relative_to(output_dir)),
+                    engine=self.info.name,
                     duration_s=len(audio) / self.info.sample_rate,
                     sample_rate=self.info.sample_rate,
                     seed=request.seed + index,

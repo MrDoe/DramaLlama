@@ -260,7 +260,7 @@ class _Builder:
             self.report.warnings.append(
                 ParseWarning(source_line=0, message="no scenes found")
             )
-        engine = "qwen3" if self.script.language == "de" else "breeze"
+        engine = "chatterbox" if self.script.language == "de" else "breeze"
         for character in self.script.characters.values():
             character.engine = engine
         return ParseResult(script=self.script, report=self.report)

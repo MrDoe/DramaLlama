@@ -23,7 +23,7 @@ import {
   Waveform,
 } from "@phosphor-icons/react";
 import { api } from "../api";
-import type { Job, Line, Project, SfxItem, Stem } from "../types";
+import type { EngineInfo, Job, Line, Project, SfxItem, Stem } from "../types";
 import { formatDuration, initials, speakerStyle } from "../utils";
 
 const STEPS = [
@@ -115,15 +115,13 @@ function CoveragePanel({ project }: { project: Project }) {
 function CastPanel({
   project,
   jobs,
-  presets,
   onDesign,
-  onPreset,
+  onUpload,
 }: {
   project: Project;
   jobs: Record<string, Job>;
-  presets: string[];
   onDesign: (speaker: string) => void;
-  onPreset: (speaker: string, preset: string) => void;
+  onUpload: (speaker: string, file: File) => void;
 }) {
   const lines = project.script.scenes.flatMap((scene) => scene.lines);
   const cast = useMemo(
@@ -164,33 +162,29 @@ function CastPanel({
                   <p className="cast-name">{character.name}</p>
                   <p className="cast-lines">
                     {character.count} line{character.count === 1 ? "" : "s"} ·{" "}
-                    {project.language === "de" || character.engine === "qwen3"
-                      ? "Qwen3 preset"
+                    {project.language === "de" || character.engine === "chatterbox"
+                      ? "Chatterbox clone"
                       : "Breeze reference"}
                   </p>
                   {character.description ? (
                     <p className="cast-desc">{character.description}</p>
                   ) : null}
                   <div className="cast-voice">
-                    {project.language === "de" ? (
-                      <label className="cast-preset">
-                        <span>Qwen3 preset</span>
-                        <select
-                          value={character.qwen_speaker ?? ""}
-                          onChange={(event) =>
-                            onPreset(character.id, event.target.value)
-                          }
-                        >
-                          <option value="">Choose…</option>
-                          {presets.map((preset) => (
-                            <option key={preset} value={preset}>
-                              {preset}
-                            </option>
-                          ))}
-                        </select>
+                    {character.ref_file ? (
+                      <span className="badge">voice sample ready</span>
+                    ) : project.language === "de" ? (
+                      <label className="button button-secondary button-sm cast-upload">
+                        <Waveform size={12} />
+                        Upload voice
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (file) onUpload(character.id, file);
+                          }}
+                        />
                       </label>
-                    ) : character.ref_file ? (
-                      <span className="badge">voice ready</span>
                     ) : (
                       <button
                         type="button"
@@ -315,14 +309,18 @@ function StemCard({ stem }: { stem: Stem }) {
 function RenderBoard({
   project,
   jobs,
+  engines,
   onRender,
   onSelectTake,
+  onEngineChange,
   onRefresh,
 }: {
   project: Project;
   jobs: Record<string, Job>;
+  engines: EngineInfo[];
   onRender: (stem: Stem) => void;
   onSelectTake: (stem: Stem, takeId: string) => void;
+  onEngineChange: (stem: Stem, engine: string) => void;
   onRefresh: () => void;
 }) {
   const byScene = project.script.scenes
@@ -332,13 +330,22 @@ function RenderBoard({
     }))
     .filter((entry) => entry.stems.length > 0);
 
-  const voiceReady = (speaker: string) => {
-    const character = project.script.characters[speaker];
-    return project.language === "de"
-      ? Boolean(character?.qwen_speaker)
-      : Boolean(character?.ref_file);
+  const defaultEngine = project.language === "de" ? "chatterbox" : "breeze";
+  const availableEngines = engines.filter((engine) =>
+    engine.languages.includes(project.language),
+  );
+  const availableNames = new Set<string>(
+    availableEngines.map((engine) => engine.name),
+  );
+  const engineFor = (stem: Stem) =>
+    stem.engine && availableNames.has(stem.engine) ? stem.engine : defaultEngine;
+  const voiceReady = (stem: Stem) => {
+    const engine = engineFor(stem);
+    if (engine === "fake") return true;
+    if (engine === "chatterbox") return true;
+    return Boolean(project.script.characters[stem.speaker]?.ref_file);
   };
-  const ready = project.stems.filter((stem) => voiceReady(stem.speaker)).length;
+  const ready = project.stems.filter((stem) => voiceReady(stem)).length;
 
   return (
     <div>
@@ -350,8 +357,8 @@ function RenderBoard({
           </h2>
           <p className="panel-sub">
             {ready}/{project.stems.length} stems have a{" "}
-            {project.language === "de" ? "preset voice" : "reference voice"} ·{" "}
-            {project.language === "de" ? "Qwen3" : "Breeze"} on GPU · Whisper on CPU
+            {project.language === "de" ? "voice sample" : "reference voice"} ·{" "}
+            {project.language === "de" ? "Chatterbox" : "Breeze"} on GPU · Whisper on CPU
           </p>
         </div>
         <div className="panel-actions">
@@ -375,8 +382,8 @@ function RenderBoard({
               </div>
               <div className="render-grid">
                 {stems.map((stem) => {
-                  const character = project.script.characters[stem.speaker];
-                  const readyForStem = voiceReady(stem.speaker);
+                  const selectedEngine = engineFor(stem);
+                  const readyForStem = voiceReady(stem);
                   const job = jobs[stem.id];
                   const realignJob = jobs[`${stem.id}:realign`];
                   const busy =
@@ -432,6 +439,26 @@ function RenderBoard({
                         </div>
                       ) : null}
 
+                      <div className="engine-row">
+                        <label className="cue-field">
+                          <span>Engine</span>
+                          <select
+                            value={selectedEngine}
+                            onChange={(event) =>
+                              onEngineChange(stem, event.target.value)
+                            }
+                            disabled={busy}
+                          >
+                            {availableEngines.map((engine) => (
+                              <option key={engine.name} value={engine.name}>
+                                {engine.name}
+                                {engine.name === "fake" ? " (test)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+
                       <div className="render-meta">
                         <span>{stem.line_ids.length} lines</span>
                         <span>scene {stem.scene}</span>
@@ -450,7 +477,8 @@ function RenderBoard({
                               onClick={() => onSelectTake(stem, take.id)}
                               disabled={busy}
                             >
-                              take {index + 1} · {formatDuration(take.duration_s)}
+                              {take.engine} · take {index + 1} ·{" "}
+                              {formatDuration(take.duration_s)}
                               {take.f0_hz ? ` · ${Math.round(take.f0_hz)} Hz` : ""}
                             </button>
                           ))}
@@ -481,14 +509,12 @@ function RenderBoard({
                       <div className="render-actions">
                         {readyForStem ? (
                           <span className="badge">
-                            {project.language === "de"
-                              ? character?.qwen_speaker
-                              : "ref ready"}
+                            {project.language === "de" ? "chatterbox" : "ref ready"}
                           </span>
                         ) : (
                           <span className="render-missing">
                             {project.language === "de"
-                              ? "choose a preset voice"
+                              ? "upload a voice sample"
                               : "no reference voice"}
                           </span>
                         )}
@@ -516,15 +542,29 @@ function RenderBoard({
 
 function SoundBoard({
   project,
+  jobs,
   onProject,
+  onTrackJob,
   onError,
 }: {
   project: Project;
+  jobs: Record<string, Job>;
   onProject: (project: Project) => void;
+  onTrackJob: (key: string, job: Job) => void;
   onError: (message: string) => void;
 }) {
   const lines = project.script.scenes.flatMap((scene) => scene.lines);
   const [query, setQuery] = useState("");
+  const [sunoStatus, setSunoStatus] = useState<{
+    ok: boolean;
+    extensionConnected?: boolean;
+    error?: string;
+  } | null>(null);
+  const [sunoPrompt, setSunoPrompt] = useState("");
+  const [sunoTitle, setSunoTitle] = useState("");
+  const [sunoTags, setSunoTags] = useState("cinematic, slow, instrumental");
+  const [sunoDuration, setSunoDuration] = useState(90);
+  const [sunoKind, setSunoKind] = useState<"instrumental" | "song">("instrumental");
   const [items, setItems] = useState<SfxItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState<string | null>(null);
@@ -532,6 +572,10 @@ function SoundBoard({
   const [kind, setKind] = useState<"one_shot" | "bed" | "music">("one_shot");
   const [gain, setGain] = useState(-12);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    api.sunoStatus().then(setSunoStatus).catch(() => setSunoStatus({ ok: false }));
+  }, []);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -593,6 +637,46 @@ function SoundBoard({
     }
   }
 
+  async function generateSuno() {
+    if (!sunoPrompt.trim()) {
+      onError("Describe the music you want first.");
+      return;
+    }
+    try {
+      const job = await api.generateSuno(project.id, {
+        kind: sunoKind,
+        prompt: sunoPrompt,
+        title: sunoTitle || project.title,
+        tags: sunoTags,
+        duration: sunoDuration,
+      });
+      onTrackJob("suno", job);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "Could not start Suno");
+    }
+  }
+
+  async function addSunoCue(track: Project["suno"][number]) {
+    if (!anchorLineId) {
+      onError("Choose a line to anchor the music to.");
+      return;
+    }
+    try {
+      const updated = await api.addCue(project.id, {
+        kind: "music",
+        sfx_id: track.sfx_id,
+        name: track.title,
+        anchor_line_id: anchorLineId,
+        gain_db: -18,
+        loop: true,
+        duck: true,
+      });
+      onProject(updated);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "Could not add Suno cue");
+    }
+  }
+
   async function removeCue(cueId: string) {
     try {
       await api.deleteCue(project.id, cueId);
@@ -608,8 +692,162 @@ function SoundBoard({
     return line ? `${line.speaker}: ${line.text.slice(0, 46)}` : lineId;
   };
 
+  const sunoJob = jobs["suno"];
+  const sunoBusy =
+    sunoJob?.status === "queued" || sunoJob?.status === "running";
+  const sunoConnected = Boolean(sunoStatus?.ok && sunoStatus.extensionConnected);
+
   return (
-    <div className="sound-grid">
+    <>
+      <section className="panel suno-panel">
+        <div className="panel-head">
+          <div>
+            <h2 className="panel-title">
+              <MusicNotes size={15} weight="fill" />
+              Suno music
+            </h2>
+            <p className="panel-sub">
+              Generate a theme, bed or song through BetterSuno ·{" "}
+              {sunoConnected
+                ? "extension connected"
+                : sunoStatus?.ok
+                  ? "extension not connected"
+                  : "bridge offline"}
+            </p>
+          </div>
+          <div className="panel-actions">
+            <span className={`badge ${sunoConnected ? "badge-accent" : ""}`}>
+              {sunoConnected ? "Suno ready" : "Suno offline"}
+            </span>
+            <button
+              type="button"
+              className="button button-ghost button-sm"
+              onClick={() =>
+                api.sunoStatus().then(setSunoStatus).catch(() => setSunoStatus({ ok: false }))
+              }
+            >
+              Check
+            </button>
+          </div>
+        </div>
+
+        <div className="suno-body">
+          <div className="suno-form">
+            <label className="cue-field">
+              <span>Music prompt</span>
+              <textarea
+                value={sunoPrompt}
+                onChange={(event) => setSunoPrompt(event.target.value)}
+                placeholder="Slow, rain-soaked noir jazz; muted trumpet, brushed drums, no vocals…"
+              />
+            </label>
+            <div className="suno-inline">
+              <label className="cue-field">
+                <span>Title</span>
+                <input
+                  value={sunoTitle}
+                  onChange={(event) => setSunoTitle(event.target.value)}
+                  placeholder={project.title}
+                />
+              </label>
+              <label className="cue-field">
+                <span>Duration</span>
+                <input
+                  type="number"
+                  min={10}
+                  max={360}
+                  step={5}
+                  value={sunoDuration}
+                  onChange={(event) => setSunoDuration(Number(event.target.value))}
+                />
+              </label>
+              <label className="cue-field">
+                <span>Kind</span>
+                <select
+                  value={sunoKind}
+                  onChange={(event) =>
+                    setSunoKind(event.target.value as "instrumental" | "song")
+                  }
+                >
+                  <option value="instrumental">instrumental</option>
+                  <option value="song">song</option>
+                </select>
+              </label>
+            </div>
+            <label className="cue-field">
+              <span>Style tags</span>
+              <input
+                value={sunoTags}
+                onChange={(event) => setSunoTags(event.target.value)}
+              />
+            </label>
+            <div className="suno-actions">
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => void generateSuno()}
+                disabled={sunoBusy || !sunoConnected}
+              >
+                {sunoBusy ? <span className="spinner" /> : <MusicNotes size={15} weight="fill" />}
+                {sunoBusy ? "Generating…" : "Generate with Suno"}
+              </button>
+              {!sunoConnected ? (
+                <span className="render-missing">
+                  start `node suno-bridge/server.mjs` + open suno.com
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="suno-tracks">
+            {sunoBusy ? (
+              <div className="render-progress">
+                <div className="render-progress-head">
+                  <span>{sunoJob?.message || sunoJob?.status}</span>
+                  <strong>{Math.round((sunoJob?.progress ?? 0) * 100)}%</strong>
+                </div>
+                <div className="coverage-bar">
+                  <div
+                    className="coverage-fill"
+                    style={{ width: `${(sunoJob?.progress ?? 0) * 100}%` }}
+                  />
+                </div>
+              </div>
+            ) : null}
+            {sunoJob?.status === "failed" ? (
+              <p className="render-error">{sunoJob.error?.split("\n")[0]}</p>
+            ) : null}
+            {project.suno.length === 0 ? (
+              <div className="empty-list">
+                No Suno tracks yet. Generate a cue and add it to the scene.
+              </div>
+            ) : (
+              project.suno.map((track) => (
+                <div className="suno-track" key={track.clip_id}>
+                  <div className="suno-track-head">
+                    <strong>{track.title}</strong>
+                    <span>
+                      {formatDuration(track.duration_s ?? 0)} · {track.clip_id.slice(-6)}
+                    </span>
+                  </div>
+                  <audio controls preload="metadata" src={api.sfxAudioUrl(track.sfx_id)} />
+                  <div className="suno-track-actions">
+                    <button
+                      type="button"
+                      className="button button-secondary button-sm"
+                      onClick={() => void addSunoCue(track)}
+                    >
+                      Add as music cue
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </section>
+
+      <div className="sound-grid">
       <section className="panel">
         <div className="panel-head">
           <div>
@@ -765,7 +1003,8 @@ function SoundBoard({
           )}
         </div>
       </section>
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -919,11 +1158,11 @@ export function ProjectPage() {
     "script" | "stems" | "render" | "sound" | "mix"
   >("script");
   const [jobs, setJobs] = useState<Record<string, Job>>({});
-  const [qwenVoices, setQwenVoices] = useState<string[]>([]);
+  const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api.qwenVoices().then(setQwenVoices).catch(() => setQwenVoices([]));
+    api.engines().then(setEngines).catch(() => setEngines([]));
   }, []);
 
   useEffect(() => {
@@ -1039,6 +1278,7 @@ export function ProjectPage() {
           candidates: 2,
           cfg_scale: stem.cfg_scale,
           seed: stem.seed,
+          engine: stem.engine ?? undefined,
         });
         trackJob(stem.id, job);
       } catch (reason) {
@@ -1046,6 +1286,19 @@ export function ProjectPage() {
       }
     },
     [project, trackJob],
+  );
+
+  const changeEngine = useCallback(
+    async (stem: Stem, engine: string) => {
+      if (!project) return;
+      try {
+        const updated = await api.updateStem(project.id, stem.id, { engine });
+        setProject(updated);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not change engine");
+      }
+    },
+    [project],
   );
 
   const selectTake = useCallback(
@@ -1106,16 +1359,14 @@ export function ProjectPage() {
     }
   }, [project, trackJob]);
 
-  const updatePreset = useCallback(
-    async (speaker: string, preset: string) => {
+  const uploadVoice = useCallback(
+    async (speaker: string, file: File) => {
       if (!project) return;
       try {
-        const updated = await api.updateCharacter(project.id, speaker, {
-          qwen_speaker: preset || null,
-        });
+        const updated = await api.uploadVoiceSample(project.id, speaker, file);
         setProject(updated);
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "Could not set voice preset");
+        setError(reason instanceof Error ? reason.message : "Could not upload voice sample");
       }
     },
     [project],
@@ -1187,7 +1438,7 @@ export function ProjectPage() {
           <div className="project-title-row">
             <h1 className="project-title">{project.title}</h1>
             <span className={`badge ${project.language === "de" ? "badge-violet" : "badge-accent"}`}>
-              {project.language === "de" ? "Deutsch · Qwen3" : "English · Breeze"}
+              {project.language === "de" ? "Deutsch · Chatterbox" : "English · Breeze"}
             </span>
           </div>
           <p className="project-sub">
@@ -1402,9 +1653,8 @@ export function ProjectPage() {
           <CastPanel
             project={project}
             jobs={jobs}
-            presets={qwenVoices}
             onDesign={designVoice}
-            onPreset={(speaker, preset) => void updatePreset(speaker, preset)}
+            onUpload={(speaker, file) => void uploadVoice(speaker, file)}
           />
         </div>
         </div>
@@ -1418,14 +1668,18 @@ export function ProjectPage() {
         <RenderBoard
           project={project}
           jobs={jobs}
+          engines={engines}
           onRender={renderStem}
           onSelectTake={(stem, takeId) => void selectTake(stem, takeId)}
+          onEngineChange={(stem, engine) => void changeEngine(stem, engine)}
           onRefresh={() => void refreshProject()}
         />
       ) : activeStep === "sound" ? (
         <SoundBoard
           project={project}
+          jobs={jobs}
           onProject={setProject}
+          onTrackJob={trackJob}
           onError={setError}
         />
       ) : (

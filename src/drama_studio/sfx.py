@@ -127,6 +127,15 @@ class SfxLibrary:
             self.scan()
         return self._items.get(sfx_id)
 
+    def find_by_path(self, path: str | Path) -> SfxItem | None:
+        if not self._loaded:
+            self.scan()
+        target = Path(path).resolve()
+        return next(
+            (item for item in self._items.values() if Path(item.path).resolve() == target),
+            None,
+        )
+
     def audio_path(self, sfx_id: str) -> Path | None:
         item = self.get(sfx_id)
         if item is None:

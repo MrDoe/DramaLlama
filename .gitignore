@@ -14,6 +14,9 @@ web/node_modules/
 web/dist/
 web/.vite/
 
+# Node Suno bridge
+suno-bridge/node_modules/
+
 # OS / editor
 .DS_Store
 *.swp

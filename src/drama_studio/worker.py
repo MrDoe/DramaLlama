@@ -59,7 +59,7 @@ class Worker:
     """Polls the queue and executes one job at a time.
 
     The worker is deliberately single-threaded: there is one GPU and Breeze,
-    Qwen3 and the local LLM must never be resident together. Long CPU work
+    Chatterbox and the local LLM must never be resident together. Long CPU work
     (Whisper alignment) can be added as a separate worker later.
     """
 

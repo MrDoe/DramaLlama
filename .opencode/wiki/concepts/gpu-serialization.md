@@ -1,6 +1,6 @@
 ---
 title: GPU serialization
-tags: [gpu, vram, breeze, qwen3, whisper, ollama]
+tags: [gpu, vram, breeze, chatterbox, whisper, ollama]
 sourceRefs:
   - src/drama_studio/handlers.py
   - src/drama_studio/worker.py
@@ -16,13 +16,14 @@ There is one 16 GB RTX 4090 Laptop GPU. Everything must be scheduled around it.
 | Workload | Approx. VRAM |
 |---|---:|
 | Breeze TTS 2 eager | 8.5 GB peak |
-| Qwen3-TTS 1.7B bf16 | ~4.3 GB peak |
+| Chatterbox Multilingual 0.5B (external server) | ~2–4 GB |
 | Ollama `gemma4:12b` | ~7.6 GB |
 | faster-whisper large-v3 | CPU int8 (no GPU) |
 
 Breeze + Ollama does not fit. Breeze + Whisper on GPU does not fit. The worker
 is single-threaded and the API never imports torch; LLM calls happen before a
-render and Ollama is invoked with `keep_alive: 0`.
+render and Ollama is invoked with `keep_alive: 0`. Chatterbox and Suno live in
+separate server processes, so `EngineManager` only swaps local Breeze models.
 
 ## Preflight
 
@@ -44,4 +45,4 @@ One MARA scene-1 stem, 28.0 s audio:
 
 - [[entities/job-worker]]
 - [[entities/breeze-engine]]
-- [[entities/qwen3-engine]]
+- [[entities/chatterbox-engine]]

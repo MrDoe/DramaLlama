@@ -165,7 +165,7 @@ def _convert(payload: dict[str, Any], raw: str, language: str) -> ParseResult:
             id=key,
             name=item.name.strip() or key.title(),
             description=item.description.strip(),
-            engine="qwen3" if language == "de" else "breeze",
+            engine="chatterbox" if language == "de" else "breeze",
         )
 
     scenes: list[Scene] = []
@@ -189,7 +189,7 @@ def _convert(payload: dict[str, Any], raw: str, language: str) -> ParseResult:
                 characters[speaker] = Character(
                     id=speaker,
                     name=speaker.title(),
-                    engine="qwen3" if language == "de" else "breeze",
+                    engine="chatterbox" if language == "de" else "breeze",
                 )
             text = clean_dialogue(llm_line.text)
             if not text:

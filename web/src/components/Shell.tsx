@@ -40,7 +40,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <main>{children}</main>
 
       <footer className="footer">
-        <span>Breeze TTS 2 · Qwen3-TTS · Whisper alignment</span>
+        <span>Breeze · Chatterbox · Suno · Whisper alignment</span>
         <span>Research / non-commercial weights</span>
       </footer>
     </div>

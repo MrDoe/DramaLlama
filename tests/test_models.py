@@ -61,6 +61,6 @@ def test_character_voice_modes():
         ref_text="You're late.",
         ref_instruction="Cold.",
     )
-    qwen = Character(id="ELIAS", name="Elias", engine="qwen3", qwen_speaker="Ryan")
+    qwen = Character(id="ELIAS", name="Elias", engine="chatterbox")
     assert breeze.ref_text == "You're late."
-    assert qwen.qwen_speaker == "Ryan"
+    assert qwen.engine == "chatterbox"

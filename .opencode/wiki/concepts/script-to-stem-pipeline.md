@@ -44,5 +44,5 @@ Line clips are written to `lines/<line_id>.wav`.
 ## Related
 
 - [[entities/breeze-engine]]
-- [[entities/qwen3-engine]]
+- [[entities/chatterbox-engine]]
 - [[sources/kepler-stem-pipeline]]

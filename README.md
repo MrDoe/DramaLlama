@@ -7,7 +7,7 @@ pasted script
    │  deterministic scan + optional LLM speaker attribution
    ▼
 scenes / lines ──group by scene+speaker──▶ stem scripts
-   │                                           │ Breeze / Qwen3
+   │                                           │ Breeze / Chatterbox
    │                                           ▼
    │                                     stem WAV per character
    │                                           │ Whisper word alignment
@@ -32,10 +32,14 @@ Working end-to-end on the English path:
 - SFX library indexing over `~/Sounds` + uploads, cue sheet anchored to lines.
 - Mix: dialogue assembly, bed ducking, telephone filter, −16/−23 LUFS
   loudnorm, WAV + MP3. Demo mix: 27 lines, 94.3 s, 1 cue, no warnings.
-- German path validated with Qwen3-TTS CustomVoice presets end-to-end:
-  10.0 s load, 54.4 s render for 32.0 s audio, 39.0 s German alignment, 7/7
-  line cuts at confidence 1.0, 4.92 GB peak VRAM. The worker path also rendered
-  a 24.9 s ANNA stem and a 46.8 s test mix.
+- German path uses **Chatterbox Multilingual 0.5B** over its local HTTP server
+  (per-character voice samples, exaggeration/cfg per take). Verified end-to-end:
+  a 20.7 s ANNA stem, 7/7 line cuts, and a 46.8 s test mix.
+- **Suno music** through the `bettersuno-mcp` modules: generate a theme/bed/song
+  in the Sound stage, preview the returned track, add it as a music cue, then
+  mix. Validated with a real BetterSuno extension connection and WAV download.
+- **Engine selection per stem**: Breeze, Chatterbox or the fake engine from a
+  dropdown; takes are labelled by engine and compare side-by-side.
 
 ## Quick start
 
@@ -63,6 +67,24 @@ terminal (recommended while debugging model loads).
 ~/.venvs/qwen3tts/bin/drama-studio jobs
 ```
 
+### Suno music bridge
+
+Suno needs the BetterSuno browser extension and a `suno.com` tab. Start the
+HTTP sidecar in another terminal:
+
+```bash
+cd ~/code/drama-studio/suno-bridge
+npm install          # installs the local bettersuno-mcp dependency
+cd ..
+~/.venvs/qwen3tts/bin/drama-studio suno-bridge
+```
+
+The bridge listens on `http://127.0.0.1:9430` and owns the extension WebSocket
+on `ws://127.0.0.1:9423`. Only one process can own 9423 at a time; stop any
+other `bettersuno-mcp` instance first. The Sound stage shows connection status
+and the Suno generation form. Downloads use the WAV conversion flow so the
+mixer always receives a decodable file.
+
 ## Workflow
 
 1. **Script** — paste a script, choose English or German.
@@ -70,11 +92,13 @@ terminal (recommended while debugging model loads).
    attribution and falls back safely if the model is offline.
 2. **Stems** — group lines by scene + speaker. Each stem is one continuous
    performance, not one TTS call per line.
-3. **Render** — design a 6–11 s reference for each Breeze character (or choose a
-   Qwen3 preset for German), then render a stem. The worker renders the stem on
-   GPU, aligns it with Whisper on CPU, cuts line clips, and stores confidence.
+3. **Render** — choose an engine per stem. Breeze uses a 6–11 s designed
+   reference; Chatterbox uses an uploaded voice sample or its default voice.
+   The worker renders, aligns with Whisper on CPU, cuts line clips, and stores
+   confidence. Takes stay labelled by engine for A/B comparison.
 4. **Sound** — search `~/Sounds` (plus `data/sfx` and uploads), preview, and
-   attach beds / one-shots / music to specific lines.
+   attach beds / one-shots / music to specific lines. Or generate music with
+   Suno and add the returned track as a cue.
 5. **Mix** — assemble line clips, duck beds under speech, filter telephone
    lines, loudnorm to podcast (−16 LUFS) or broadcast (−23 LUFS), and download
    WAV/MP3.
@@ -84,8 +108,13 @@ terminal (recommended while debugging model loads).
 | Language | Engine | Voice workflow |
 |---|---|---|
 | English | Breeze TTS 2 | 6–11 s reference design → clone per scene stem |
-| German | Qwen3-TTS CustomVoice | preset voice per character + instruction |
-| tests | Fake | sine/noise stems, no GPU |
+| English/German | Chatterbox Multilingual 0.5B | uploaded voice sample → clone; default voice if none |
+| both | Fake | sine/noise stems, no GPU |
+| music | Suno via BetterSuno | prompt → generated track → music cue |
+
+Chatterbox expects its model server at `http://127.0.0.1:4123`; it can be
+started independently and keeps the model warm. Drama Studio only sends text
+and an optional voice sample over HTTP.
 
 Breeze weights and outputs are research / non-commercial only. The vendored
 stem/aligner is Apache 2.0 code; see `vendor/breeze_stems/VENDORED_FROM.md`.
@@ -97,10 +126,11 @@ stem/aligner is Apache 2.0 code; see `vendor/breeze_stems/VENDORED_FROM.md`.
 | `src/drama_studio/` | FastAPI, queue, worker, parser, engines, mixer |
 | `src/drama_studio/engines/` | Breeze / Qwen3 / Fake adapters |
 | `vendor/breeze_stems/` | pinned Breeze stem renderer + Whisper aligner |
+| `suno-bridge/` | Node HTTP sidecar over the installed bettersuno-mcp modules |
 | `web/` | React + Vite + TypeScript UI |
 | `data/projects/<id>/` | project JSON, refs, takes, line clips, mix |
 | `data/jobs.sqlite3` | job queue (SQLite, WAL) |
-| `tests/` | 57 tests, no GPU required |
+| `tests/` | 60 tests, no GPU required |
 
 ## Configuration
 
@@ -112,6 +142,8 @@ Environment variables:
 | `DRAMA_STUDIO_HOST` / `PORT` | `127.0.0.1` / `8770` |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` |
 | `DRAMA_STUDIO_LLM` | `gemma4:12b-16k` |
+| `CHATTERBOX_URL` | `http://127.0.0.1:4123` |
+| `SUNO_BRIDGE_URL` | `http://127.0.0.1:9430` |
 | `DRAMA_STUDIO_SFX_ROOTS` | `~/Sounds:<repo>/data/sfx` |
 
 Personal subfolders (`juli`, `miller`, `Projects`, `Snippets`) are excluded
@@ -128,15 +160,14 @@ Real-model smoke tests are opt-in:
 
 ```bash
 ~/.venvs/qwen3tts/bin/python scripts/smoke_breeze.py --scene 1 --speaker MARA
-~/.venvs/qwen3tts/bin/python scripts/smoke_qwen.py --scene 1 --speaker "ANNA BERG"
 ```
 
 ## Known gaps
 
-- German Qwen3 generation is validated at the engine level; the UI render
-  pass is covered by the same worker path and is being verified end-to-end.
-- Reference monologues currently default to the character's first three lines;
-  a dedicated editor is the next UI addition.
+- Chatterbox voice samples are uploaded per character, but there is no in-app
+  recorder or trimmer yet; without a sample it uses the server default voice.
+- Suno generation needs the BetterSuno extension and a live `suno.com` tab.
+  The bridge owns port 9423, so other `bettersuno-mcp` instances must be stopped.
 - Cue timing is line-anchored; a drag-and-drop waveform timeline is not built yet.
 - LLM parse requires Ollama and is intentionally serialized against Breeze on
   the 16 GB GPU.

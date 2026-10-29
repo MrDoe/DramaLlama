@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 import threading
+from pathlib import Path
 
 from .config import DATA_DIR, DB_PATH, HOST, PORT, PROJECTS_DIR, ensure_dirs
 from .handlers import default_handlers
@@ -73,6 +76,22 @@ def cmd_worker(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_suno_bridge(args: argparse.Namespace) -> int:
+    root = Path(__file__).resolve().parents[2]
+    script = root / "suno-bridge" / "server.mjs"
+    if not script.exists():
+        print(f"error: {script} not found", file=sys.stderr)
+        return 1
+    env = dict(os.environ)
+    env.setdefault("BETTERSUNO_MCP_DIR", str(Path.home() / "code" / "bettersuno-mcp"))
+    env.setdefault("SUNO_BRIDGE_PORT", str(args.port))
+    print(f"Suno bridge on http://127.0.0.1:{args.port} (BetterSuno {env['BETTERSUNO_MCP_DIR']})")
+    try:
+        return subprocess.call(["node", str(script)], env=env)
+    except KeyboardInterrupt:
+        return 0
+
+
 def cmd_jobs(args: argparse.Namespace) -> int:
     queue = _queue()
     for job in queue.list_jobs(args.status, args.limit):
@@ -134,6 +153,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--poll", type=float, default=0.5)
     p.add_argument("--stale-after", type=float, default=300)
     p.set_defaults(func=cmd_worker)
+
+    p = sub.add_parser("suno-bridge", help="run the BetterSuno HTTP sidecar")
+    p.add_argument("--port", type=int, default=9430)
+    p.set_defaults(func=cmd_suno_bridge)
 
     p = sub.add_parser("jobs", help="list jobs")
     p.add_argument("--status", default=None)

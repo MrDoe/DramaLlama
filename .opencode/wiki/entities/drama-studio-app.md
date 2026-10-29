@@ -21,7 +21,7 @@ and the built React bundle from `web/dist`.
 3. `POST /api/projects/{id}/parse` can use the LLM with deterministic fallback.
 4. `POST /api/projects/{id}/stems` groups lines by scene + speaker.
 5. `POST /api/projects/{id}/characters/{speaker}/reference` designs a Breeze
-   reference (or stores a Qwen3 preset).
+   reference (or uploads a Chatterbox voice sample).
 6. `POST /api/projects/{id}/stems/{stem_id}/render` queues a GPU render +
    CPU alignment.
 7. `POST /api/projects/{id}/cues` anchors SFX to lines.

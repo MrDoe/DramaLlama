@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 Language = Literal["en", "de"]
-EngineName = Literal["breeze", "qwen3", "fake"]
+EngineName = Literal["breeze", "chatterbox", "fake"]
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 VoiceMode = Literal["reference", "preset"]
 
@@ -23,7 +23,6 @@ class Character(BaseModel):
     ref_text: str | None = None
     ref_instruction: str | None = None
     ref_file: str | None = None
-    qwen_speaker: str | None = None
     baseline_instruct: str = ""
     locked: bool = False
     f0_hz: float | None = None
@@ -106,6 +105,16 @@ class Cue(BaseModel):
     filter: Literal["none", "telephone", "radio"] = "none"
 
 
+class SunoTrack(BaseModel):
+    clip_id: str
+    title: str
+    file: str
+    sfx_id: str
+    duration_s: float | None = None
+    prompt: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class MixResult(BaseModel):
     file: str
     mp3: str | None = None
@@ -137,6 +146,7 @@ class Project(BaseModel):
     stems: list[Stem] = Field(default_factory=list)
     alignments: dict[str, AlignmentResult] = Field(default_factory=dict)
     cues: list[Cue] = Field(default_factory=list)
+    suno: list[SunoTrack] = Field(default_factory=list)
     mix: MixResult | None = None
     settings: ProjectSettings = Field(default_factory=ProjectSettings)
     created_at: datetime = Field(default_factory=utcnow)
@@ -174,6 +184,7 @@ class ReferenceResult(BaseModel):
 class Take(BaseModel):
     id: str
     file: str
+    engine: str = "unknown"
     duration_s: float
     sample_rate: int
     seed: int
@@ -190,6 +201,7 @@ class Stem(BaseModel):
     line_ids: list[str]
     text: str
     instruction: str
+    engine: str | None = None
     cfg_scale: float = 2.5
     seed: int = 42
     takes: list[Take] = Field(default_factory=list)
@@ -211,7 +223,6 @@ class StemRenderRequest(BaseModel):
     output_dir: str
     ref_audio_path: str | None = None
     ref_text: str | None = None
-    voice_preset: str | None = None
     language: str = "en"
     cfg_scale: float = 2.5
     seed: int = 42

@@ -29,7 +29,7 @@ Kepler's full render: 27 lines, 89.38 s dialogue, 94.38 s with SFX. Mean WER
 - `align_conf` is returned by the current `align_cuts`; the validated manifest
   predates the confidence edit. The aligner logic is otherwise unchanged.
 - Breeze generation remains English/Chinese; German audio is aligned from the
-  Qwen3 engine with the same cut logic.
+  Chatterbox engine with the same cut logic.
 
 ## Local adapter policy
 

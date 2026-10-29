@@ -4,18 +4,18 @@ from collections.abc import Callable
 
 from .base import BaseEngine, EngineNotAvailable, TTSEngine
 from .breeze import BreezeEngine
+from .chatterbox import ChatterboxEngine
 from .fake import FakeEngine
-from .qwen3 import Qwen3Engine
 
 ENGINES: dict[str, Callable[[], TTSEngine]] = {
     "fake": FakeEngine,
     "breeze": BreezeEngine,
-    "qwen3": Qwen3Engine,
+    "chatterbox": ChatterboxEngine,
 }
 
 
 class EngineManager:
-    """One live engine per worker process. Breeze is unloaded before Qwen3."""
+    """One live engine per worker process. Breeze is unloaded before Chatterbox."""
 
     def __init__(self) -> None:
         self._engines: dict[str, BaseEngine] = {}
@@ -23,7 +23,7 @@ class EngineManager:
     def get(self, name: str) -> BaseEngine:
         engine = self._engines.get(name)
         if engine is None:
-            # Breeze and Qwen3 must never be resident together on a 16 GB card.
+            # Breeze and the local models must never be resident together on a 16 GB card.
             for other in list(self._engines):
                 if other != name:
                     self.unload(other)

@@ -1183,6 +1183,13 @@ h3 {
   font-weight: 600;
 }
 
+.engine-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
 .render-meta,
 .render-align {
   display: flex;
@@ -1268,6 +1275,115 @@ h3 {
 }
 
 /* ----------------------------------------------------------------- sound */
+
+.suno-panel {
+  margin-bottom: 16px;
+}
+
+.suno-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 18px;
+  padding: 16px;
+}
+
+.suno-form {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.suno-form textarea {
+  width: 100%;
+  min-height: 82px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+  resize: vertical;
+  color: var(--text);
+  background: rgba(8, 8, 18, 0.6);
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.suno-form textarea:focus {
+  border-color: rgba(249, 115, 22, 0.5);
+}
+
+.suno-inline {
+  display: grid;
+  grid-template-columns: 1fr 90px 120px;
+  gap: 8px;
+}
+
+.suno-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.suno-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-height: 380px;
+  overflow: auto;
+}
+
+.suno-track {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(8, 8, 18, 0.32);
+}
+
+.suno-track-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.suno-track-head strong {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suno-track-head span {
+  flex: none;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.suno-track audio {
+  width: 100%;
+  height: 30px;
+  filter: invert(0.92) hue-rotate(180deg);
+}
+
+.suno-track-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 7px;
+}
+
+@media (max-width: 900px) {
+  .suno-body {
+    grid-template-columns: 1fr;
+  }
+}
 
 .sound-grid {
   display: grid;
@@ -1630,6 +1746,19 @@ h3 {
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+}
+
+.cast-upload {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.cast-upload input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .cast-preset {

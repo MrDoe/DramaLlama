@@ -18,7 +18,11 @@ def test_health(tmp_path):
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert {engine["name"] for engine in body["engines"]} >= {"fake", "breeze", "qwen3"}
+    assert {engine["name"] for engine in body["engines"]} >= {
+        "fake",
+        "breeze",
+        "chatterbox",
+    }
     assert isinstance(body["engines"][0]["languages"], list)
 
 

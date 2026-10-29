@@ -139,8 +139,8 @@ export function ProjectsPage() {
           />
           <EngineCard
             icon={<MicrophoneStage size={19} weight="bold" />}
-            name="Qwen3-TTS"
-            detail="German · preset voices + direction"
+            name="Chatterbox 0.5B"
+            detail="German · voice-sample cloning"
             badge="GPU"
           />
           <EngineCard

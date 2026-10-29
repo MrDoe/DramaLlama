@@ -131,7 +131,7 @@ export function NewProjectPage() {
                 aria-pressed={language === "de"}
               >
                 <MicrophoneStage size={14} />
-                Deutsch · Qwen3
+                Deutsch · Chatterbox
               </button>
             </div>
           </div>
@@ -222,8 +222,9 @@ export function NewProjectPage() {
           <div className="engine-note">
             <MagicWand size={15} weight="fill" />
             <span>
-              English uses Breeze voice design. German uses Qwen3-TTS preset
-              voices. Both share the same stem and alignment pipeline.
+              English uses Breeze voice design. German uses Chatterbox
+              Multilingual voice-sample cloning. Both share the same stem and
+              alignment pipeline, and you can switch engines per stem.
             </span>
           </div>
         </aside>

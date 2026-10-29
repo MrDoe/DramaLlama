@@ -33,6 +33,7 @@ from .models import (
 from .sfx import SfxLibrary
 from .stems import build_stems
 from .store import ProjectStore
+from .suno import SunoBridge, SunoError
 
 
 class JobCreate(BaseModel):
@@ -75,6 +76,23 @@ class RenderBody(BaseModel):
     candidates: int = Field(default=2, ge=1, le=3)
     cfg_scale: float | None = None
     seed: int | None = None
+    engine: str | None = None
+
+
+class StemUpdate(BaseModel):
+    engine: str | None = None
+    cfg_scale: float | None = None
+    seed: int | None = None
+
+
+class SunoGenerate(BaseModel):
+    kind: str = "instrumental"
+    prompt: str = ""
+    title: str = ""
+    tags: str = ""
+    duration: int | None = None
+    lyrics: str | None = None
+    vocal_gender: str | None = None
 
 
 class CueCreate(BaseModel):
@@ -98,7 +116,6 @@ class TakeSelect(BaseModel):
 class CharacterUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
-    qwen_speaker: str | None = None
     ref_text: str | None = None
     ref_instruction: str | None = None
     baseline_instruct: str | None = None
@@ -259,6 +276,33 @@ def create_app(
                 return existing
         return None
 
+    @app.post(
+        "/api/projects/{project_id}/characters/{speaker}/voice-sample",
+        status_code=201,
+    )
+    def upload_voice_sample(
+        project_id: str, speaker: str, file: UploadFile = File(...)
+    ) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        character = project.script.characters.get(speaker)
+        if character is None:
+            raise HTTPException(status_code=404, detail="character not found")
+        suffix = Path(file.filename or "sample.wav").suffix.lower()
+        if suffix not in {".wav", ".mp3", ".m4a", ".flac", ".ogg"}:
+            raise HTTPException(status_code=400, detail="unsupported audio format")
+        safe = "".join(
+            ch if ch.isalnum() else "_" for ch in speaker.lower()
+        ).strip("_") or "voice"
+        directory = store.project_dir(project.id) / "refs"
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / f"{safe}{suffix}"
+        with destination.open("wb") as handle:
+            while chunk := file.file.read(1024 * 1024):
+                handle.write(chunk)
+        character.ref_file = str(destination.relative_to(store.project_dir(project.id)))
+        project = store.save(project)
+        return project.model_dump(mode="json")
+
     @app.post("/api/projects/{project_id}/characters/{speaker}/reference", status_code=202)
     def design_character_reference(
         project_id: str, speaker: str, body: ReferenceBody
@@ -295,13 +339,10 @@ def create_app(
         character = project.script.characters.get(stem.speaker)
         if character is None:
             raise HTTPException(status_code=404, detail="character not found")
-        if project.language == "de":
-            if not character.qwen_speaker:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"choose a Qwen3 preset voice for {stem.speaker} first",
-                )
-        elif not character.ref_file:
+        engine_name = body.engine or stem.engine or (
+            "breeze" if project.language == "en" else "chatterbox"
+        )
+        if engine_name == "breeze" and not character.ref_file:
             raise HTTPException(
                 status_code=409,
                 detail=f"design a reference voice for {stem.speaker} first",
@@ -317,10 +358,39 @@ def create_app(
                 "candidates": body.candidates,
                 "cfg_scale": body.cfg_scale,
                 "seed": body.seed,
+                "engine": body.engine or stem.engine,
             },
             priority=10,
         )
         return job.model_dump(mode="json")
+
+    @app.patch("/api/projects/{project_id}/stems/{stem_id}")
+    def update_stem(
+        project_id: str, stem_id: str, body: StemUpdate
+    ) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        stem = next((item for item in project.stems if item.id == stem_id), None)
+        if stem is None:
+            raise HTTPException(status_code=404, detail="stem not found")
+        if body.engine is not None:
+            try:
+                info = next(
+                    item for item in all_engine_info() if item.name == body.engine
+                )
+            except StopIteration as exc:
+                raise HTTPException(status_code=400, detail="unknown engine") from exc
+            if project.language not in info.languages:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{body.engine} does not support {project.language}",
+                )
+            stem.engine = body.engine
+        if body.cfg_scale is not None:
+            stem.cfg_scale = body.cfg_scale
+        if body.seed is not None:
+            stem.seed = body.seed
+        project = store.save(project)
+        return project.model_dump(mode="json")
 
     @app.patch("/api/projects/{project_id}/stems/{stem_id}/take")
     def select_take(project_id: str, stem_id: str, body: TakeSelect) -> dict[str, Any]:
@@ -339,6 +409,37 @@ def create_app(
             priority=5,
         )
         return {"project": project.model_dump(mode="json"), "job": job.model_dump(mode="json")}
+
+    @app.get("/api/suno/status")
+    def suno_status() -> dict[str, Any]:
+        try:
+            return SunoBridge().health()
+        except SunoError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @app.post("/api/projects/{project_id}/suno/generate", status_code=202)
+    def generate_suno(project_id: str, body: SunoGenerate) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        if not body.prompt.strip() and not (body.lyrics or "").strip():
+            raise HTTPException(status_code=400, detail="prompt or lyrics is required")
+        existing = active_job(project_id, "suno.generate")
+        if existing is not None:
+            return existing.model_dump(mode="json")
+        job = queue.enqueue(
+            "suno.generate",
+            {
+                "project_id": project.id,
+                "kind": body.kind,
+                "prompt": body.prompt,
+                "title": body.title or project.title,
+                "tags": body.tags,
+                "duration": body.duration,
+                "lyrics": body.lyrics,
+                "vocal_gender": body.vocal_gender,
+            },
+            priority=8,
+        )
+        return job.model_dump(mode="json")
 
     @app.post("/api/projects/{project_id}/mix", status_code=202)
     def render_mix(project_id: str) -> dict[str, Any]:
@@ -458,12 +559,6 @@ def create_app(
             raise HTTPException(status_code=404, detail="cue not found")
         store.save(project)
 
-    @app.get("/api/engines/qwen3/voices")
-    def qwen_voices() -> list[str]:
-        from .engines.qwen3 import QWEN_PRESETS
-
-        return list(QWEN_PRESETS)
-
     @app.patch("/api/projects/{project_id}/characters/{speaker}")
     def update_character(
         project_id: str, speaker: str, body: CharacterUpdate
@@ -476,8 +571,6 @@ def create_app(
             character.name = body.name.strip()
         if body.description is not None:
             character.description = body.description
-        if body.qwen_speaker is not None:
-            character.qwen_speaker = body.qwen_speaker or None
         if body.ref_text is not None:
             character.ref_text = body.ref_text
         if body.ref_instruction is not None:

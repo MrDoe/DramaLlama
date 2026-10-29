@@ -1,0 +1,13 @@
+{
+  "name": "drama-studio-suno-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "HTTP bridge between Drama Studio and the BetterSuno MCP server modules.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "bettersuno-mcp": "file:../../bettersuno-mcp"
+  }
+}

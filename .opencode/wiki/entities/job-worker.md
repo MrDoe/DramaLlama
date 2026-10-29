@@ -34,7 +34,7 @@ The API and worker share the SQLite queue, not Python objects.
 
 | Type | Work |
 |---|---|
-| `reference.design` | Breeze voice design or Qwen3 preset validation |
+| `reference.design` | Breeze voice design |
 | `stem.render` | GPU stem render + CPU Whisper alignment |
 | `stem.render.fake` | GPU-free test path |
 | `mix.render` | timeline assembly, SFX, loudnorm, export |

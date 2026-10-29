@@ -13,7 +13,7 @@ VENDOR_DIR = Path(__file__).resolve().parents[2] / "vendor" / "breeze_stems"
 
 
 class WhisperAligner:
-    """CPU-only word alignment shared by Breeze and Qwen3 stems.
+    """CPU-only word alignment shared by Breeze and Chatterbox stems.
 
     Whisper large-v3 on CPU int8 is deliberate: Breeze and Whisper cannot be
     resident on a 16 GB GPU at the same time.

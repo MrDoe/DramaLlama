@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "drama-studio"
 version = "0.1.0"
-description = "Local web app for turning scripts into audio dramas with Breeze and Qwen3 TTS."
+description = "Local web app for turning scripts into audio dramas with Breeze and Chatterbox TTS."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

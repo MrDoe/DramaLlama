@@ -205,8 +205,9 @@ class BreezeEngine(BaseEngine):
             sim = self._cosine(self._mfcc(audio, sample_rate), ref_vec)
             takes.append(
                 Take(
-                    id=f"{request.stem_id}-{seed}-{index}",
+                    id=f"breeze-{request.stem_id}-{seed}-{index}",
                     file=str(path.relative_to(output_dir)),
+                    engine=self.info.name,
                     duration_s=len(audio) / sample_rate,
                     sample_rate=sample_rate,
                     seed=seed,

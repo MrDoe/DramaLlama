@@ -4,7 +4,8 @@ import time
 from typing import Any
 
 from .aligner import WhisperAligner
-from .config import PROJECTS_DIR
+from .config import DATA_DIR, PROJECTS_DIR
+from .engines import engine_info
 from .engines.fake import FakeEngine
 from .engines.manager import EngineManager
 from .mixer import build_mix
@@ -14,9 +15,11 @@ from .models import (
     Project,
     ReferenceRequest,
     StemRenderRequest,
+    SunoTrack,
 )
 from .sfx import SfxLibrary
 from .store import ProjectStore
+from .suno import SunoBridge, SunoError
 from .worker import Handler, JobCancelled, JobContext, PermanentJobError
 
 _MANAGER = EngineManager()
@@ -59,7 +62,7 @@ def fake_render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
 
 
 def _engine_name(project: Project) -> str:
-    return "breeze" if project.language == "en" else "qwen3"
+    return "breeze" if project.language == "en" else "chatterbox"
 
 
 def _load_project(project_id: str) -> Project:
@@ -80,6 +83,8 @@ def _gpu_free_gb() -> float | None:
 
 
 def _require_gpu(engine_name: str) -> None:
+    if engine_name in {"fake", "chatterbox"}:
+        return
     needed = 9.0 if engine_name == "breeze" else 5.0
     free = _gpu_free_gb()
     if free is not None and free < needed:
@@ -156,7 +161,18 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     if character is None:
         raise PermanentJobError(f"character {stem.speaker!r} not found in project")
 
-    engine_name = _engine_name(project)
+    engine_name = str(
+        payload.get("engine") or stem.engine or _engine_name(project)
+    )
+    try:
+        info = engine_info(engine_name)
+    except ValueError as exc:
+        raise PermanentJobError(str(exc)) from exc
+    if project.language not in info.languages:
+        raise PermanentJobError(
+            f"{engine_name} does not support project language {project.language!r}"
+        )
+
     directory = _STORE.project_dir(project.id)
     ref_path = None
     if engine_name == "breeze":
@@ -167,10 +183,13 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         ref_path = directory / character.ref_file
         if not ref_path.exists():
             raise PermanentJobError(f"reference file missing: {ref_path}")
-    elif not character.qwen_speaker:
-        raise PermanentJobError(
-            f"choose a Qwen3 preset voice for {stem.speaker} before rendering"
-        )
+    elif engine_name == "chatterbox":
+        # Reference clips are optional; the Chatterbox server falls back to its
+        # configured default voice when no sample is attached.
+        if character.ref_file:
+            candidate = directory / character.ref_file
+            if candidate.exists():
+                ref_path = candidate
 
     cfg_value = payload.get("cfg_scale")
     seed_value = payload.get("seed")
@@ -183,7 +202,6 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         output_dir=str(directory),
         ref_audio_path=str(ref_path) if ref_path else None,
         ref_text=character.ref_text,
-        voice_preset=character.qwen_speaker,
         language=project.language,
         cfg_scale=float(cfg_value) if cfg_value is not None else stem.cfg_scale,
         seed=int(seed_value) if seed_value is not None else stem.seed,
@@ -205,7 +223,10 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             raise JobCancelled(str(exc)) from exc
         raise
 
-    stem.takes = result.takes
+    stem.engine = engine_name
+    for take in stem.takes:
+        take.selected = False
+    stem.takes = [take for take in stem.takes if take.engine != engine_name] + result.takes
     _STORE.save(project)
 
     selected = next((take for take in result.takes if take.selected), None)
@@ -288,6 +309,78 @@ def realign_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     return alignment.model_dump(mode="json")
 
 
+def suno_generate(job: Job, ctx: JobContext) -> dict[str, Any]:
+    project = _load_project(job.payload["project_id"])
+    payload = job.payload
+    bridge = SunoBridge()
+    try:
+        health = bridge.health()
+    except SunoError as exc:
+        raise PermanentJobError(str(exc)) from exc
+    if not health.get("extensionConnected"):
+        raise PermanentJobError(
+            "BetterSuno extension is not connected. Open suno.com with the "
+            "BetterSuno extension loaded, then retry."
+        )
+
+    ctx.progress(0.05, "submitting music prompt to Suno")
+    try:
+        result = bridge.generate(
+            {
+                "kind": payload.get("kind", "instrumental"),
+                "prompt": payload.get("prompt", ""),
+                "title": payload.get("title", ""),
+                "tags": payload.get("tags", ""),
+                "duration": payload.get("duration"),
+                "lyrics": payload.get("lyrics"),
+                "vocal_gender": payload.get("vocal_gender"),
+            }
+        )
+    except SunoError as exc:
+        raise PermanentJobError(str(exc)) from exc
+
+    clips = result.get("clips") or []
+    if not clips:
+        raise PermanentJobError("Suno returned no clips")
+    ctx.progress(0.15, f"Suno queued {len(clips)} clip(s); waiting for audio")
+
+    out_dir = DATA_DIR / "sfx" / "suno" / project.id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tracks: list[SunoTrack] = []
+    for index, clip in enumerate(clips[:2]):
+        clip_id = clip.get("id")
+        if not clip_id:
+            continue
+        ctx.progress(0.2 + 0.5 * index / max(1, len(clips)), f"waiting for clip {clip_id}")
+        try:
+            finished = bridge.wait_for_clip(clip_id, timeout_s=180)
+            file = bridge.download(clip_id, out_dir, "wav")
+        except SunoError as exc:
+            ctx.log(f"clip {clip_id} failed: {exc}")
+            continue
+        _SFX.scan()
+        item = _SFX.find_by_path(file)
+        if item is None:
+            ctx.log(f"downloaded {file.name} but it was not indexed")
+            continue
+        track = SunoTrack(
+            clip_id=clip_id,
+            title=finished.get("title") or clip.get("title") or "Suno track",
+            file=str(file.relative_to(DATA_DIR / "sfx")),
+            sfx_id=item.id,
+            duration_s=item.duration_s,
+            prompt=payload.get("prompt", ""),
+        )
+        tracks.append(track)
+        project.suno.append(track)
+
+    if not tracks:
+        raise PermanentJobError("Suno clips finished but no audio could be downloaded")
+    _STORE.save(project)
+    ctx.progress(1.0, "Suno music ready")
+    return {"tracks": [track.model_dump(mode="json") for track in tracks]}
+
+
 def mix_project(job: Job, ctx: JobContext) -> dict[str, Any]:
     project = _load_project(job.payload["project_id"])
     directory = _STORE.project_dir(project.id)
@@ -315,6 +408,7 @@ def default_handlers() -> dict[str, Handler]:
         "reference.design.breeze": design_reference,
         "stem.align.breeze": align_stem,
         "stem.realign": realign_stem,
+        "suno.generate": suno_generate,
         "mix.render": mix_project,
         "engine.unload": unload_engines,
     }

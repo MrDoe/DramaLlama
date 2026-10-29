@@ -77,7 +77,6 @@ export const api = {
     input: {
       name?: string;
       description?: string;
-      qwen_speaker?: string | null;
       ref_text?: string | null;
       ref_instruction?: string | null;
       baseline_instruct?: string;
@@ -87,7 +86,6 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(input),
     }),
-  qwenVoices: () => request<string[]>("/engines/qwen3/voices"),
   searchSfx: (query = "", limit = 40) =>
     request<SfxItem[]>(`/sfx?q=${encodeURIComponent(query)}&limit=${limit}`),
   scanSfx: () => request<{ indexed: number }>("/sfx/scan", { method: "POST" }),
@@ -119,10 +117,52 @@ export const api = {
       `/projects/${projectId}/stems/${stemId}/take`,
       { method: "PATCH", body: JSON.stringify({ take_id: takeId }) },
     ),
+  sunoStatus: () =>
+    request<{
+      ok: boolean;
+      extensionConnected?: boolean;
+      error?: string;
+      bridge?: string;
+    }>("/suno/status"),
+  generateSuno: (
+    projectId: string,
+    input: {
+      kind: string;
+      prompt: string;
+      title?: string;
+      tags?: string;
+      duration?: number;
+      lyrics?: string;
+      vocal_gender?: string;
+    },
+  ) =>
+    request<Job>(`/projects/${projectId}/suno/generate`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   renderMix: (projectId: string) =>
     request<Job>(`/projects/${projectId}/mix`, { method: "POST" }),
   fileUrl: (projectId: string, path: string) =>
     `${BASE}/projects/${projectId}/files/${path}`,
+  uploadVoiceSample: async (projectId: string, speaker: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(
+      `${BASE}/projects/${projectId}/characters/${encodeURIComponent(speaker)}/voice-sample`,
+      { method: "POST", body: form },
+    );
+    if (!response.ok) {
+      let detail = `${response.status} ${response.statusText}`;
+      try {
+        const body = (await response.json()) as { detail?: string };
+        if (body.detail) detail = body.detail;
+      } catch {
+        // keep status text
+      }
+      throw new ApiError(response.status, detail);
+    }
+    return (await response.json()) as Project;
+  },
   designReference: (
     projectId: string,
     speaker: string,
@@ -140,10 +180,24 @@ export const api = {
   renderStem: (
     projectId: string,
     stemId: string,
-    input: { candidates?: number; cfg_scale?: number; seed?: number },
+    input: {
+      candidates?: number;
+      cfg_scale?: number;
+      seed?: number;
+      engine?: string;
+    },
   ) =>
     request<Job>(`/projects/${projectId}/stems/${stemId}/render`, {
       method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateStem: (
+    projectId: string,
+    stemId: string,
+    input: { engine?: string; cfg_scale?: number; seed?: number },
+  ) =>
+    request<Project>(`/projects/${projectId}/stems/${stemId}`, {
+      method: "PATCH",
       body: JSON.stringify(input),
     }),
   getJob: (jobId: string) => request<Job>(`/jobs/${jobId}`),
