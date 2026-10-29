@@ -69,6 +69,26 @@ def _load_project(project_id: str) -> Project:
         raise PermanentJobError(f"project {project_id!r} not found") from exc
 
 
+def _gpu_free_gb() -> float | None:
+    try:
+        import torch
+
+        free, _ = torch.cuda.mem_get_info()
+        return free / 1e9
+    except Exception:
+        return None
+
+
+def _require_gpu(engine_name: str) -> None:
+    needed = 9.0 if engine_name == "breeze" else 5.0
+    free = _gpu_free_gb()
+    if free is not None and free < needed:
+        raise PermanentJobError(
+            f"GPU busy: {free:.1f} GB free, need about {needed:.1f} GB for "
+            f"{engine_name}. Unload other models and retry."
+        )
+
+
 def _lines_for_stem(project: Project, line_ids: list[str]) -> list[Line]:
     by_id = {
         line.id: line
@@ -97,15 +117,18 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
     directory = _STORE.project_dir(project.id)
     output = directory / "refs" / f"{speaker.lower().replace(' ', '_')}.wav"
     output.parent.mkdir(parents=True, exist_ok=True)
+    cfg_value = payload.get("cfg_scale")
+    seed_value = payload.get("seed")
     request = ReferenceRequest(
         character_id=speaker,
         text=character.ref_text,
         instruction=character.ref_instruction,
         output_path=str(output),
-        cfg_scale=float(payload.get("cfg_scale", 4.0)),
-        seed=int(payload.get("seed", 42)),
+        cfg_scale=float(cfg_value) if cfg_value is not None else 4.0,
+        seed=int(seed_value) if seed_value is not None else 42,
     )
 
+    _require_gpu(_engine_name(project))
     ctx.progress(0.02, f"loading {_engine_name(project)}")
     engine = _MANAGER.get(_engine_name(project))
     ctx.progress(0.1, f"designing reference for {speaker}")
@@ -149,6 +172,8 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             f"choose a Qwen3 preset voice for {stem.speaker} before rendering"
         )
 
+    cfg_value = payload.get("cfg_scale")
+    seed_value = payload.get("seed")
     request = StemRenderRequest(
         project_id=project.id,
         stem_id=stem.id,
@@ -160,11 +185,12 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         ref_text=character.ref_text,
         voice_preset=character.qwen_speaker,
         language=project.language,
-        cfg_scale=float(payload.get("cfg_scale", stem.cfg_scale)),
-        seed=int(payload.get("seed", stem.seed)),
+        cfg_scale=float(cfg_value) if cfg_value is not None else stem.cfg_scale,
+        seed=int(seed_value) if seed_value is not None else stem.seed,
         candidates=int(payload.get("candidates", 2)),
     )
 
+    _require_gpu(engine_name)
     ctx.progress(0.02, f"loading {engine_name}")
     engine = _MANAGER.get(engine_name)
     ctx.progress(0.05, f"rendering {stem.speaker} / scene {stem.scene}")
@@ -231,6 +257,37 @@ def align_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     return result.model_dump(mode="json")
 
 
+def realign_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
+    project = _load_project(job.payload["project_id"])
+    stem = next(
+        (item for item in project.stems if item.id == job.payload["stem_id"]), None
+    )
+    if stem is None:
+        raise PermanentJobError("stem not found")
+    selected = next((take for take in stem.takes if take.selected), None)
+    if selected is None:
+        raise PermanentJobError("stem has no selected take")
+    lines = _lines_for_stem(project, stem.line_ids)
+    if not lines:
+        raise PermanentJobError("stem has no lines")
+
+    directory = _STORE.project_dir(project.id)
+    ctx.progress(0.1, "loading Whisper")
+    aligner = WhisperAligner(language=project.language)
+    ctx.progress(0.2, f"realigning {len(lines)} lines")
+    alignment = aligner.align(
+        directory / selected.file,
+        lines,
+        directory,
+        stem_id=stem.id,
+        language=project.language,
+    )
+    project.alignments[stem.id] = alignment
+    _STORE.save(project)
+    ctx.progress(1.0, "alignment ready")
+    return alignment.model_dump(mode="json")
+
+
 def mix_project(job: Job, ctx: JobContext) -> dict[str, Any]:
     project = _load_project(job.payload["project_id"])
     directory = _STORE.project_dir(project.id)
@@ -257,6 +314,7 @@ def default_handlers() -> dict[str, Handler]:
         "reference.design": design_reference,
         "reference.design.breeze": design_reference,
         "stem.align.breeze": align_stem,
+        "stem.realign": realign_stem,
         "mix.render": mix_project,
         "engine.unload": unload_engines,
     }

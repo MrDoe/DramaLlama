@@ -72,6 +72,7 @@ class BreezeEngine(BaseEngine):
         try:
             import torch
 
+            self._torch = torch
             runtime_mod = importlib.import_module("breeze_infer.runtime")
             streaming = importlib.import_module("models.fast_streaming")
             breeze_drama = importlib.import_module("breeze_drama")
@@ -96,7 +97,6 @@ class BreezeEngine(BaseEngine):
             self.unload()
             raise EngineNotAvailable(f"could not load Breeze: {exc}") from exc
 
-        self._torch = torch
         self._runtime = runtime
         self._tokenizer = tokenizer
         self._model = model

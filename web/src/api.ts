@@ -114,6 +114,11 @@ export const api = {
     }),
   deleteCue: (projectId: string, cueId: string) =>
     request<void>(`/projects/${projectId}/cues/${cueId}`, { method: "DELETE" }),
+  selectTake: (projectId: string, stemId: string, takeId: string) =>
+    request<{ project: Project; job: Job }>(
+      `/projects/${projectId}/stems/${stemId}/take`,
+      { method: "PATCH", body: JSON.stringify({ take_id: takeId }) },
+    ),
   renderMix: (projectId: string) =>
     request<Job>(`/projects/${projectId}/mix`, { method: "POST" }),
   fileUrl: (projectId: string, path: string) =>

@@ -1196,6 +1196,41 @@ h3 {
   text-transform: uppercase;
 }
 
+.take-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 9px;
+}
+
+.take-pill {
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--faint);
+  background: rgba(148, 163, 184, 0.04);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.02em;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.take-pill:hover:not(:disabled) {
+  color: var(--text);
+  border-color: rgba(249, 115, 22, 0.35);
+}
+
+.take-pill.active {
+  color: var(--accent-strong);
+  border-color: rgba(249, 115, 22, 0.45);
+  background: var(--accent-weak);
+}
+
+.take-pill:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .render-align {
   padding-top: 9px;
   border-top: 1px solid var(--border);

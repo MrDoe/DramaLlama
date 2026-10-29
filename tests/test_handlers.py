@@ -39,6 +39,7 @@ def test_render_stem_handler_updates_project(tmp_path, monkeypatch):
 
     monkeypatch.setattr(handler_module, "_STORE", store)
     monkeypatch.setattr(handler_module, "_MANAGER", FakeManager())
+    monkeypatch.setattr(handler_module, "_require_gpu", lambda name: None)
 
     queue = JobQueue(tmp_path / "jobs.sqlite3")
     job = queue.enqueue(
@@ -47,6 +48,8 @@ def test_render_stem_handler_updates_project(tmp_path, monkeypatch):
             "project_id": project.id,
             "stem_id": "s1-mara",
             "candidates": 1,
+            "seed": None,
+            "cfg_scale": None,
             "align": False,
         },
     )

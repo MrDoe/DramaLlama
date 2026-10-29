@@ -91,6 +91,10 @@ class CueCreate(BaseModel):
     filter: str = "none"
 
 
+class TakeSelect(BaseModel):
+    take_id: str
+
+
 class CharacterUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
@@ -317,6 +321,24 @@ def create_app(
             priority=10,
         )
         return job.model_dump(mode="json")
+
+    @app.patch("/api/projects/{project_id}/stems/{stem_id}/take")
+    def select_take(project_id: str, stem_id: str, body: TakeSelect) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        stem = next((item for item in project.stems if item.id == stem_id), None)
+        if stem is None:
+            raise HTTPException(status_code=404, detail="stem not found")
+        if not any(take.id == body.take_id for take in stem.takes):
+            raise HTTPException(status_code=404, detail="take not found")
+        for take in stem.takes:
+            take.selected = take.id == body.take_id
+        project = store.save(project)
+        job = queue.enqueue(
+            "stem.realign",
+            {"project_id": project_id, "stem_id": stem_id},
+            priority=5,
+        )
+        return {"project": project.model_dump(mode="json"), "job": job.model_dump(mode="json")}
 
     @app.post("/api/projects/{project_id}/mix", status_code=202)
     def render_mix(project_id: str) -> dict[str, Any]:

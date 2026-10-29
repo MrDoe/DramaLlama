@@ -26,8 +26,20 @@ Breeze reference designer.
 
 ## Status
 
-Code-complete; GPU smoke test pending behind a sibling render. Qwen3 peak VRAM
-is about 4.3 GB, so it can coexist with the local LLM but not with Breeze.
+Validated on one German scene (ANNA BERG, scene 1, preset Vivian):
+
+- load 10.0 s
+- render 54.4 s for 32.0 s audio
+- German Whisper alignment 39.0 s
+- 7/7 line cuts at confidence 1.0
+- peak VRAM 4.92 GB
+
+The full worker path was also validated end-to-end: a 24.9 s ANNA stem, 7/7
+line cuts at confidence 1.0, and a 7-line mix (46.8 s) with the expected
+missing-clip warnings for lines whose stems had not been rendered.
+
+Qwen3 can coexist with the local LLM on a 16 GB card, but not with Breeze;
+`EngineManager` unloads the other engine before switching.
 
 ## Related
 

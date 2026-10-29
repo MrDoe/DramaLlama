@@ -13,9 +13,9 @@ SFX → mix and export.
 - Stem builder, reference design, render + align worker, take/alignment storage.
 - SFX index over `~/Sounds`, cue sheet, mixer with ducking/EQ/loudnorm.
 - React UI: projects, script/parse, stems, render, sound, mix.
-- 56 backend tests, web build green.
-- English Breeze path validated on one real scene; German Qwen3 path code-complete
-  but not yet GPU-validated.
+- 57 backend tests, web build green.
+- English Breeze path validated on one real scene; German Qwen3 path validated
+  end-to-end (worker render 24.9 s, 7/7 cuts, confidence 1.0, 4.92 GB peak).
 
 ## Hard constraints
 

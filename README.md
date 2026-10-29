@@ -32,8 +32,10 @@ Working end-to-end on the English path:
 - SFX library indexing over `~/Sounds` + uploads, cue sheet anchored to lines.
 - Mix: dialogue assembly, bed ducking, telephone filter, −16/−23 LUFS
   loudnorm, WAV + MP3. Demo mix: 27 lines, 94.3 s, 1 cue, no warnings.
-- German path implemented with Qwen3-TTS CustomVoice presets; the German
-  generation smoke test is queued behind a sibling GPU render.
+- German path validated with Qwen3-TTS CustomVoice presets end-to-end:
+  10.0 s load, 54.4 s render for 32.0 s audio, 39.0 s German alignment, 7/7
+  line cuts at confidence 1.0, 4.92 GB peak VRAM. The worker path also rendered
+  a 24.9 s ANNA stem and a 46.8 s test mix.
 
 ## Quick start
 
@@ -98,7 +100,7 @@ stem/aligner is Apache 2.0 code; see `vendor/breeze_stems/VENDORED_FROM.md`.
 | `web/` | React + Vite + TypeScript UI |
 | `data/projects/<id>/` | project JSON, refs, takes, line clips, mix |
 | `data/jobs.sqlite3` | job queue (SQLite, WAL) |
-| `tests/` | 56 tests, no GPU required |
+| `tests/` | 57 tests, no GPU required |
 
 ## Configuration
 
@@ -131,7 +133,8 @@ Real-model smoke tests are opt-in:
 
 ## Known gaps
 
-- German Qwen3 generation needs a final GPU smoke test and a UI render pass.
+- German Qwen3 generation is validated at the engine level; the UI render
+  pass is covered by the same worker path and is being verified end-to-end.
 - Reference monologues currently default to the character's first three lines;
   a dedicated editor is the next UI addition.
 - Cue timing is line-anchored; a drag-and-drop waveform timeline is not built yet.

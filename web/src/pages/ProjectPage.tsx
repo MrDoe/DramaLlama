@@ -316,11 +316,13 @@ function RenderBoard({
   project,
   jobs,
   onRender,
+  onSelectTake,
   onRefresh,
 }: {
   project: Project;
   jobs: Record<string, Job>;
   onRender: (stem: Stem) => void;
+  onSelectTake: (stem: Stem, takeId: string) => void;
   onRefresh: () => void;
 }) {
   const byScene = project.script.scenes
@@ -376,8 +378,12 @@ function RenderBoard({
                   const character = project.script.characters[stem.speaker];
                   const readyForStem = voiceReady(stem.speaker);
                   const job = jobs[stem.id];
+                  const realignJob = jobs[`${stem.id}:realign`];
                   const busy =
-                    job?.status === "queued" || job?.status === "running";
+                    job?.status === "queued" ||
+                    job?.status === "running" ||
+                    realignJob?.status === "queued" ||
+                    realignJob?.status === "running";
                   const alignment = project.alignments[stem.id];
                   const take = stem.takes.find((item) => item.selected) ?? stem.takes[0];
                   const lowConfidence =
@@ -433,6 +439,23 @@ function RenderBoard({
                         {take?.f0_hz ? <span>F0 {Math.round(take.f0_hz)} Hz</span> : null}
                         {take?.mfcc_sim ? <span>MFCC {take.mfcc_sim.toFixed(3)}</span> : null}
                       </div>
+
+                      {stem.takes.length > 1 ? (
+                        <div className="take-list">
+                          {stem.takes.map((take, index) => (
+                            <button
+                              type="button"
+                              key={take.id}
+                              className={`take-pill${take.selected ? " active" : ""}`}
+                              onClick={() => onSelectTake(stem, take.id)}
+                              disabled={busy}
+                            >
+                              take {index + 1} · {formatDuration(take.duration_s)}
+                              {take.f0_hz ? ` · ${Math.round(take.f0_hz)} Hz` : ""}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
 
                       {alignment ? (
                         <div className="render-align">
@@ -1025,6 +1048,20 @@ export function ProjectPage() {
     [project, trackJob],
   );
 
+  const selectTake = useCallback(
+    async (stem: Stem, takeId: string) => {
+      if (!project) return;
+      try {
+        const result = await api.selectTake(project.id, stem.id, takeId);
+        setProject(result.project);
+        trackJob(`${stem.id}:realign`, result.job);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not select take");
+      }
+    },
+    [project, trackJob],
+  );
+
   const designVoice = useCallback(
     async (speaker: string) => {
       if (!project) return;
@@ -1382,6 +1419,7 @@ export function ProjectPage() {
           project={project}
           jobs={jobs}
           onRender={renderStem}
+          onSelectTake={(stem, takeId) => void selectTake(stem, takeId)}
           onRefresh={() => void refreshProject()}
         />
       ) : activeStep === "sound" ? (

@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from drama_studio.api import create_app
 from drama_studio.llm import LLMError
+from drama_studio.models import Take
 
 
 class FailingLLM:
@@ -118,6 +119,45 @@ def test_reference_and_render_queue(tmp_path):
     jobs = client.get(f"/api/projects/{project['id']}/jobs")
     assert jobs.status_code == 200
     assert {job["type"] for job in jobs.json()} == {"reference.design", "stem.render"}
+
+
+def test_select_take_queues_realign(tmp_path):
+    app, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "API Test", "language": "en", "script_text": SCRIPT},
+    ).json()
+    project = client.post(f"/api/projects/{project['id']}/stems").json()
+    stored = app.state.store.get(project["id"])
+    stem = stored.stems[0]
+    stem.takes = [
+        Take(
+            id="take-a",
+            file="audio/takes/a.wav",
+            duration_s=1.0,
+            sample_rate=24000,
+            seed=1,
+            selected=True,
+        ),
+        Take(
+            id="take-b",
+            file="audio/takes/b.wav",
+            duration_s=1.0,
+            sample_rate=24000,
+            seed=2,
+        ),
+    ]
+    app.state.store.save(stored)
+
+    response = client.patch(
+        f"/api/projects/{project['id']}/stems/{stem.id}/take",
+        json={"take_id": "take-b"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job"]["type"] == "stem.realign"
+    selected = [take for take in body["project"]["stems"][0]["takes"] if take["selected"]]
+    assert selected[0]["id"] == "take-b"
 
 
 def test_mix_queue_and_project_files(tmp_path):

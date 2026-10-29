@@ -54,13 +54,13 @@ class Qwen3Engine(BaseEngine):
             import torch
             from qwen_tts import Qwen3TTSModel
 
+            self._torch = torch
             self._model = Qwen3TTSModel.from_pretrained(
                 str(QWEN_MODEL),
                 device_map=QWEN_DEVICE,
                 dtype=torch.bfloat16,
                 attn_implementation="sdpa",
             )
-            self._torch = torch
         except Exception as exc:  # pragma: no cover - hardware path
             self.unload()
             raise EngineNotAvailable(f"could not load Qwen3: {exc}") from exc
