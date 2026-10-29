@@ -120,6 +120,27 @@ def test_reference_and_render_queue(tmp_path):
     assert {job["type"] for job in jobs.json()} == {"reference.design", "stem.render"}
 
 
+def test_mix_queue_and_project_files(tmp_path):
+    app, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "API Test", "language": "en", "script_text": SCRIPT},
+    ).json()
+    mix = client.post(f"/api/projects/{project['id']}/mix")
+    assert mix.status_code == 202
+    assert mix.json()["type"] == "mix.render"
+    jobs = client.get(f"/api/projects/{project['id']}/jobs").json()
+    assert any(job["type"] == "mix.render" for job in jobs)
+
+    directory = app.state.store.project_dir(project["id"])
+    (directory / "note.txt").write_text("hello", encoding="utf-8")
+    assert client.get(f"/api/projects/{project['id']}/files/note.txt").status_code == 200
+    assert (
+        client.get(f"/api/projects/{project['id']}/files/../project.json").status_code
+        in {404, 400}
+    )
+
+
 def test_update_script_endpoint(tmp_path):
     _, client = make_client(tmp_path)
     project = client.post(

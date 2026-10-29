@@ -98,7 +98,7 @@ stem/aligner is Apache 2.0 code; see `vendor/breeze_stems/VENDORED_FROM.md`.
 | `web/` | React + Vite + TypeScript UI |
 | `data/projects/<id>/` | project JSON, refs, takes, line clips, mix |
 | `data/jobs.sqlite3` | job queue (SQLite, WAL) |
-| `tests/` | 55 tests, no GPU required |
+| `tests/` | 56 tests, no GPU required |
 
 ## Configuration
 

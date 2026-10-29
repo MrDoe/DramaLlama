@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import os
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ from .base import (
 )
 
 QWEN_MODEL = Path.home() / "models" / "Qwen3-TTS-12Hz-1.7B-CustomVoice"
+QWEN_DEVICE = os.environ.get("DRAMA_STUDIO_QWEN_DEVICE", "cuda:0")
 QWEN_PRESETS = ("Vivian", "Serena", "Ryan", "Aiden")
 
 
@@ -54,7 +56,7 @@ class Qwen3Engine(BaseEngine):
 
             self._model = Qwen3TTSModel.from_pretrained(
                 str(QWEN_MODEL),
-                device_map="cuda:0",
+                device_map=QWEN_DEVICE,
                 dtype=torch.bfloat16,
                 attn_implementation="sdpa",
             )
