@@ -4,13 +4,17 @@ from collections.abc import Callable
 
 from .base import BaseEngine, EngineNotAvailable, TTSEngine
 from .breeze import BreezeEngine
+from .breeze_de import BreezeDeEngine
 from .chatterbox import ChatterboxEngine
+from .suno import SunoEngine
 from .fake import FakeEngine
 
 ENGINES: dict[str, Callable[[], TTSEngine]] = {
     "fake": FakeEngine,
     "breeze": BreezeEngine,
+    "breeze-de": BreezeDeEngine,
     "chatterbox": ChatterboxEngine,
+    "suno": SunoEngine,
 }
 
 

@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 from .models import (
+    EngineName,
     Language,
     ParseReport,
     Project,
@@ -47,6 +48,7 @@ class ProjectStore:
         raw_script: str,
         *,
         project_id: str | None = None,
+        default_engine: EngineName | None = None,
     ) -> Project:
         parsed = parse_script(raw_script, language, title or None)
         final_title = title.strip() or parsed.script.title or "Untitled drama"
@@ -57,6 +59,7 @@ class ProjectStore:
             id=project_id,
             title=final_title,
             language=language,
+            default_engine=default_engine,
             raw_script=raw_script,
             script=parsed.script,
             report=parsed.report,
@@ -86,7 +89,15 @@ class ProjectStore:
         path = self.project_dir(project_id) / "project.json"
         if not path.exists():
             raise KeyError(project_id)
-        return Project.model_validate_json(path.read_text(encoding="utf-8"))
+        project = Project.model_validate_json(path.read_text(encoding="utf-8"))
+        # Older parsers stamped the language default onto every character.
+        # Treat that value as "inherit", so switching the project engine does
+        # not silently leave characters on Breeze/Chatterbox.
+        legacy = "breeze" if project.language == "en" else "chatterbox"
+        for character in project.script.characters.values():
+            if character.engine == legacy:
+                character.engine = None
+        return project
 
     def find(self, project_id: str) -> Project | None:
         try:

@@ -36,6 +36,9 @@ class EngineInfo:
     supports_reference_clone: bool
     voice_mode: VoiceMode
     description: str = ""
+    # True for engines (e.g. Suno) that infer language from the text/style
+    # instead of a project-level language hint.
+    language_agnostic: bool = False
 
 
 @runtime_checkable

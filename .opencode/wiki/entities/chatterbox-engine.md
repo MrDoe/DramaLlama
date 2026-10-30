@@ -4,7 +4,7 @@ tags: [engine, chatterbox, german, voice-clone]
 sourceRefs:
   - src/drama_studio/engines/chatterbox.py
   - src/drama_studio/config.py
-lastReviewed: 2026-10-29
+lastReviewed: 2026-10-30
 ---
 
 # Chatterbox engine
@@ -26,7 +26,7 @@ Chatterbox Multilingual 0.5B HTTP server at `CHATTERBOX_URL`
 ## Validation
 
 A 4.38 s German test line rendered in 3.4 s; the worker path produced a 20.7 s
-ANNA stem and 7/7 line cuts. Qwen3-TTS is **not** part of Drama Studio.
+ANNA stem and 7/7 line cuts. Qwen3-TTS is **not** part of Drama Llama.
 
 ## Related
 

@@ -3,9 +3,9 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "drama-studio"
+name = "drama-llama"
 version = "0.1.0"
-description = "Local web app for turning scripts into audio dramas with Breeze and Chatterbox TTS."
+description = "Drama Llama: a local web app for turning scripts into audio dramas with Breeze, Chatterbox and Suno."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -23,7 +23,8 @@ dev = [
 ]
 
 [project.scripts]
-drama-studio = "drama_studio.cli:main"
+drama-llama = "drama_studio.cli:main"
+drama-studio = "drama_studio.cli:main"  # legacy alias
 
 [tool.setuptools.packages.find]
 where = ["src"]

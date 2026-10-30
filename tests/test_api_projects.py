@@ -240,3 +240,62 @@ def test_update_script_endpoint(tmp_path):
     )
     assert response.status_code == 200
     assert len(response.json()["script"]["scenes"][0]["lines"]) == 3
+
+
+def test_suno_project_does_not_require_breeze_reference(tmp_path):
+    _, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "Suno API Test",
+            "language": "en",
+            "script_text": SCRIPT,
+            "default_engine": "suno",
+        },
+    ).json()
+    assert project["default_engine"] == "suno"
+    built = client.post(f"/api/projects/{project['id']}/stems")
+    assert built.status_code == 200
+    stem = built.json()["stems"][0]
+    render = client.post(
+        f"/api/projects/{project['id']}/stems/{stem['id']}/render",
+        json={"candidates": 1},
+    )
+    assert render.status_code == 202
+    assert render.json()["payload"]["engine"] == "suno"
+
+
+def test_project_engine_update_and_validation(tmp_path):
+    _, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "Engine", "language": "de", "script_text": SCRIPT},
+    ).json()
+    updated = client.put(
+        f"/api/projects/{project['id']}", json={"default_engine": "suno"}
+    )
+    assert updated.status_code == 200
+    assert updated.json()["default_engine"] == "suno"
+    cleared = client.put(
+        f"/api/projects/{project['id']}", json={"default_engine": "auto"}
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["default_engine"] is None
+    rejected = client.put(
+        f"/api/projects/{project['id']}", json={"default_engine": "breeze"}
+    )
+    assert rejected.status_code == 400
+
+
+def test_changing_project_engine_updates_default_stems(tmp_path):
+    _, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "Engine Stems", "language": "de", "script_text": SCRIPT},
+    ).json()
+    built = client.post(f"/api/projects/{project['id']}/stems").json()
+    assert all(stem["engine"] is None for stem in built["stems"])
+    updated = client.put(
+        f"/api/projects/{project['id']}", json={"default_engine": "suno"}
+    ).json()
+    assert all(stem["engine"] == "suno" for stem in updated["stems"])

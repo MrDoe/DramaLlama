@@ -111,3 +111,18 @@ def _clip_ready(clip: dict[str, Any]) -> bool:
     return status in {"complete", "completed"} or (
         bool(audio) and "/forbidden" not in audio
     ) or bool(media)
+
+
+    def make_stems(self, clip_id: str) -> dict[str, Any]:
+        try:
+            response = httpx.post(
+                f"{self.base_url}/stems",
+                json={"clip_id": clip_id},
+                timeout=120,
+            )
+        except Exception as exc:
+            raise SunoError(f"Suno stem extraction failed: {exc}") from exc
+        data = response.json() if response.content else {}
+        if response.status_code >= 400 or not data.get("ok"):
+            raise SunoError(data.get("error") or f"Suno bridge HTTP {response.status_code}")
+        return data

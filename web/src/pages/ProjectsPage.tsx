@@ -107,12 +107,14 @@ export function ProjectsPage() {
     <div className="page">
       <section className="hero">
         <div className="hero-copy">
-          <p className="eyebrow">Local audio drama studio</p>
-          <h1>
-            Scripts in.
-            <br />
-            <em>Drama out.</em>
-          </h1>
+          <p className="eyebrow">Drama Llama · local audio drama lab</p>
+          <div className="hero-mascot">
+            <img src="/llogo.png" alt="Drama Llama mascot" width={156} height={156} />
+            <div className="hero-mascot-copy">
+              <strong>Drama Llama</strong>
+              <span>scripts in · drama out</span>
+            </div>
+          </div>
           <p>
             Paste a screenplay. The LLM casts it, splits each character into a
             scene stem, and Breeze performs it. Whisper cuts the stems back into

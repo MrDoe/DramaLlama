@@ -5,18 +5,18 @@ sourceRefs:
   - suno-bridge/server.mjs
   - src/drama_studio/suno.py
   - src/drama_studio/handlers.py
-lastReviewed: 2026-10-29
+lastReviewed: 2026-10-30
 ---
 
 # Suno music bridge
 
-Drama Studio generates music beds, themes and songs through the
+Drama Llama generates music beds, themes and songs through the
 [`bettersuno-mcp`](https://github.com/MrDoe/bettersuno-mcp) modules. Because
 those modules are Node and need the BetterSuno browser extension, a small
 sidecar wraps them in HTTP.
 
 ```
-Drama Studio (Python)
+Drama Llama (Python)
   → http://127.0.0.1:9430
   → suno-bridge/server.mjs
   → bettersuno-mcp src/{ws-bridge,suno-client,tools}
@@ -33,7 +33,7 @@ Drama Studio (Python)
 | `GET /clip/{id}` | poll generation status |
 | `POST /download` | download WAV into a project/SFX folder |
 
-Drama Studio enqueues `suno.generate`, polls the clip, downloads **WAV** (the
+Drama Llama enqueues `suno.generate`, polls the clip, downloads **WAV** (the
 M4A path can return an undecodable stream), indexes it in `SfxLibrary`, and
 appends a `SunoTrack` to the project. The Sound UI previews it and can add it
 as a `music` cue.
@@ -49,4 +49,4 @@ as a `music` cue.
 ## Related
 
 - [[concepts/sfx-library-and-mix]]
-- [[entities/drama-studio-app]]
+- [[entities/drama-llama-app]]

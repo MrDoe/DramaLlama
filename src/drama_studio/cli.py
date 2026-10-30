@@ -8,7 +8,7 @@ import sys
 import threading
 from pathlib import Path
 
-from .config import DATA_DIR, DB_PATH, HOST, PORT, PROJECTS_DIR, ensure_dirs
+from .config import BREEZE_DE_URL, DATA_DIR, DB_PATH, HOST, PORT, PROJECTS_DIR, ensure_dirs
 from .handlers import default_handlers
 from .jobs import JobQueue
 from .worker import Worker
@@ -92,6 +92,46 @@ def cmd_suno_bridge(args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_breeze_de(args: argparse.Namespace) -> int:
+    import os
+
+    binary = Path(args.binary).expanduser()
+    if not binary.exists():
+        # Fall back to a sibling extracted directory or PATH lookup.
+        candidates = [
+            Path.home() / "code" / "breeze-tts-cpp" / "breeze-tts-2-v0.1.3-linux-x64-vulkan" / "breeze-server",
+            Path("breeze-server"),
+        ]
+        for cand in candidates:
+            if cand.exists():
+                binary = cand
+                break
+    if not binary.exists():
+        print(f"error: breeze-server binary not found at {binary}", file=sys.stderr)
+        print("download from https://github.com/HoppouAI/Breeze-TTS-2.cpp/releases", file=sys.stderr)
+        return 1
+    model = Path(args.model).expanduser()
+    if not model.exists():
+        print(f"error: model not found at {model}", file=sys.stderr)
+        return 1
+    port = args.port
+    url = f"http://127.0.0.1:{port}"
+    env = dict(os.environ)
+    if "BREEZE_DE_VK_DEVICE" in env:
+        env["GGML_VK_DEVICE"] = env["BREEZE_DE_VK_DEVICE"]
+    elif "GGML_VK_DEVICE" not in env:
+        env["GGML_VK_DEVICE"] = "1"
+    print(f"Breeze-DE sidecar on {url} (model {model})")
+    print(f"set BREEZE_DE_URL={url} for Drama Llama")
+    try:
+        return subprocess.call(
+            [str(binary), str(model), "--port", str(port), "--host", "127.0.0.1"],
+            env=env,
+        )
+    except KeyboardInterrupt:
+        return 0
+
+
 def cmd_jobs(args: argparse.Namespace) -> int:
     queue = _queue()
     for job in queue.list_jobs(args.status, args.limit):
@@ -133,7 +173,7 @@ def cmd_demo_render(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="drama-studio")
+    parser = argparse.ArgumentParser(prog="drama-llama")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("init", help="create data directories and the job database")
@@ -157,6 +197,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("suno-bridge", help="run the BetterSuno HTTP sidecar")
     p.add_argument("--port", type=int, default=9430)
     p.set_defaults(func=cmd_suno_bridge)
+
+    p = sub.add_parser("breeze-de", help="run the German Breeze (Breeze-TTS-2.cpp) sidecar")
+    p.add_argument("--port", type=int, default=8137)
+    p.add_argument(
+        "--binary",
+        default=str(Path.home() / "code" / "breeze-tts-cpp" / "breeze-tts-2-v0.1.3-linux-x64-vulkan" / "breeze-server"),
+    )
+    p.add_argument(
+        "--model",
+        default=str(Path.home() / "models" / "Articulatio-DE-Stream-TTS-v1.5-Q8_0.gguf"),
+    )
+    p.set_defaults(func=cmd_breeze_de)
 
     p = sub.add_parser("jobs", help="list jobs")
     p.add_argument("--status", default=None)

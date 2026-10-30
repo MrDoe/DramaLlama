@@ -1,14 +1,21 @@
 export type Language = "en" | "de";
-export type EngineName = "breeze" | "chatterbox" | "fake";
+export type EngineName =
+  | "breeze"
+  | "breeze-de"
+  | "chatterbox"
+  | "fake"
+  | "suno";
 
 export interface Character {
   id: string;
   name: string;
   description: string;
-  engine: EngineName;
+  engine?: EngineName | null;
   ref_text?: string | null;
   ref_instruction?: string | null;
   ref_file?: string | null;
+  suno_persona_id?: string | null;
+  suno_mv?: string;
   baseline_instruct: string;
   locked: boolean;
   f0_hz?: number | null;
@@ -128,6 +135,8 @@ export interface Take {
   f0_hz?: number | null;
   mfcc_sim?: number | null;
   selected: boolean;
+  clip_id?: string | null;
+  preview_url?: string | null;
   created_at: string;
 }
 
@@ -183,6 +192,7 @@ export interface Project {
   id: string;
   title: string;
   language: Language;
+  default_engine?: EngineName | null;
   raw_script: string;
   script: Script;
   report: ParseReport | null;
@@ -210,6 +220,7 @@ export interface ProjectSummary {
 export interface EngineInfo {
   name: EngineName;
   languages: string[];
+  language_agnostic?: boolean;
   sample_rate: number;
   supports_reference_clone: boolean;
   voice_mode: "reference" | "preset";

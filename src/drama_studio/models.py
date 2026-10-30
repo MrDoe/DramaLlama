@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 Language = Literal["en", "de"]
-EngineName = Literal["breeze", "chatterbox", "fake"]
+EngineName = Literal["breeze", "breeze-de", "chatterbox", "fake", "suno"]
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 VoiceMode = Literal["reference", "preset"]
 
@@ -19,10 +19,14 @@ class Character(BaseModel):
     id: str
     name: str
     description: str = ""
-    engine: EngineName = "breeze"
+    # None means "inherit the project's engine"; avoids silently assuming Breeze
+    # for projects whose default is Chatterbox or Suno.
+    engine: EngineName | None = None
     ref_text: str | None = None
     ref_instruction: str | None = None
     ref_file: str | None = None
+    suno_persona_id: str | None = None
+    suno_mv: str = "chirp-hawk"
     baseline_instruct: str = ""
     locked: bool = False
     f0_hz: float | None = None
@@ -140,6 +144,7 @@ class Project(BaseModel):
     id: str
     title: str
     language: Language
+    default_engine: EngineName | None = None
     raw_script: str = ""
     script: Script
     report: ParseReport | None = None
@@ -191,6 +196,8 @@ class Take(BaseModel):
     f0_hz: float | None = None
     mfcc_sim: float | None = None
     selected: bool = False
+    clip_id: str | None = None
+    preview_url: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -227,6 +234,8 @@ class StemRenderRequest(BaseModel):
     cfg_scale: float = 2.5
     seed: int = 42
     candidates: int = Field(default=1, ge=1, le=5)
+    persona_id: str | None = None
+    mv: str = "chirp-hawk"
 
 
 class StemRenderResult(BaseModel):

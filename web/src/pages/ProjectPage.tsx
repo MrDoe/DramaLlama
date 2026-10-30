@@ -23,8 +23,22 @@ import {
   Waveform,
 } from "@phosphor-icons/react";
 import { api } from "../api";
-import type { EngineInfo, Job, Line, Project, SfxItem, Stem } from "../types";
-import { formatDuration, initials, speakerStyle } from "../utils";
+import type {
+  EngineInfo,
+  EngineName,
+  Job,
+  Line,
+  Project,
+  SfxItem,
+  Stem,
+} from "../types";
+import {
+  autoEngine,
+  engineLabel,
+  formatDuration,
+  initials,
+  speakerStyle,
+} from "../utils";
 
 const STEPS = [
   { id: "script", label: "Script", icon: FileText },
@@ -33,6 +47,10 @@ const STEPS = [
   { id: "sound", label: "Sound", icon: MusicNotes },
   { id: "mix", label: "Mix", icon: SlidersHorizontal },
 ] as const;
+
+function projectEngine(project: Project): EngineName {
+  return project.default_engine ?? autoEngine(project.language);
+}
 
 function LineCard({ line }: { line: Line }) {
   return (
@@ -153,6 +171,10 @@ function CastPanel({
           cast.map((character) => {
             const job = jobs[`char:${character.id}`];
             const busy = job?.status === "queued" || job?.status === "running";
+            const engine = character.engine ?? projectEngine(project);
+            const isSuno = engine === "suno";
+            const isChatterbox = engine === "chatterbox";
+            const isBreeze = engine === "breeze" || engine === "breeze-de";
             return (
               <div className="cast-card" key={character.id}>
                 <span className="avatar" style={speakerStyle(character.id)}>
@@ -162,9 +184,11 @@ function CastPanel({
                   <p className="cast-name">{character.name}</p>
                   <p className="cast-lines">
                     {character.count} line{character.count === 1 ? "" : "s"} ·{" "}
-                    {project.language === "de" || character.engine === "chatterbox"
-                      ? "Chatterbox clone"
-                      : "Breeze reference"}
+                    {isSuno
+                      ? "Suno voice"
+                      : isChatterbox
+                        ? "Chatterbox clone"
+                        : `${engineLabel(engine)} reference`}
                   </p>
                   {character.description ? (
                     <p className="cast-desc">{character.description}</p>
@@ -172,7 +196,13 @@ function CastPanel({
                   <div className="cast-voice">
                     {character.ref_file ? (
                       <span className="badge">voice sample ready</span>
-                    ) : project.language === "de" ? (
+                    ) : isSuno ? (
+                      <span className="badge">
+                        {character.suno_persona_id
+                          ? "Suno persona"
+                          : "Suno preset voice"}
+                      </span>
+                    ) : isChatterbox ? (
                       <label className="button button-secondary button-sm cast-upload">
                         <Waveform size={12} />
                         Upload voice
@@ -185,7 +215,7 @@ function CastPanel({
                           }}
                         />
                       </label>
-                    ) : (
+                    ) : isBreeze ? (
                       <button
                         type="button"
                         className="button button-secondary button-sm"
@@ -195,7 +225,7 @@ function CastPanel({
                         {busy ? <span className="spinner" /> : <Waveform size={12} />}
                         {busy ? "Designing…" : "Design voice"}
                       </button>
-                    )}
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -253,7 +283,7 @@ function StemsBoard({
       {byScene.length === 0 ? (
         <div className="empty-list" style={{ marginTop: 16 }}>
           No stems yet. Build them from the parsed script — lines are grouped by
-          scene and speaker, ready for one Breeze take per character.
+          scene and speaker, ready for one take per character.
         </div>
       ) : (
         <div className="stems-board">
@@ -330,9 +360,10 @@ function RenderBoard({
     }))
     .filter((entry) => entry.stems.length > 0);
 
-  const defaultEngine = project.language === "de" ? "chatterbox" : "breeze";
-  const availableEngines = engines.filter((engine) =>
-    engine.languages.includes(project.language),
+  const defaultEngine = projectEngine(project);
+  const availableEngines = engines.filter(
+    (engine) =>
+      engine.language_agnostic || engine.languages.includes(project.language),
   );
   const availableNames = new Set<string>(
     availableEngines.map((engine) => engine.name),
@@ -341,8 +372,9 @@ function RenderBoard({
     stem.engine && availableNames.has(stem.engine) ? stem.engine : defaultEngine;
   const voiceReady = (stem: Stem) => {
     const engine = engineFor(stem);
-    if (engine === "fake") return true;
-    if (engine === "chatterbox") return true;
+    if (engine === "fake" || engine === "chatterbox" || engine === "suno") {
+      return true;
+    }
     return Boolean(project.script.characters[stem.speaker]?.ref_file);
   };
   const ready = project.stems.filter((stem) => voiceReady(stem)).length;
@@ -356,9 +388,9 @@ function RenderBoard({
             Render queue
           </h2>
           <p className="panel-sub">
-            {ready}/{project.stems.length} stems have a{" "}
-            {project.language === "de" ? "voice sample" : "reference voice"} ·{" "}
-            {project.language === "de" ? "Chatterbox" : "Breeze"} on GPU · Whisper on CPU
+            {ready}/{project.stems.length} stems ready ·{" "}
+            {engineLabel(defaultEngine)} default{" "}
+            {defaultEngine === "suno" ? "via BetterSuno" : "on GPU"} · Whisper on CPU
           </p>
         </div>
         <div className="panel-actions">
@@ -370,7 +402,7 @@ function RenderBoard({
 
       {byScene.length === 0 ? (
         <div className="empty-list">
-          Build stems first, then design a reference voice for each character.
+          Build stems first, then give each character a voice.
         </div>
       ) : (
         <div className="stems-board">
@@ -485,6 +517,26 @@ function RenderBoard({
                         </div>
                       ) : null}
 
+                      {take ? (
+                        <audio
+                          controls
+                          preload="metadata"
+                          src={api.fileUrl(project.id, take.file)}
+                          style={{ width: "100%", marginTop: 8 }}
+                        />
+                      ) : null}
+                      {take?.preview_url ? (
+                        <div style={{ marginTop: 4 }}>
+                          <span className="panel-sub">Original (before stem extraction)</span>
+                          <audio
+                            controls
+                            preload="metadata"
+                            src={take.preview_url}
+                            style={{ width: "100%" }}
+                          />
+                        </div>
+                      ) : null}
+
                       {alignment ? (
                         <div className="render-align">
                           <span>
@@ -509,14 +561,14 @@ function RenderBoard({
                       <div className="render-actions">
                         {readyForStem ? (
                           <span className="badge">
-                            {project.language === "de" ? "chatterbox" : "ref ready"}
+                            {selectedEngine === "suno"
+                              ? "preset voice"
+                              : selectedEngine === "chatterbox"
+                                ? "optional sample"
+                                : "ref ready"}
                           </span>
                         ) : (
-                          <span className="render-missing">
-                            {project.language === "de"
-                              ? "upload a voice sample"
-                              : "no reference voice"}
-                          </span>
+                          <span className="render-missing">no reference voice</span>
                         )}
                         <button
                           type="button"
@@ -1153,6 +1205,7 @@ export function ProjectPage() {
   const [loading, setLoading] = useState(true);
   const [parsing, setParsing] = useState(false);
   const [llmParsing, setLlmParsing] = useState(false);
+  const [llmOutput, setLlmOutput] = useState("");
   const [buildingStems, setBuildingStems] = useState(false);
   const [activeStep, setActiveStep] = useState<
     "script" | "stems" | "render" | "sound" | "mix"
@@ -1211,11 +1264,14 @@ export function ProjectPage() {
     if (!project || llmParsing) return;
     setLlmParsing(true);
     setError("");
+    setLlmOutput("");
     try {
       const saved = dirty
         ? await api.updateProject(project.id, { raw_script: rawScript })
         : project;
-      const updated = await api.parseProject(saved.id, "llm");
+      const updated = await api.parseProjectStream(saved.id, (chunk) => {
+        setLlmOutput((prev) => prev + chunk);
+      });
       setProject(updated);
       setRawScript(updated.raw_script);
       setActiveStep("script");
@@ -1255,6 +1311,24 @@ export function ProjectPage() {
       setError(reason instanceof Error ? reason.message : "Could not refresh project");
     }
   }, [project]);
+
+  const changeProjectEngine = useCallback(
+    async (value: string) => {
+      if (!project) return;
+      try {
+        const updated = await api.updateProject(project.id, {
+          default_engine: value === "auto" ? "auto" : (value as EngineName),
+        });
+        setProject(updated);
+        setError("");
+      } catch (reason) {
+        setError(
+          reason instanceof Error ? reason.message : "Could not change engine",
+        );
+      }
+    },
+    [project],
+  );
 
   const trackJob = useCallback(
     (key: string, job: Job) => {
@@ -1437,9 +1511,40 @@ export function ProjectPage() {
         <div>
           <div className="project-title-row">
             <h1 className="project-title">{project.title}</h1>
-            <span className={`badge ${project.language === "de" ? "badge-violet" : "badge-accent"}`}>
-              {project.language === "de" ? "Deutsch · Chatterbox" : "English · Breeze"}
+            <span
+              className={`badge ${project.language === "de" ? "badge-violet" : "badge-accent"}`}
+            >
+              {project.language === "de" ? "Deutsch" : "English"}
             </span>
+            <label
+              className="engine-picker"
+              title="Project default engine"
+              style={{ display: "inline-flex" }}
+            >
+              <select
+                className="input"
+                value={project.default_engine ?? "auto"}
+                style={{ width: "auto", height: 32, fontSize: 13 }}
+                onChange={(event) => void changeProjectEngine(event.target.value)}
+                aria-label="Project default engine"
+              >
+                <option value="auto">
+                  Auto · {engineLabel(autoEngine(project.language))}
+                </option>
+                {engines
+                  .filter(
+                    (engine) =>
+                      engine.name !== "fake" &&
+                      (engine.language_agnostic ||
+                        engine.languages.includes(project.language)),
+                  )
+                  .map((engine) => (
+                    <option key={engine.name} value={engine.name}>
+                      {engineLabel(engine.name)}
+                    </option>
+                  ))}
+              </select>
+            </label>
           </div>
           <p className="project-sub">
             {project.id} · updated {new Date(project.updated_at).toLocaleString()}
@@ -1581,6 +1686,28 @@ export function ProjectPage() {
             <span>⌘/Ctrl + Enter to parse</span>
           </div>
         </section>
+
+        {(llmParsing || llmOutput) ? (
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <h2 className="panel-title">
+                  <Sparkle size={15} weight="fill" />
+                  LLM live output
+                </h2>
+                <p className="panel-sub">streaming tokens from the local model</p>
+              </div>
+            </div>
+            <textarea
+              className="raw-editor"
+              value={llmOutput}
+              readOnly
+              spellCheck={false}
+              aria-label="LLM live output"
+              style={{ minHeight: 160 }}
+            />
+          </section>
+        ) : null}
 
         <section className="panel">
           <div className="panel-head">

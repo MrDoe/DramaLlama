@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -8,7 +8,8 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { api } from "../api";
-import type { Language } from "../types";
+import type { EngineInfo, EngineName, Language } from "../types";
+import { autoEngine, engineLabel } from "../utils";
 
 const SAMPLE = `# THE HOUSE ON BELLWEATHER ROAD
 
@@ -39,9 +40,24 @@ export function NewProjectPage() {
   const navigate = useNavigate();
   const [title, setTitle] = useState("");
   const [language, setLanguage] = useState<Language>("en");
+  const [defaultEngine, setDefaultEngine] = useState<EngineName | null>(null);
+  const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [scriptText, setScriptText] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    api.engines().then(setEngines).catch(() => setEngines([]));
+  }, []);
+
+  function changeLanguage(next: Language) {
+    setLanguage(next);
+    if (defaultEngine) {
+      const info = engines.find((engine) => engine.name === defaultEngine);
+      if (info && !info.language_agnostic && !info.languages.includes(next))
+        setDefaultEngine(null);
+    }
+  }
 
   async function createProject() {
     if (!scriptText.trim()) {
@@ -55,6 +71,7 @@ export function NewProjectPage() {
         title,
         language,
         script_text: scriptText,
+        default_engine: defaultEngine,
       });
       navigate(`/projects/${project.id}`);
     } catch (reason) {
@@ -66,6 +83,7 @@ export function NewProjectPage() {
   function loadSample() {
     setTitle("The House on Bellweather Road");
     setLanguage("en");
+    setDefaultEngine(null);
     setScriptText(SAMPLE);
     setError("");
   }
@@ -112,28 +130,65 @@ export function NewProjectPage() {
 
           <div className="field">
             <span className="label">
-              Language <span>selects the TTS engine</span>
+              Language <span>parsing and Whisper alignment</span>
             </span>
             <div className="segmented" role="group" aria-label="Language">
               <button
                 type="button"
                 className={`segment${language === "en" ? " active" : ""}`}
-                onClick={() => setLanguage("en")}
+                onClick={() => changeLanguage("en")}
                 aria-pressed={language === "en"}
               >
                 <MicrophoneStage size={14} />
-                English · Breeze
+                English
               </button>
               <button
                 type="button"
                 className={`segment${language === "de" ? " active" : ""}`}
-                onClick={() => setLanguage("de")}
+                onClick={() => changeLanguage("de")}
                 aria-pressed={language === "de"}
               >
                 <MicrophoneStage size={14} />
-                Deutsch · Chatterbox
+                Deutsch
               </button>
             </div>
+          </div>
+
+          <div className="field">
+            <label className="label" htmlFor="project-engine">
+              Engine <span>project default · can be changed per stem</span>
+            </label>
+            <select
+              id="project-engine"
+              className="input"
+              value={defaultEngine ?? "auto"}
+              onChange={(event) =>
+                setDefaultEngine(
+                  event.target.value === "auto"
+                    ? null
+                    : (event.target.value as EngineName),
+                )
+              }
+            >
+              <option value="auto">
+                Auto · {engineLabel(autoEngine(language))}
+              </option>
+              {engines
+                .filter(
+                  (engine) =>
+                    engine.name !== "fake" &&
+                    (engine.language_agnostic ||
+                      engine.languages.includes(language)),
+                )
+                .map((engine) => (
+                  <option key={engine.name} value={engine.name}>
+                    {engineLabel(engine.name)}
+                    {engine.voice_mode === "preset"
+                      ? " · preset / persona voices"
+                      : " · reference voices"}
+                  </option>
+                ))}
+            </select>
           </div>
 
           <div className="field">
@@ -203,8 +258,8 @@ export function NewProjectPage() {
             <div>
               <h4>Perform and cut</h4>
               <p>
-                Breeze renders the stem. Whisper finds every word on CPU, then
-                the stem is cut back into individual line clips.
+                The chosen engine renders the stem. Whisper finds every word
+                on CPU, then the stem is cut back into individual line clips.
               </p>
             </div>
           </div>
@@ -222,9 +277,11 @@ export function NewProjectPage() {
           <div className="engine-note">
             <MagicWand size={15} weight="fill" />
             <span>
-              English uses Breeze voice design. German uses Chatterbox
-              Multilingual voice-sample cloning. Both share the same stem and
-              alignment pipeline, and you can switch engines per stem.
+              The engine is a project default, not a language: Breeze designs
+              reference voices for English, Breeze-DE for German, Chatterbox
+              clones a sample in either language, and Suno renders dialogue
+              through BetterSuno with preset or persona voices. All share the
+              same stem and alignment pipeline, and each stem can override it.
             </span>
           </div>
         </aside>

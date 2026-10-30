@@ -1,17 +1,17 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
-import { FolderOpen, Waveform } from "@phosphor-icons/react";
+import { FolderOpen } from "@phosphor-icons/react";
 
 export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="app">
       <header className="topbar">
-        <NavLink to="/" className="brand" aria-label="Drama Studio home">
+        <NavLink to="/" className="brand" aria-label="Drama Llama home">
           <span className="brand-mark">
-            <Waveform size={19} weight="bold" />
+            <img src="/llogo.png" alt="" width={38} height={38} />
           </span>
           <span className="brand-text">
-            <strong>Drama Studio</strong>
+            <strong>Drama Llama</strong>
             <span>local audio drama lab</span>
           </span>
         </NavLink>

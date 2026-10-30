@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Local HTTP bridge between Drama Studio and the BetterSuno MCP modules.
+ * Local HTTP bridge between Drama Llama and the BetterSuno MCP modules.
  *
  * Why a sidecar: bettersuno-mcp is a stdio MCP server whose Suno client needs
  * the BetterSuno browser extension (Clerk token + Turnstile captcha relay) over
- * ws://127.0.0.1:9423. Drama Studio is Python, so it talks to this small Node
+ * ws://127.0.0.1:9423. Drama Llama is Python, so it talks to this small Node
  * process over HTTP instead of reimplementing the Suno auth/captcha flow.
  *
  * Start:  node suno-bridge/server.mjs
@@ -210,6 +210,18 @@ async function main() {
         }
         try {
           return send(res, 200, await generate(body));
+        } catch (error) {
+          return send(res, 502, { ok: false, error: error.message });
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/stems") {
+        const body = await readBody(req);
+        if (!body.clip_id) return send(res, 400, { ok: false, error: "clip_id required" });
+        try {
+          const result = await callTool("make_stems", { clip_id: body.clip_id });
+          const clips = extractClips(result.data).map(slimClip);
+          return send(res, 200, { ok: true, clips, raw: result.data, text: result.text });
         } catch (error) {
           return send(res, 502, { ok: false, error: error.message });
         }

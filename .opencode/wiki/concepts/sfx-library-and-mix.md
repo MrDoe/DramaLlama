@@ -5,7 +5,7 @@ sourceRefs:
   - src/drama_studio/sfx.py
   - src/drama_studio/mixer.py
   - src/drama_studio/api.py
-lastReviewed: 2026-10-29
+lastReviewed: 2026-10-30
 ---
 
 # SFX library and mix
@@ -40,5 +40,5 @@ default. Search is filename/tag based; playback streams through
 
 ## Related
 
-- [[entities/drama-studio-app]]
+- [[entities/drama-llama-app]]
 - [[concepts/script-to-stem-pipeline]]

@@ -1,4 +1,22 @@
 import type { CSSProperties } from "react";
+import type { EngineName, Language } from "./types";
+
+const ENGINE_LABELS: Record<string, string> = {
+  breeze: "Breeze",
+  "breeze-de": "Breeze-DE",
+  chatterbox: "Chatterbox",
+  suno: "Suno",
+  fake: "Fake",
+};
+
+export function engineLabel(name: string): string {
+  return ENGINE_LABELS[name] ?? name;
+}
+
+/** Default engine when a project has no explicit `default_engine`. */
+export function autoEngine(language: Language): EngineName {
+  return language === "de" ? "chatterbox" : "breeze";
+}
 
 const SPEAKER_COLORS = [
   "#fb923c",

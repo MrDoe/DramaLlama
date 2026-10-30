@@ -1,0 +1,166 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "python: install editable",
+      "type": "shell",
+      "command": "${config:python.defaultInterpreterPath}",
+      "args": [
+        "-m",
+        "pip",
+        "install",
+        "-e",
+        ".",
+        "--no-deps"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "python: init data",
+      "type": "shell",
+      "command": "${config:python.defaultInterpreterPath}",
+      "args": [
+        "-m",
+        "drama_studio.cli",
+        "init"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "test: pytest",
+      "type": "shell",
+      "command": "${config:python.defaultInterpreterPath}",
+      "args": [
+        "-m",
+        "pytest"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "problemMatcher": [
+        "$python"
+      ]
+    },
+    {
+      "label": "lint: ruff check",
+      "type": "shell",
+      "command": "${env:HOME}/.venvs/qwen3tts/bin/ruff",
+      "args": [
+        "check",
+        "src",
+        "tests"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": [
+        "$ruff"
+      ]
+    },
+    {
+      "label": "format: ruff",
+      "type": "shell",
+      "command": "${env:HOME}/.venvs/qwen3tts/bin/ruff",
+      "args": [
+        "format",
+        "src",
+        "tests"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "build: web",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/web"
+      },
+      "group": "build",
+      "problemMatcher": [
+        "$tsc"
+      ]
+    },
+    {
+      "label": "typecheck: web",
+      "type": "shell",
+      "command": "npx",
+      "args": [
+        "tsc",
+        "-b",
+        "--noEmit"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/web"
+      },
+      "problemMatcher": [
+        "$tsc"
+      ]
+    },
+    {
+      "label": "dev: vite",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "dev"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/web"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": ".",
+          "file": 1,
+          "location": 2,
+          "message": 3
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "VITE",
+          "endsPattern": "ready in"
+        }
+      }
+    },
+    {
+      "label": "dev: api",
+      "type": "shell",
+      "command": "${config:python.defaultInterpreterPath}",
+      "args": [
+        "-m",
+        "drama_studio.cli",
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8770"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "kill: port 8770",
+      "type": "shell",
+      "command": "fuser -k 8770/tcp 2>/dev/null || true",
+      "problemMatcher": []
+    }
+  ]
+}

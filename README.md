@@ -1,6 +1,10 @@
-# Drama Studio
+# Drama Llama
+
+<img src="web/public/llogo.png" width="132" align="right" alt="Drama Llama mascot" />
 
 A local-first web app that turns a pasted script into a finished audio drama.
+Drama Llama is the rename of the project formerly called Drama Studio; the
+Python import package and the checkout directory keep their old names.
 
 ```
 pasted script
@@ -54,17 +58,31 @@ npm install
 npm run build
 cd ..
 
-~/.venvs/qwen3tts/bin/drama-studio serve
+~/.venvs/qwen3tts/bin/drama-llama serve
 # http://127.0.0.1:8770
 ```
 
+The legacy `drama-studio` command is installed as an alias.
+
+Or use the launcher, which builds `web/dist` only when it is missing or stale:
+
+```bash
+./start-ui.sh            # http://127.0.0.1:8770
+./start-ui.sh --dev      # Vite :5173 + API :8770 (hot reload)
+./start-ui.sh --open     # open the browser once /api/health passes
+```
+
+`--build` forces a rebuild, `--no-build` skips the build (and fails if
+`web/dist` is missing), and extra arguments are forwarded to
+`drama-llama serve` (for example `--no-worker`).
+
 `serve` starts the FastAPI app and an in-process worker. Use
-`--no-worker` if you want to run `drama-studio worker` in a separate
+`--no-worker` if you want to run `drama-llama worker` in a separate
 terminal (recommended while debugging model loads).
 
 ```bash
-~/.venvs/qwen3tts/bin/drama-studio worker --once
-~/.venvs/qwen3tts/bin/drama-studio jobs
+~/.venvs/qwen3tts/bin/drama-llama worker --once
+~/.venvs/qwen3tts/bin/drama-llama jobs
 ```
 
 ### Suno music bridge
@@ -76,7 +94,7 @@ HTTP sidecar in another terminal:
 cd ~/code/drama-studio/suno-bridge
 npm install          # installs the local bettersuno-mcp dependency
 cd ..
-~/.venvs/qwen3tts/bin/drama-studio suno-bridge
+~/.venvs/qwen3tts/bin/drama-llama suno-bridge
 ```
 
 The bridge listens on `http://127.0.0.1:9430` and owns the extension WebSocket
@@ -108,13 +126,28 @@ mixer always receives a decodable file.
 | Language | Engine | Voice workflow |
 |---|---|---|
 | English | Breeze TTS 2 | 6–11 s reference design → clone per scene stem |
+| German | Breeze-TTS-2.cpp (Articulatio-DE) | optional sidecar: voice design or clone; research/non-commercial |
 | English/German | Chatterbox Multilingual 0.5B | uploaded voice sample → clone; default voice if none |
 | both | Fake | sine/noise stems, no GPU |
 | music | Suno via BetterSuno | prompt → generated track → music cue |
 
 Chatterbox expects its model server at `http://127.0.0.1:4123`; it can be
-started independently and keeps the model warm. Drama Studio only sends text
+started independently and keeps the model warm. Drama Llama only sends text
 and an optional voice sample over HTTP.
+
+### German Breeze sidecar (optional)
+
+A community German finetune (Articulatio-DE) runs on the `Breeze-TTS-2.cpp`
+engine. Download the prebuilt binary and the Q8_0 GGUF, then start the sidecar:
+
+```bash
+~/.venvs/qwen3tts/bin/drama-llama breeze-de
+# http://127.0.0.1:8137  (override with --port / BREEZE_DE_URL)
+```
+
+The sidecar owns the GPU; Drama Llama serializes GPU jobs, so stop it (or
+the LLM) before loading another model. Weights/outputs are research /
+non-commercial.
 
 Breeze weights and outputs are research / non-commercial only. The vendored
 stem/aligner is Apache 2.0 code; see `vendor/breeze_stems/VENDORED_FROM.md`.
@@ -128,9 +161,13 @@ stem/aligner is Apache 2.0 code; see `vendor/breeze_stems/VENDORED_FROM.md`.
 | `vendor/breeze_stems/` | pinned Breeze stem renderer + Whisper aligner |
 | `suno-bridge/` | Node HTTP sidecar over the installed bettersuno-mcp modules |
 | `web/` | React + Vite + TypeScript UI |
+| `web/public/` | Drama Llama mascot and app-icon SVGs |
 | `data/projects/<id>/` | project JSON, refs, takes, line clips, mix |
 | `data/jobs.sqlite3` | job queue (SQLite, WAL) |
 | `tests/` | 60 tests, no GPU required |
+
+The checkout directory is still `drama-studio`, and the Python package keeps
+its `drama_studio` import name; only the product, CLI and UI were renamed.
 
 ## Configuration
 
@@ -138,13 +175,16 @@ Environment variables:
 
 | Variable | Default |
 |---|---|
-| `DRAMA_STUDIO_DATA` | `<repo>/data` |
-| `DRAMA_STUDIO_HOST` / `PORT` | `127.0.0.1` / `8770` |
+| `DRAMA_LLAMA_DATA` | `<repo>/data` |
+| `DRAMA_LLAMA_HOST` / `PORT` | `127.0.0.1` / `8770` |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` |
-| `DRAMA_STUDIO_LLM` | `gemma4:12b-16k` |
+| `DRAMA_LLAMA_LLM` | `gemma4:12b-16k` |
 | `CHATTERBOX_URL` | `http://127.0.0.1:4123` |
+| `BREEZE_DE_URL` | `http://127.0.0.1:8080` |
 | `SUNO_BRIDGE_URL` | `http://127.0.0.1:9430` |
-| `DRAMA_STUDIO_SFX_ROOTS` | `~/Sounds:<repo>/data/sfx` |
+| `DRAMA_LLAMA_SFX_ROOTS` | `~/Sounds:<repo>/data/sfx` |
+
+The old `DRAMA_STUDIO_*` names still work as fallbacks.
 
 Personal subfolders (`juli`, `miller`, `Projects`, `Snippets`) are excluded
 from the SFX index by default.

@@ -1,9 +1,9 @@
 {
-  "name": "drama-studio-suno-bridge",
+  "name": "drama-llama-suno-bridge",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "HTTP bridge between Drama Studio and the BetterSuno MCP server modules.",
+  "description": "HTTP bridge between Drama Llama and the BetterSuno MCP server modules.",
   "scripts": {
     "start": "node server.mjs"
   },

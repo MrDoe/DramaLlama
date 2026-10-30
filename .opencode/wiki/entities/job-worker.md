@@ -6,7 +6,7 @@ sourceRefs:
   - src/drama_studio/worker.py
   - src/drama_studio/api.py
   - src/drama_studio/cli.py
-lastReviewed: 2026-10-29
+lastReviewed: 2026-10-30
 ---
 
 # Job worker
@@ -27,7 +27,7 @@ running jobs whose heartbeat is older than the lease.
 retries.
 
 `serve` starts an in-process worker thread by default. `--no-worker` keeps the
-API separate; `drama-studio worker` runs the same handlers in another process.
+API separate; `drama-llama worker` runs the same handlers in another process.
 The API and worker share the SQLite queue, not Python objects.
 
 ## Job types
@@ -49,4 +49,4 @@ reference and mix jobs and deduplicate active ones.
 ## Related
 
 - [[concepts/gpu-serialization]]
-- [[entities/drama-studio-app]]
+- [[entities/drama-llama-app]]

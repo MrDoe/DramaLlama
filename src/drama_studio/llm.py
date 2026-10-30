@@ -87,7 +87,7 @@ class OllamaClient:
         self,
         base_url: str = OLLAMA_URL,
         model: str = LLM_MODEL,
-        timeout_s: float = 180.0,
+        timeout_s: float = 600.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -106,6 +106,7 @@ class OllamaClient:
             "model": model or self.model,
             "messages": messages,
             "stream": False,
+            "think": False,
             "options": {"temperature": temperature},
             "keep_alive": keep_alive,
         }
@@ -130,6 +131,48 @@ class OllamaClient:
             return json.loads(content)
         except json.JSONDecodeError as exc:
             raise LLMError(f"Ollama returned invalid JSON: {exc}") from exc
+
+    def chat_stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        schema: dict[str, Any] | None = None,
+        temperature: float = 0.2,
+        keep_alive: str | int = LLM_KEEP_ALIVE,
+        model: str | None = None,
+    ):
+        payload: dict[str, Any] = {
+            "model": model or self.model,
+            "messages": messages,
+            "stream": True,
+            "think": False,
+            "options": {"temperature": temperature},
+            "keep_alive": keep_alive,
+        }
+        if schema is not None:
+            payload["format"] = schema
+        try:
+            with httpx.stream(
+                "POST",
+                f"{self.base_url}/api/chat",
+                json=payload,
+                timeout=self.timeout_s,
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        body = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    content = (body.get("message") or {}).get("content", "")
+                    if content:
+                        yield content
+                    if body.get("done"):
+                        break
+        except Exception as exc:
+            raise LLMError(f"Ollama request failed: {exc}") from exc
 
     def unload(self, model: str | None = None) -> None:
         try:
@@ -165,7 +208,6 @@ def _convert(payload: dict[str, Any], raw: str, language: str) -> ParseResult:
             id=key,
             name=item.name.strip() or key.title(),
             description=item.description.strip(),
-            engine="chatterbox" if language == "de" else "breeze",
         )
 
     scenes: list[Scene] = []
@@ -189,7 +231,6 @@ def _convert(payload: dict[str, Any], raw: str, language: str) -> ParseResult:
                 characters[speaker] = Character(
                     id=speaker,
                     name=speaker.title(),
-                    engine="chatterbox" if language == "de" else "breeze",
                 )
             text = clean_dialogue(llm_line.text)
             if not text:
@@ -279,4 +320,13 @@ def llm_parse_script(
         keep_alive=0,
         model=model,
     )
+    return _convert(payload, raw, language)
+
+
+def parse_llm_content(content: str, raw: str, language: str) -> ParseResult:
+    """Convert a completed LLM JSON string into a ParseResult."""
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise LLMParseError(f"Ollama returned invalid JSON: {exc}") from exc
     return _convert(payload, raw, language)

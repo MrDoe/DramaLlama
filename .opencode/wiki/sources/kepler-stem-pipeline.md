@@ -5,13 +5,13 @@ sourceRefs:
   - vendor/breeze_stems/VENDORED_FROM.md
   - vendor/breeze_stems/breeze_stems.py
   - vendor/breeze_stems/breeze_drama.py
-lastReviewed: 2026-10-29
+lastReviewed: 2026-10-30
 ---
 
 # Kepler stem pipeline source
 
 The sibling `~/tts_test` session (Kepler) built and validated the
-stem-per-character + Whisper aligner. Drama Studio vendors it read-only.
+stem-per-character + Whisper aligner. Drama Llama vendors it read-only.
 
 ## Pins
 
@@ -32,7 +32,7 @@ both script and ASR words.
 
 - Never edit `vendor/`; send fixes upstream and re-vendor with new hashes.
 - `breeze_drama.py` is used for `synth`, `convert_tags` and `slug`; its
-  hardcoded `REFS` are not used by Drama Studio.
+  hardcoded `REFS` are not used by Drama Llama.
 - The validated render was 27 lines, 89.38 s dialogue, mean WER 0.087.
 
 ## Related

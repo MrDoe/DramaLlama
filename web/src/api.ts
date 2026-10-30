@@ -1,5 +1,6 @@
 import type {
   EngineInfo,
+  EngineName,
   Job,
   Language,
   Project,
@@ -47,6 +48,7 @@ export const api = {
     title: string;
     language: Language;
     script_text: string;
+    default_engine?: EngineName | null;
   }) =>
     request<Project>("/projects", {
       method: "POST",
@@ -54,7 +56,12 @@ export const api = {
     }),
   updateProject: (
     id: string,
-    input: { title?: string; language?: Language; raw_script?: string },
+    input: {
+      title?: string;
+      language?: Language;
+      raw_script?: string;
+      default_engine?: EngineName | "auto" | null;
+    },
   ) =>
     request<Project>(`/projects/${id}`, {
       method: "PUT",
@@ -67,6 +74,57 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ method }),
     }),
+  parseProjectStream: async (
+    id: string,
+    onToken: (chunk: string) => void,
+  ): Promise<Project> => {
+    const response = await fetch(`${BASE}/projects/${id}/parse/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method: "llm" }),
+    });
+    if (!response.ok || !response.body) {
+      let detail = `${response.status} ${response.statusText}`;
+      try {
+        const body = (await response.json()) as { detail?: string };
+        if (body.detail) detail = body.detail;
+      } catch {
+        // keep status text
+      }
+      throw new ApiError(response.status, detail);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let result: Project | null = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        const lines = part.split("\n");
+        let event = "message";
+        let data = "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (!data) continue;
+        try {
+          const parsed = JSON.parse(data);
+          if (event === "token") onToken(parsed as string);
+          else if (event === "result") result = parsed as Project;
+          else if (event === "error") throw new Error(String(parsed));
+        } catch (err) {
+          if (err instanceof Error && event === "error") throw err;
+        }
+      }
+    }
+    if (!result) throw new Error("LLM parse did not return a result");
+    return result;
+  },
   buildStems: (id: string) =>
     request<Project>(`/projects/${id}/stems`, {
       method: "POST",

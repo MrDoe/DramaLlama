@@ -1,0 +1,142 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Drama Llama: API (in-process worker)",
+      "type": "python",
+      "request": "launch",
+      "module": "drama_studio.cli",
+      "args": ["serve", "--host", "127.0.0.1", "--port", "8770"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "Drama Llama: API (no worker)",
+      "type": "python",
+      "request": "launch",
+      "module": "drama_studio.cli",
+      "args": ["serve", "--no-worker", "--host", "127.0.0.1", "--port", "8770"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "Drama Llama: Worker (once)",
+      "type": "python",
+      "request": "launch",
+      "module": "drama_studio.cli",
+      "args": ["worker", "--once"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "Drama Llama: Worker (daemon)",
+      "type": "python",
+      "request": "launch",
+      "module": "drama_studio.cli",
+      "args": ["worker"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "Drama Llama: Init data",
+      "type": "python",
+      "request": "launch",
+      "module": "drama_studio.cli",
+      "args": ["init"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    },
+    {
+      "name": "Drama Llama: Pytest (all)",
+      "type": "python",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "Drama Llama: Pytest (current file)",
+      "type": "python",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-q"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "Drama Llama: Suno bridge (Node)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/suno-bridge/server.mjs",
+      "cwd": "${workspaceFolder}/suno-bridge",
+      "console": "integratedTerminal",
+      "env": {
+        "BETTERSUNO_MCP_DIR": "${env:HOME}/code/bettersuno-mcp",
+        "SUNO_BRIDGE_PORT": "9430"
+      }
+    },
+    {
+      "name": "Drama Llama: Vite dev server",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "${workspaceFolder}/web",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Drama Llama: Chrome (frontend)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://127.0.0.1:5173",
+      "webRoot": "${workspaceFolder}/web/src",
+      "sourceMaps": true
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Drama Llama: Full stack (dev)",
+      "configurations": [
+        "Drama Llama: API (in-process worker)",
+        "Drama Llama: Vite dev server"
+      ],
+      "presentation": {
+        "hidden": false,
+        "group": "Drama Llama",
+        "order": 0
+      }
+    }
+  ]
+}

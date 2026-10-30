@@ -1,18 +1,24 @@
 ---
-title: Drama Studio app
-tags: [app, fastapi, react, projects, storage]
+title: Drama Llama app
+tags: [app, fastapi, react, projects, storage, branding]
 sourceRefs:
   - src/drama_studio/api.py
   - src/drama_studio/store.py
   - web/src/App.tsx
   - web/src/pages/ProjectPage.tsx
-lastReviewed: 2026-10-29
+  - web/index.html
+lastReviewed: 2026-10-30
 ---
 
-# Drama Studio app
+# Drama Llama app
 
 Local single-user web app at `http://127.0.0.1:8770`. FastAPI serves the API
 and the built React bundle from `web/dist`.
+
+The product was renamed from **Drama Studio** to **Drama Llama**. The Python
+import package stays `drama_studio`, and the CLI keeps `drama-studio` as an
+alias next to the new `drama-llama` entry point. See
+[[entities/drama-llama-mascot]] for the avatar assets.
 
 ## Project lifecycle
 
@@ -42,3 +48,5 @@ panel-based later stages.
 - [[concepts/script-to-stem-pipeline]]
 - [[entities/job-worker]]
 - [[concepts/sfx-library-and-mix]]
+- [[entities/drama-llama-mascot]]
+- [[entities/start-ui-launcher]]

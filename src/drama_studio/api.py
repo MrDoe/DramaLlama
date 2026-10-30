@@ -7,7 +7,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,9 +19,18 @@ from . import __version__
 from .config import DB_PATH, PROJECTS_DIR, WEB_DIST
 from .engines import all_engine_info
 from .jobs import JobQueue
-from .llm import LLMError, LLMParseError, OllamaClient, llm_parse_script
+from .llm import (
+    LLMError,
+    LLMParseError,
+    OllamaClient,
+    SYSTEM_PROMPT,
+    _json_schema,
+    llm_parse_script,
+    parse_llm_content,
+)
 from .models import (
     Cue,
+    EngineName,
     JobStatus,
     Language,
     ParseReport,
@@ -46,6 +55,7 @@ class JobCreate(BaseModel):
 class ProjectCreate(BaseModel):
     title: str = ""
     language: Language = "en"
+    default_engine: EngineName | None = None
     script_text: str = ""
 
 
@@ -54,6 +64,7 @@ class ProjectUpdate(BaseModel):
     language: Language | None = None
     raw_script: str | None = None
     settings: ProjectSettings | None = None
+    default_engine: Literal["auto"] | EngineName | None = None
 
 
 class ParseRequest(BaseModel):
@@ -137,7 +148,7 @@ def create_app(
         yield
         queue.close()
 
-    app = FastAPI(title="Drama Studio", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="Drama Llama", version=__version__, lifespan=lifespan)
     app.state.queue = queue
     app.state.store = store
     app.state.llm = llm
@@ -182,9 +193,24 @@ def create_app(
     def list_projects() -> list[dict[str, Any]]:
         return [summary.model_dump(mode="json") for summary in store.list()]
 
+    def check_engine(engine: str | None, language: Language) -> None:
+        if engine is None:
+            return
+        info = next((item for item in all_engine_info() if item.name == engine), None)
+        if info is None:
+            raise HTTPException(status_code=400, detail=f"unknown engine {engine!r}")
+        if not info.language_agnostic and language not in info.languages:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{engine} does not support language {language!r}",
+            )
+
     @app.post("/api/projects", status_code=201)
     def create_project(body: ProjectCreate) -> dict[str, Any]:
-        project = store.create(body.title, body.language, body.script_text)
+        check_engine(body.default_engine, body.language)
+        project = store.create(
+            body.title, body.language, body.script_text, default_engine=body.default_engine
+        )
         return project.model_dump(mode="json")
 
     @app.get("/api/projects/{project_id}")
@@ -206,6 +232,36 @@ def create_app(
             changed_text = True
         if body.settings is not None:
             project.settings = body.settings
+        effective_language = body.language or project.language
+        if body.default_engine is not None:
+            previous = project.default_engine or (
+                "breeze" if effective_language == "en" else "chatterbox"
+            )
+            if body.default_engine == "auto":
+                project.default_engine = None
+            else:
+                check_engine(body.default_engine, effective_language)
+                project.default_engine = body.default_engine
+            current = project.default_engine or (
+                "breeze" if effective_language == "en" else "chatterbox"
+            )
+            # Stems that still sit on the old project default follow the new
+            # one; explicit per-stem choices (fake, a one-off Suno render, ...)
+            # are left alone.
+            for stem in project.stems:
+                if stem.engine in (None, previous):
+                    stem.engine = current
+        elif project.default_engine is not None:
+            info = next(
+                (item for item in all_engine_info() if item.name == project.default_engine),
+                None,
+            )
+            if (
+                info is not None
+                and not info.language_agnostic
+                and effective_language not in info.languages
+            ):
+                project.default_engine = None
         if changed_text:
             project = store.reparse(project, method="deterministic")
         else:
@@ -256,6 +312,76 @@ def create_app(
                 return fallback.model_dump(mode="json")
         project = store.reparse(project, method="deterministic")
         return project.model_dump(mode="json")
+
+    @app.post("/api/projects/{project_id}/parse/stream")
+    def parse_project_stream(project_id: str, body: ParseRequest):
+        from fastapi.responses import StreamingResponse
+
+        project = project_or_404(project_id)
+        if body.method != "llm":
+            raise HTTPException(status_code=400, detail="method must be llm for streaming")
+        if any(
+            job.type in {"stem.render", "reference.design"}
+            for job in queue.list_jobs("running", 50)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="GPU is rendering; wait for the stem to finish before LLM parse",
+            )
+
+        def generate():
+            client = app.state.llm
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Language: {'German' if project.language == 'de' else 'English'}\n"
+                        "Parse this script into the JSON schema:\n\n"
+                        f"{project.raw_script}"
+                    ),
+                },
+            ]
+            collected = ""
+            try:
+                for chunk in client.chat_stream(
+                    messages,
+                    schema=_json_schema(),
+                    temperature=0.2,
+                    keep_alive=LLM_KEEP_ALIVE if False else 0,
+                    model=None,
+                ):
+                    collected += chunk
+                    yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
+            except Exception as exc:
+                yield f"event: error\ndata: {json.dumps(str(exc))}\n\n"
+                return
+            try:
+                result = parse_llm_content(collected, project.raw_script, project.language)
+                result.script.title = project.title
+                updated = store.reparse(
+                    project,
+                    method="llm",
+                    script=result.script,
+                    report=result.report,
+                )
+                updated = store.save(updated)
+                yield f"event: result\ndata: {json.dumps(updated.model_dump(mode='json'))}\n\n"
+            except (LLMParseError, LLMError) as exc:
+                fallback = store.reparse(project, method="deterministic")
+                if fallback.report is not None:
+                    fallback.report.warnings.append(
+                        ParseWarning(
+                            source_line=0,
+                            message=f"LLM parse failed; deterministic parse kept: {exc}",
+                        )
+                    )
+                    fallback = store.save(fallback)
+                yield f"event: result\ndata: {json.dumps(fallback.model_dump(mode='json'))}\n\n"
+            except Exception as exc:
+                yield f"event: error\ndata: {json.dumps(str(exc))}\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
 
     @app.post("/api/projects/{project_id}/stems")
     def build_project_stems(project_id: str) -> dict[str, Any]:
@@ -323,6 +449,7 @@ def create_app(
                 "ref_instruction": body.ref_instruction or character.ref_instruction,
                 "cfg_scale": body.cfg_scale,
                 "seed": body.seed,
+                "engine": character.engine,
             },
             priority=5,
         )
@@ -339,10 +466,10 @@ def create_app(
         character = project.script.characters.get(stem.speaker)
         if character is None:
             raise HTTPException(status_code=404, detail="character not found")
-        engine_name = body.engine or stem.engine or (
+        engine_name = body.engine or stem.engine or project.default_engine or (
             "breeze" if project.language == "en" else "chatterbox"
         )
-        if engine_name == "breeze" and not character.ref_file:
+        if engine_name in {"breeze", "breeze-de"} and not character.ref_file:
             raise HTTPException(
                 status_code=409,
                 detail=f"design a reference voice for {stem.speaker} first",
@@ -358,7 +485,7 @@ def create_app(
                 "candidates": body.candidates,
                 "cfg_scale": body.cfg_scale,
                 "seed": body.seed,
-                "engine": body.engine or stem.engine,
+                "engine": engine_name,
             },
             priority=10,
         )

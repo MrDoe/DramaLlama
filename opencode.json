@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "bettersuno-mcp": {
+      "type": "local",
+      "command": ["node", "/home/christoph/code/bettersuno-mcp/src/index.js"],
+      "enabled": true
+    }
+  }
+}

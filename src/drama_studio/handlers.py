@@ -62,6 +62,8 @@ def fake_render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
 
 
 def _engine_name(project: Project) -> str:
+    if project.default_engine:
+        return project.default_engine
     return "breeze" if project.language == "en" else "chatterbox"
 
 
@@ -83,7 +85,7 @@ def _gpu_free_gb() -> float | None:
 
 
 def _require_gpu(engine_name: str) -> None:
-    if engine_name in {"fake", "chatterbox"}:
+    if engine_name in {"fake", "chatterbox", "suno"}:
         return
     needed = 9.0 if engine_name == "breeze" else 5.0
     free = _gpu_free_gb()
@@ -133,9 +135,15 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
         seed=int(seed_value) if seed_value is not None else 42,
     )
 
-    _require_gpu(_engine_name(project))
-    ctx.progress(0.02, f"loading {_engine_name(project)}")
-    engine = _MANAGER.get(_engine_name(project))
+    engine_name = str(payload.get("engine") or _engine_name(project))
+    if engine_name == "suno":
+        raise PermanentJobError(
+            "Suno uses preset voices; set a persona on the character instead "
+            "of designing a reference"
+        )
+    _require_gpu(engine_name)
+    ctx.progress(0.02, f"loading {engine_name}")
+    engine = _MANAGER.get(engine_name)
     ctx.progress(0.1, f"designing reference for {speaker}")
     result = engine.design_reference(request)
     character.ref_file = str(output.relative_to(directory))
@@ -168,14 +176,14 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         info = engine_info(engine_name)
     except ValueError as exc:
         raise PermanentJobError(str(exc)) from exc
-    if project.language not in info.languages:
+    if not info.language_agnostic and project.language not in info.languages:
         raise PermanentJobError(
             f"{engine_name} does not support project language {project.language!r}"
         )
 
     directory = _STORE.project_dir(project.id)
     ref_path = None
-    if engine_name == "breeze":
+    if engine_name in {"breeze", "breeze-de"}:
         if not character.ref_file:
             raise PermanentJobError(
                 f"no reference voice for {stem.speaker}; design it first"
@@ -190,6 +198,9 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             candidate = directory / character.ref_file
             if candidate.exists():
                 ref_path = candidate
+    elif engine_name == "suno":
+        # Suno uses preset voices/personas; no local reference file.
+        ref_path = None
 
     cfg_value = payload.get("cfg_scale")
     seed_value = payload.get("seed")
@@ -206,6 +217,8 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         cfg_scale=float(cfg_value) if cfg_value is not None else stem.cfg_scale,
         seed=int(seed_value) if seed_value is not None else stem.seed,
         candidates=int(payload.get("candidates", 2)),
+        persona_id=getattr(character, "suno_persona_id", None),
+        mv=getattr(character, "suno_mv", "chirp-hawk"),
     )
 
     _require_gpu(engine_name)
