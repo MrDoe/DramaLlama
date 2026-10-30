@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -48,12 +48,13 @@ from .models import (
     ParseWarning,
     Project,
     ProjectSettings,
+    RefVoice,
     Script,
 )
 from .settings import preview_llm, resolve_llm, resolve_suno, write_llm, write_suno
 from .sfx import SfxLibrary
 from .stems import build_stems
-from .store import ProjectStore
+from .store import ProjectStore, slugify
 from .suno import SunoBridge, SunoError
 from .suno_lyrics import (
     format_suno_lyrics,
@@ -664,13 +665,14 @@ def create_app(
                 return existing
         return None
 
-    @app.post(
-        "/api/projects/{project_id}/characters/{speaker}/voice-sample",
-        status_code=201,
-    )
-    def upload_voice_sample(
-        project_id: str, speaker: str, file: UploadFile = File(...)
+    def _upload_voice_sample(
+        project_id: str,
+        speaker: str,
+        file: UploadFile,
+        name: str | None = None,
+        name_form: str | None = None,
     ) -> dict[str, Any]:
+        name = (name_form or name or "").strip() or None
         project = project_or_404(project_id)
         character = project.script.characters.get(speaker)
         if character is None:
@@ -678,18 +680,127 @@ def create_app(
         suffix = Path(file.filename or "sample.wav").suffix.lower()
         if suffix not in {".wav", ".mp3", ".m4a", ".flac", ".ogg"}:
             raise HTTPException(status_code=400, detail="unsupported audio format")
-        safe = "".join(
-            ch if ch.isalnum() else "_" for ch in speaker.lower()
-        ).strip("_") or "voice"
         directory = store.project_dir(project.id) / "refs"
         directory.mkdir(parents=True, exist_ok=True)
-        destination = directory / f"{safe}{suffix}"
-        with destination.open("wb") as handle:
+        safe_speaker = "".join(
+            ch if ch.isalnum() else "_" for ch in speaker.lower()
+        ).strip("_") or "voice"
+
+        # Determine the stored file name up front so named voices get a
+        # unique, stable path (mirroring design_reference).
+        if name:
+            slug = slugify(name, limit=32) or safe_speaker
+            existing_ids = {item.id for item in character.references}
+            ref_id = slug
+            counter = 2
+            base_id = ref_id
+            while ref_id in existing_ids:
+                ref_id = f"{base_id}-{counter}"
+                counter += 1
+            base_name = f"{safe_speaker}-{ref_id}"
+        else:
+            ref_id = None
+            base_name = safe_speaker
+
+        # Read upload into a temp file first.
+        temp = directory / f".upload-{uuid.uuid4().hex}{suffix}"
+        with temp.open("wb") as handle:
             while chunk := file.file.read(1024 * 1024):
                 handle.write(chunk)
-        character.ref_file = str(destination.relative_to(store.project_dir(project.id)))
+
+        # Best-effort conversion to WAV; fall back to original bytes.
+        converted = False
+        if suffix != ".wav":
+            wav_path = directory / f"{base_name}.wav"
+            try:
+                import subprocess
+
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(temp), "-ar", "24000", "-ac", "1", str(wav_path)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                temp.unlink(missing_ok=True)
+                temp = wav_path
+                converted = True
+            except Exception:
+                converted = False
+
+        if converted:
+            destination = directory / f"{base_name}.wav"
+        else:
+            destination = directory / f"{base_name}{suffix}"
+        if temp != destination:
+            temp.replace(destination)
+        elif not destination.exists():
+            temp.replace(destination)
+
+        relative = str(destination.relative_to(store.project_dir(project.id)))
+
+        # Default voice (no name): keep legacy behaviour of setting ref_file.
+        if not name:
+            character.ref_file = relative
+            project = store.save(project)
+            return project.model_dump(mode="json")
+
+        # Named reference voice: append to character.references.
+        character.references = [
+            item for item in character.references if item.id != ref_id
+        ] + [
+            RefVoice(
+                id=ref_id,
+                name=name,
+                file=relative,
+                ref_text=character.ref_text,
+                ref_instruction=character.ref_instruction,
+                f0_hz=character.f0_hz,
+            )
+        ]
+        if character.ref_file is None:
+            character.ref_file = relative
         project = store.save(project)
         return project.model_dump(mode="json")
+
+    # Keep the original endpoint name for backwards compatibility.
+    @app.post(
+        "/api/projects/{project_id}/characters/{speaker}/voice-sample",
+        status_code=201,
+    )
+    def upload_voice_sample(
+        project_id: str,
+        speaker: str,
+        file: UploadFile = File(...),
+        name_form: str | None = Form(default=None, alias="name"),
+        name_query: str | None = Query(default=None, alias="name"),
+    ) -> dict[str, Any]:
+        return _upload_voice_sample(project_id, speaker, file, name=name_form or name_query)
+
+    # Additional convenience endpoints for uploading named reference voices.
+    for _path in (
+        "/api/projects/{project_id}/characters/{speaker}/reference/upload",
+        "/api/projects/{project_id}/characters/{speaker}/reference-upload",
+        "/api/projects/{project_id}/characters/{speaker}/upload-voice",
+        "/api/projects/{project_id}/characters/{speaker}/upload-voice-sample",
+        "/api/projects/{project_id}/characters/{speaker}/upload_reference",
+        "/api/projects/{project_id}/characters/{speaker}/references/upload",
+    ):
+        def _make(path: str):
+            @app.post(path, status_code=201)
+            def _upload(
+                project_id: str,
+                speaker: str,
+                file: UploadFile = File(...),
+                name: str | None = Form(default=None),
+                name_query: str | None = Query(default=None, alias="name"),
+            ) -> dict[str, Any]:
+                return _upload_voice_sample(
+                    project_id, speaker, file, name=name_query or name
+                )
+
+            return _upload
+
+        _make(_path)
 
     @app.post("/api/projects/{project_id}/characters/{speaker}/reference", status_code=202)
     def design_character_reference(
