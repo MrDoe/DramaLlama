@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from .models import Character, Line, Project, Stem
+from .suno_lyrics import format_suno_lyrics
 
 
 def _slug(value: str, limit: int = 32) -> str:
@@ -45,6 +46,7 @@ def build_stems(project: Project) -> list[Stem]:
             instruction = _instruction(
                 project.script.characters.get(speaker), scene.heading, lines
             )
+            character = project.script.characters.get(speaker)
             stem = Stem(
                 id=f"s{scene.id}-{_slug(speaker)}",
                 scene=scene.id,
@@ -52,12 +54,16 @@ def build_stems(project: Project) -> list[Stem]:
                 line_ids=[line.id for line in lines],
                 text=text,
                 instruction=instruction,
+                suno_lyrics=format_suno_lyrics(lines, character, scene.heading),
                 cfg_scale=2.5,
                 seed=42 + scene.id * 10,
             )
             old = existing.get((scene.id, speaker))
             if old and old.text == stem.text and old.instruction == stem.instruction:
                 stem.takes = old.takes
+                # Keep an LLM-upgraded sheet across rebuilds of unchanged stems.
+                if old.suno_lyrics:
+                    stem.suno_lyrics = old.suno_lyrics
             stems.append(stem)
 
     return stems

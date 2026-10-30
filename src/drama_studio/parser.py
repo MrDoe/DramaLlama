@@ -109,6 +109,54 @@ def clean_dialogue(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Sentence boundary: . ! ? plus optional closing quotes/brackets, followed by
+# whitespace. The lookbehind skips single-letter abbreviations ("z. B.") and
+# decimals ("3.13"); the … ellipsis never splits. Multi-letter abbreviations
+# ("Dr.", "Nr.") are glued back in _split_sentences.
+_SENTENCE_SPLIT_RE = re.compile(
+    r"([.!?]+[\"'\"„“«»)\]]*)(?<!\b[A-Za-zÄÖÜäöü]\.)\s+"
+)
+
+_ABBREV_TAILS = (
+    "dr.",
+    "hr.",
+    "fr.",
+    "nr.",
+    "st.",
+    "prof.",
+    "sr.",
+    "jr.",
+    "bzw.",
+    "evtl.",
+    "etc.",
+    "inkl.",
+    "max.",
+    "min.",
+)
+
+
+def _split_sentences(text: str) -> str:
+    """One sentence per line so pauses survive (Suno pauses on newlines)."""
+    bits = _SENTENCE_SPLIT_RE.split(text.strip())
+    sentences: list[str] = []
+    buf = ""
+    for index, bit in enumerate(bits):
+        if index % 2 == 0:
+            buf = bit
+        elif buf.strip():
+            sentences.append((buf + bit).strip())
+            buf = ""
+    if buf.strip():
+        sentences.append(buf.strip())
+    merged: list[str] = []
+    for sentence in sentences:
+        if merged and merged[-1].rstrip().lower().endswith(_ABBREV_TAILS):
+            merged[-1] = f"{merged[-1]} {sentence}"
+        else:
+            merged.append(sentence)
+    return "\n".join(part for part in merged if part)
+
+
 def _looks_like_metadata(line: str) -> bool:
     text = line.strip()
     return (
@@ -211,6 +259,7 @@ class _Builder:
         self.pending = None
         text = " ".join(part for part in pending.parts if part.strip()).strip()
         text = clean_dialogue(text)
+        text = _split_sentences(text)
         if not text:
             self.report.warnings.append(
                 ParseWarning(

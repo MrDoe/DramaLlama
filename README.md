@@ -8,7 +8,7 @@ Python import package and the checkout directory keep their old names.
 
 ```
 pasted script
-   │  deterministic scan + optional LLM speaker attribution
+   │  deterministic scan + optional LLM normalization to canonical format
    ▼
 scenes / lines ──group by scene+speaker──▶ stem scripts
    │                                           │ Breeze / Chatterbox
@@ -27,8 +27,10 @@ Working end-to-end on the English path:
 
 - Paste Markdown / screenplay / plain text, deterministic parse with cast-table
   detection, speaker aliases, stage directions and 100% dialogue coverage.
-- Optional LLM parse through Ollama with strict verbatim validation and a
-  deterministic fallback.
+- Optional LLM parse: the model reformats any script style (`[NAME] "text"`,
+  `Name: "text"`, `NAME (direction) text`, …) into the canonical
+  `NAME (direction): text` format, which the deterministic parser then reads;
+  strict verbatim validation with a deterministic fallback.
 - Per-scene, per-character stem scripts.
 - Breeze reference design → scene-stem render → Whisper CPU alignment → line
   clips. Validated on one real scene: 10.1 s load, 103.5 s render for 28.0 s
@@ -106,8 +108,9 @@ mixer always receives a decodable file.
 ## Workflow
 
 1. **Script** — paste a script, choose English or German.
-   `Save & parse` is deterministic; `LLM parse` uses Ollama for messy
-   attribution and falls back safely if the model is offline.
+   `Save & parse` is deterministic; `LLM parse` first has the model normalize
+   messy attribution into the canonical format and falls back safely if the
+   model is offline.
 2. **Stems** — group lines by scene + speaker. Each stem is one continuous
    performance, not one TTS call per line.
 3. **Render** — choose an engine per stem. Breeze uses a 6–11 s designed
@@ -177,14 +180,53 @@ Environment variables:
 |---|---|
 | `DRAMA_LLAMA_DATA` | `<repo>/data` |
 | `DRAMA_LLAMA_HOST` / `PORT` | `127.0.0.1` / `8770` |
-| `OLLAMA_URL` | `http://127.0.0.1:11434` |
 | `DRAMA_LLAMA_LLM` | `gemma4:12b-16k` |
+| `DRAMA_LLAMA_LLM_API` | `ollama` — or `openai` for OpenAI-compatible endpoints |
+| `DRAMA_LLAMA_LLM_URL` | `http://127.0.0.1:11434` (falls back to `OLLAMA_URL`) |
+| `DRAMA_LLAMA_LLM_API_KEY` | _(empty)_ — bearer token for hosted/cloud endpoints |
 | `CHATTERBOX_URL` | `http://127.0.0.1:4123` |
 | `BREEZE_DE_URL` | `http://127.0.0.1:8080` |
 | `SUNO_BRIDGE_URL` | `http://127.0.0.1:9430` |
 | `DRAMA_LLAMA_SFX_ROOTS` | `~/Sounds:<repo>/data/sfx` |
 
 The old `DRAMA_STUDIO_*` names still work as fallbacks.
+
+The script-parsing LLM is local Ollama by default. Configure it in the
+**Settings** page (topbar): protocol (Ollama / OpenAI-compatible), endpoint
+URL, model (with a picker fed by the endpoint's own model list), and an
+optional API key for hosted endpoints — with a Test connection button before
+you save. Choices persist to `data/settings.json` (gitignored; the key itself
+is never returned by the API) and apply immediately, including to the
+front-page engine stack. Per key, the settings file beats
+`DRAMA_LLAMA_LLM_URL` / `DRAMA_LLAMA_LLM` / `DRAMA_LLAMA_LLM_API_KEY`
+environment variables; unset keys still follow the environment
+(`GET /api/config` reports each value's source).
+
+### OpenCode Go as the LLM (optional)
+
+With an [OpenCode Go](https://opencode.ai/v2/docs/console/go/) subscription,
+Drama Llama can parse scripts with a hosted model instead of the local GPU one
+— handy on low-VRAM machines, since the local LLM holds ~7.6 GB:
+
+```bash
+export DRAMA_LLAMA_LLM_API=openai
+export DRAMA_LLAMA_LLM_URL=https://opencode.ai/inference/go/openai/v1
+export DRAMA_LLAMA_LLM_API_KEY=<your Go API key from the OpenCode Console>
+export DRAMA_LLAMA_LLM=kimi-k3   # or glm-5.3-flash, muse-spark-1.3-contributor, …
+```
+
+Every Go text model works through that OpenAI-compatible endpoint (the Console
+translates between API families). The client identifies as `drama-llama/<ver>`
+and sends a per-parse `x-opencode-session` header, as Go requires of non-OpenCode
+clients. Two caveats: Go traffic counts against your subscription limits
+(script parses are long — a full drama can be several thousand tokens), and
+some Go models train on request data (e.g. the Muse Spark contributors — see
+the [Go privacy table](https://opencode.ai/v2/docs/console/go/#privacy)).
+
+The Settings page tests the endpoint before you save: it lists usable models
+(embedding-only models are hidden and counted) and reports precise failures —
+HTTP 401 means the API key is wrong, 403 that the plan or model doesn't cover
+API use, and anything else a reachability problem.
 
 Personal subfolders (`juli`, `miller`, `Projects`, `Snippets`) are excluded
 from the SFX index by default.

@@ -5,7 +5,7 @@ sourceRefs:
   - src/drama_studio/engines/suno.py
   - src/drama_studio/suno.py
   - suno-bridge/server.mjs
-lastReviewed: 2026-10-30
+lastReviewed: 2026-10-30  # was: 2026-10-30
 ---
 
 # Suno engine
@@ -20,8 +20,16 @@ it calls the local BetterSuno bridge (`SunoBridge`).
   `chirp-hawk` (v6), `chirp-hawk-wild` (v6-wild), `chirp-goose` (v6-mini).
 - Optionally extracts the vocal stem via `make_stems` and downloads it as m4a
   ("without credits"), converting to WAV for the aligner/mixer.
-- Suno voices (personas) can be used by setting `suno_persona_id` on the
-  character; `design_reference()` is unsupported.
+- Suno voices (personas): browse via `GET /api/suno/personas` (own +
+  followed, slimmed to id/name/model/image/root clip), preview a voice via
+  `GET /api/suno/personas/{id}`, select via `PATCH .../characters/{speaker}`
+  (`suno_persona_id` + `suno_persona_model`, `""` clears to preset voice).
+  The Cast panel has a voice picker with preview audio. `design_reference()`
+  is unsupported.
+- `bettersuno-mcp` is a pinned git subproject (`third_party/bettersuno-mcp`);
+  the bridge resolves it via `suno-bridge/node_modules` and falls back to
+  `~/code/bettersuno-mcp`. Only one process may own `ws://127.0.0.1:9423` —
+  `serve` auto-starts the bridge (`--no-suno-bridge` opts out).
 - Suno is independent of Breeze: no reference clip is needed, a stem with the
   Suno engine counts as voice-ready, and `Project.default_engine = "suno"`
   applies to every un-overridden stem. The Cast panel shows "Suno voice" and a

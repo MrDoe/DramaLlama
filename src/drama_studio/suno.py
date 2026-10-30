@@ -55,6 +55,47 @@ class SunoBridge:
             raise SunoError(data.get("error") or f"Suno bridge HTTP {response.status_code}")
         return data
 
+    def list_personas(self) -> dict[str, Any]:
+        """Own (all pages) + followed + loved Suno personas via the bridge."""
+        try:
+            response = httpx.get(f"{self.base_url}/personas", timeout=30)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:
+            raise SunoError(f"Could not list Suno personas: {exc}") from exc
+        if not data.get("ok"):
+            raise SunoError(data.get("error") or "Suno bridge returned no personas")
+        return data
+
+    def get_persona(self, persona_id: str) -> dict[str, Any]:
+        try:
+            response = httpx.get(f"{self.base_url}/personas/{persona_id}", timeout=30)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:
+            raise SunoError(f"Could not fetch Suno persona: {exc}") from exc
+        if not data.get("ok"):
+            raise SunoError(data.get("error") or "Suno bridge returned no persona")
+        return data
+
+    def request_captcha(self) -> dict[str, Any]:
+        """Ask the BetterSuno extension to mint a Turnstile token now.
+
+        Forces the extension to reuse Suno's own widget or render its visible
+        checkbox, instead of waiting for a generation to fail. Returns
+        ``{"ok": True}`` — the token itself never leaves the bridge.
+        """
+        try:
+            response = httpx.post(f"{self.base_url}/captcha", timeout=150)
+        except Exception as exc:
+            raise SunoError(f"Suno captcha request failed: {exc}") from exc
+        data = response.json() if response.content else {}
+        if response.status_code >= 400 or not data.get("ok"):
+            raise SunoError(
+                data.get("error") or f"Suno bridge HTTP {response.status_code}"
+            )
+        return {"ok": True}
+
     def download(
         self, clip_id: str, output_dir: str | Path, fmt: str = "wav"
     ) -> Path:
@@ -101,19 +142,8 @@ class SunoBridge:
             f"(last status: {last.get('status') if isinstance(last, dict) else 'unknown'})"
         )
 
-
-def _clip_ready(clip: dict[str, Any]) -> bool:
-    status = str(clip.get("status") or "").lower()
-    if status in {"error", "failed"}:
-        return False
-    audio = str(clip.get("audio_url") or "")
-    media = clip.get("media_urls") or []
-    return status in {"complete", "completed"} or (
-        bool(audio) and "/forbidden" not in audio
-    ) or bool(media)
-
-
     def make_stems(self, clip_id: str) -> dict[str, Any]:
+        """Extract vocals/instrumental stems for a finished clip."""
         try:
             response = httpx.post(
                 f"{self.base_url}/stems",
@@ -124,5 +154,18 @@ def _clip_ready(clip: dict[str, Any]) -> bool:
             raise SunoError(f"Suno stem extraction failed: {exc}") from exc
         data = response.json() if response.content else {}
         if response.status_code >= 400 or not data.get("ok"):
-            raise SunoError(data.get("error") or f"Suno bridge HTTP {response.status_code}")
+            raise SunoError(
+                data.get("error") or f"Suno bridge HTTP {response.status_code}"
+            )
         return data
+
+
+def _clip_ready(clip: dict[str, Any]) -> bool:
+    status = str(clip.get("status") or "").lower()
+    if status in {"error", "failed"}:
+        return False
+    audio = str(clip.get("audio_url") or "")
+    media = clip.get("media_urls") or []
+    return status in {"complete", "completed"} or (
+        bool(audio) and "/forbidden" not in audio
+    ) or bool(media)

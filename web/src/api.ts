@@ -7,9 +7,29 @@ import type {
   ProjectSummary,
   Script,
   SfxItem,
+  SunoPersona,
 } from "./types";
 
 const BASE = "/api";
+
+export interface LlmConfig {
+  model: string;
+  provider: "local" | "cloud";
+  api: "ollama" | "openai";
+  url: string;
+  apiKeyConfigured: boolean;
+  sources: Record<string, "file" | "env" | "default">;
+}
+
+export interface LlmTestResult {
+  ok: boolean;
+  api: "ollama" | "openai";
+  provider: "local" | "cloud";
+  model: string;
+  models: string[];
+  excluded: string[];
+  error: string | null;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -39,6 +59,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+export interface SunoPersonas {
+  ok: boolean;
+  own: SunoPersona[];
+  followed: SunoPersona[];
+  loved?: SunoPersona[];
+}
+
+// One shared personas request per page lifetime: every Suno voice picker
+// (Cast panel, each Render stem card) reads from this instead of fetching.
+let personasRequest: Promise<SunoPersonas> | null = null;
+
+function sharedSunoPersonas(): Promise<SunoPersonas> {
+  if (!personasRequest) {
+    personasRequest = request<SunoPersonas>("/suno/personas").catch(
+      (reason: unknown) => {
+        personasRequest = null;
+        throw reason;
+      },
+    );
+  }
+  return personasRequest;
 }
 
 export const api = {
@@ -138,6 +181,9 @@ export const api = {
       ref_text?: string | null;
       ref_instruction?: string | null;
       baseline_instruct?: string;
+      suno_persona_id?: string | null;
+      suno_persona_model?: string | null;
+      suno_mv?: string;
     },
   ) =>
     request<Project>(`/projects/${projectId}/characters/${speaker}`, {
@@ -182,6 +228,15 @@ export const api = {
       error?: string;
       bridge?: string;
     }>("/suno/status"),
+  sunoPersonas: () => sharedSunoPersonas(),
+  sunoPersonaClip: (personaId: string) =>
+    request<{ ok: boolean; persona: Record<string, unknown> }>(
+      `/suno/personas/${encodeURIComponent(personaId)}`,
+    ),
+  sunoPreviewUrl: (clipId: string) =>
+    `${BASE}/suno/preview/${encodeURIComponent(clipId)}`,
+  requestSunoCaptcha: () =>
+    request<{ ok: boolean }>("/suno/captcha", { method: "POST" }),
   generateSuno: (
     projectId: string,
     input: {
@@ -229,6 +284,7 @@ export const api = {
       ref_instruction?: string;
       cfg_scale?: number;
       seed?: number;
+      name?: string;
     },
   ) =>
     request<Job>(`/projects/${projectId}/characters/${speaker}/reference`, {
@@ -243,6 +299,12 @@ export const api = {
       cfg_scale?: number;
       seed?: number;
       engine?: string;
+      ref_voice_id?: string | null;
+      suno_weirdness?: number | null;
+      suno_style_weight?: number | null;
+      suno_audio_weight?: number | null;
+      suno_mv?: string | null;
+      suno_vocal_gender?: string | null;
     },
   ) =>
     request<Job>(`/projects/${projectId}/stems/${stemId}/render`, {
@@ -252,15 +314,64 @@ export const api = {
   updateStem: (
     projectId: string,
     stemId: string,
-    input: { engine?: string; cfg_scale?: number; seed?: number },
+    input: {
+      engine?: string;
+      cfg_scale?: number;
+      seed?: number;
+      suno_lyrics?: string | null;
+      suno_title?: string | null;
+      suno_tags?: string | null;
+      suno_weirdness?: number | null;
+      suno_style_weight?: number | null;
+      suno_audio_weight?: number | null;
+      suno_mv?: string | null;
+      suno_vocal_gender?: string | null;
+      ref_voice_id?: string | null;
+    },
   ) =>
     request<Project>(`/projects/${projectId}/stems/${stemId}`, {
       method: "PATCH",
       body: JSON.stringify(input),
     }),
+  suggestSunoStyle: (
+    projectId: string,
+    stemId: string,
+    input?: { method?: "llm" | "deterministic"; overwrite?: boolean; only?: string[] },
+  ) =>
+    request<Project>(`/projects/${projectId}/stems/${stemId}/suno-style`, {
+      method: "POST",
+      body: JSON.stringify(input ?? { method: "llm" }),
+    }),
   getJob: (jobId: string) => request<Job>(`/jobs/${jobId}`),
   projectJobs: (projectId: string) =>
     request<Job[]>(`/projects/${projectId}/jobs`),
+  getConfig: () =>
+    request<{ llm: LlmConfig; suno?: { plan: "free" | "pro"; sources: Record<string, string> } }>(
+      "/config",
+    ),
+  updateConfig: (
+    llm: {
+      api?: string;
+      url?: string;
+      model?: string;
+      api_key?: string | null;
+    } | null,
+    suno?: { plan: "free" | "pro" },
+  ) =>
+    request<{ llm: LlmConfig; suno?: { plan: "free" | "pro" } }>("/config", {
+      method: "PUT",
+      body: JSON.stringify({ ...(llm ? { llm } : {}), ...(suno ? { suno } : {}) }),
+    }),
+  testConfig: (llm?: {
+    api?: string;
+    url?: string;
+    model?: string;
+    api_key?: string | null;
+  }) =>
+    request<LlmTestResult>("/config/test", {
+      method: "POST",
+      body: JSON.stringify(llm ? { llm } : {}),
+    }),
   watchJob: (jobId: string, onUpdate: (job: Job) => void) => {
     const source = new EventSource(`${BASE}/jobs/${jobId}/events`);
     source.addEventListener("job", (event) => {
@@ -283,3 +394,35 @@ export const api = {
     }),
   engines: () => request<EngineInfo[]>("/engines"),
 };
+
+/** Resolve when a job reaches a terminal state (drives batch rendering). */
+export function waitForJob(jobId: string): Promise<Job> {
+  return new Promise((resolve, reject) => {
+    const stop = api.watchJob(jobId, (job) => {
+      if (["succeeded", "failed", "cancelled"].includes(job.status)) {
+        stop();
+        resolve(job);
+      }
+    });
+    // The SSE stream can drop without a terminal event; poll as a safety net.
+    const timer = setInterval(() => {
+      api
+        .getJob(jobId)
+        .then((job) => {
+          if (["succeeded", "failed", "cancelled"].includes(job.status)) {
+            clearInterval(timer);
+            stop();
+            resolve(job);
+          }
+        })
+        .catch(() => {
+          /* keep waiting */
+        });
+    }, 5000);
+    setTimeout(() => {
+      clearInterval(timer);
+      stop();
+      reject(new Error("job did not finish in time"));
+    }, 30 * 60 * 1000);
+  });
+}

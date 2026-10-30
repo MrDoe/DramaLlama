@@ -10,6 +10,8 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[concepts/gpu-serialization]] — why Breeze, Chatterbox, Ollama and Whisper are scheduled carefully.
 - [[concepts/engine-selection]] — project default + per-stem providers, inheritance, A/B takes.
 - [[concepts/sfx-library-and-mix]] — local SFX index, cue model, mix chain.
+- [[concepts/suno-turnstile-captcha]] — why Suno renders stall on Cloudflare Turnstile, and the fix plan.
+- [[concepts/batch-render-and-captcha-recovery]] — sequential "render all", pause-on-captcha, recovery dialog.
 
 ## Engines and music
 

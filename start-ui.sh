@@ -5,8 +5,9 @@
 # with its in-process worker (http://127.0.0.1:8770).
 #
 # --dev runs the Vite dev server on :5173 with HMR and proxies /api to the
-# backend on :8770. Chatterbox and the Suno bridge are separate services and
-# are not started here.
+# backend on :8770. `serve` auto-starts the Suno bridge sidecar (:9430)
+# unless --no-suno-bridge is passed. Chatterbox stays a separate service and
+# is not started here.
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

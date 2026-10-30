@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import io
+import os
 import re
+import subprocess
+import time
 from pathlib import Path
 
 import httpx
@@ -10,6 +13,20 @@ import soundfile as sf
 
 from ..audio import sha256_text, write_mono
 from ..config import CHATTERBOX_URL
+
+
+def _container_name() -> str:
+    # Same lookup as config._env (DRAMA_LLAMA_ wins, legacy DRAMA_STUDIO_
+    # falls back) without touching config.py. Empty string disables docker
+    # management: the engine then only health-checks an external server.
+    return (
+        os.environ.get("DRAMA_LLAMA_CHATTERBOX_CONTAINER")
+        or os.environ.get("DRAMA_STUDIO_CHATTERBOX_CONTAINER", "chatterbox-tts-api")
+    )
+
+
+#: How long load() waits for a freshly started container to serve /health.
+START_TIMEOUT_S = 180.0
 from ..models import (
     ReferenceRequest,
     ReferenceResult,
@@ -45,13 +62,19 @@ class ChatterboxEngine(BaseEngine):
         description="Chatterbox Multilingual 0.5B: voice-sample cloning, exaggeration/cfg per take.",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, container: str | None = None) -> None:
         super().__init__()
         self.base_url = CHATTERBOX_URL.rstrip("/")
+        self.container = _container_name() if container is None else container
+
+    def available(self) -> bool:
+        # Status probe only: do not start the container here.
+        return self._healthy()
 
     def load(self) -> None:
         if self._loaded:
             return
+        self._ensure_server()
         try:
             response = httpx.get(f"{self.base_url}/health", timeout=5)
             response.raise_for_status()
@@ -64,11 +87,56 @@ class ChatterboxEngine(BaseEngine):
             raise EngineNotAvailable("Chatterbox server is up but the model is not loaded")
         self._loaded = True
 
+    def _ensure_server(self) -> None:
+        """Start the container when the server is down, then wait for /health."""
+        if not self.container or self._healthy():
+            return
+        try:
+            proc = subprocess.run(
+                ["docker", "start", self.container],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except Exception:
+            return  # no docker binary: assume an externally managed server
+        if proc.returncode != 0:
+            return  # no such container: same assumption, load() decides
+        deadline = time.monotonic() + START_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if self._healthy():
+                return
+            time.sleep(2)
+        # Still down: fall through so load() raises the user-facing error.
+
+    def _healthy(self) -> bool:
+        try:
+            response = httpx.get(f"{self.base_url}/health", timeout=5)
+            response.raise_for_status()
+            return bool(response.json().get("model_loaded"))
+        except Exception:
+            return False
+
     def unload(self) -> None:
-        # The model lives in the external Chatterbox server.
+        # Drama Llama owns the container lifecycle: stop it so its ~4.4 GB of
+        # VRAM is released for Breeze/LLM work. load() restarts it on demand.
+        # Best-effort: without docker/a container this just flips the flag.
+        if self.container:
+            try:
+                subprocess.run(
+                    ["docker", "stop", self.container],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+            except Exception:
+                pass
         self._loaded = False
 
     def design_reference(self, request: ReferenceRequest) -> ReferenceResult:
+        # Never needs the server: release a container that an eager
+        # EngineManager.get() may have just started, then fail fast.
+        self.unload()
         raise UnsupportedOperation(
             "Chatterbox clones an existing voice sample; upload a reference clip instead"
         )
@@ -81,6 +149,22 @@ class ChatterboxEngine(BaseEngine):
         cancelled: CancelCheck | None = None,
     ) -> StemRenderResult:
         self.load()
+        try:
+            return self._render_inner(
+                request, progress=progress, cancelled=cancelled
+            )
+        finally:
+            # Per-job lifecycle: the container holds ~4.4 GB of VRAM, so stop
+            # it when the render is done. The next render restarts it.
+            self.unload()
+
+    def _render_inner(
+        self,
+        request: StemRenderRequest,
+        *,
+        progress: ProgressCallback | None = None,
+        cancelled: CancelCheck | None = None,
+    ) -> StemRenderResult:
         output_dir = Path(request.output_dir)
         take_dir = output_dir / "audio" / "takes"
         ref_path = None

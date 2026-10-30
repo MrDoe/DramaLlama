@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowRight,
+  Brain,
   Clock,
   GlobeHemisphereWest,
   MicrophoneStage,
+  MusicNotes,
   Plus,
   WarningCircle,
   Waveform,
@@ -60,14 +62,16 @@ function EngineCard({
   name,
   detail,
   badge,
+  tone = "accent",
 }: {
   icon: React.ReactNode;
   name: string;
   detail: string;
   badge: string;
+  tone?: "accent" | "violet" | "teal";
 }) {
   return (
-    <div className="engine-card">
+    <div className={`engine-card tone-${tone}`}>
       <div className="engine-left">
         <span className="engine-icon">{icon}</span>
         <span>
@@ -84,6 +88,10 @@ export function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [llm, setLlm] = useState<{
+    model: string;
+    provider: "local" | "cloud";
+  } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -98,6 +106,14 @@ export function ProjectsPage() {
       .finally(() => {
         if (active) setLoading(false);
       });
+    api
+      .getConfig()
+      .then((config) => {
+        if (active) setLlm(config.llm);
+      })
+      .catch(() => {
+        // keep the static fallback row below
+      });
     return () => {
       active = false;
     };
@@ -107,14 +123,12 @@ export function ProjectsPage() {
     <div className="page">
       <section className="hero">
         <div className="hero-copy">
-          <p className="eyebrow">Drama Llama · local audio drama lab</p>
-          <div className="hero-mascot">
-            <img src="/llogo.png" alt="Drama Llama mascot" width={156} height={156} />
-            <div className="hero-mascot-copy">
-              <strong>Drama Llama</strong>
-              <span>scripts in · drama out</span>
-            </div>
-          </div>
+          <p className="eyebrow">The audio drama lab</p>
+          <h1>
+            Scripts in.
+            <br />
+            <em>Drama out.</em>
+          </h1>
           <p>
             Paste a screenplay. The LLM casts it, splits each character into a
             scene stem, and Breeze performs it. Whisper cuts the stems back into
@@ -133,24 +147,54 @@ export function ProjectsPage() {
         </div>
 
         <aside className="hero-aside" aria-label="Engines">
-          <EngineCard
-            icon={<Waveform size={19} weight="bold" />}
-            name="Breeze TTS 2"
-            detail="English · reference design → clone"
-            badge="GPU"
-          />
-          <EngineCard
-            icon={<MicrophoneStage size={19} weight="bold" />}
-            name="Chatterbox 0.5B"
-            detail="German · voice-sample cloning"
-            badge="GPU"
-          />
-          <EngineCard
-            icon={<GlobeHemisphereWest size={19} weight="bold" />}
-            name="Whisper large-v3"
-            detail="CPU int8 · word-level stem alignment"
-            badge="CPU"
-          />
+          <div className="studio-panel">
+            <div className="studio-head">
+              <img src="/llogo.png" alt="Drama Llama mascot" width={64} height={64} />
+              <div className="studio-title">
+                <strong>Drama Llama</strong>
+                <span>Parse · voices · align · music</span>
+              </div>
+              <span className="status-dot" aria-hidden="true" />
+            </div>
+            <div className="studio-engines">
+              <EngineCard
+                icon={<Brain size={19} weight="bold" />}
+                name="LLM"
+                detail={
+                  llm
+                    ? `${llm.model} · script parsing & casting`
+                    : "Script parsing & casting"
+                }
+                badge={llm && llm.provider === "cloud" ? "WEB" : "GPU"}
+              />
+              <EngineCard
+                icon={<Waveform size={19} weight="bold" />}
+                name="Breeze TTS 2"
+                detail="English · reference design → clone"
+                badge="GPU"
+              />
+              <EngineCard
+                icon={<MicrophoneStage size={19} weight="bold" />}
+                name="Chatterbox 0.5B"
+                detail="German · voice-sample cloning"
+                badge="GPU"
+                tone="violet"
+              />
+              <EngineCard
+                icon={<GlobeHemisphereWest size={19} weight="bold" />}
+                name="Whisper large-v3"
+                detail="CPU int8 · word-level stem alignment"
+                badge="CPU"
+              />
+              <EngineCard
+                icon={<MusicNotes size={19} weight="bold" />}
+                name="Suno"
+                detail="Music · prompt → score via bridge"
+                badge="WEB"
+                tone="teal"
+              />
+            </div>
+          </div>
         </aside>
       </section>
 

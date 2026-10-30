@@ -83,6 +83,15 @@ class BreezeDeEngine(BaseEngine):
         super().__init__()
         self.base_url = BREEZE_DE_URL.rstrip("/")
 
+    def available(self) -> bool:
+        try:
+            response = httpx.get(f"{self.base_url}/health", timeout=3)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            return False
+        return payload.get("status") == "ok"
+
     def load(self) -> None:
         if self._loaded:
             return

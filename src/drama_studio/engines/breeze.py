@@ -53,6 +53,13 @@ class BreezeEngine(BaseEngine):
         self._synth = None
         self._convert_tags = None
 
+    def available(self) -> bool:
+        return (
+            BREEZE_REPO.exists()
+            and BREEZE_MODEL.exists()
+            and (VENDOR_DIR / "breeze_stems.py").exists()
+        )
+
     # ------------------------------------------------------------------ load
 
     def load(self) -> None:

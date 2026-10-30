@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any
 
 from .aligner import WhisperAligner
@@ -8,18 +9,24 @@ from .config import DATA_DIR, PROJECTS_DIR
 from .engines import engine_info
 from .engines.fake import FakeEngine
 from .engines.manager import EngineManager
+from .engines.suno import CaptchaRequiredError
 from .mixer import build_mix
 from .models import (
+    AlignedLine,
+    AlignmentResult,
+    Character,
     Job,
     Line,
     Project,
     ReferenceRequest,
+    RefVoice,
     StemRenderRequest,
     SunoTrack,
 )
 from .sfx import SfxLibrary
-from .store import ProjectStore
+from .store import ProjectStore, slugify
 from .suno import SunoBridge, SunoError
+from .suno_lyrics import format_suno_lyrics
 from .worker import Handler, JobCancelled, JobContext, PermanentJobError
 
 _MANAGER = EngineManager()
@@ -105,6 +112,42 @@ def _lines_for_stem(project: Project, line_ids: list[str]) -> list[Line]:
     return [by_id[line_id] for line_id in line_ids if line_id in by_id]
 
 
+def _scene_heading(project: Project, scene_id: int) -> str:
+    for scene in project.script.scenes:
+        if scene.id == scene_id:
+            return scene.heading
+    return ""
+
+
+def _resolve_ref_file(
+    character: Character, directory: Path, ref_voice_id: str | None
+) -> Path | None:
+    """Resolve a reference wav for a render.
+
+    ``ref_voice_id`` selects one of the character's named RefVoice entries;
+    None means the default (legacy ``ref_file``). Returns None when the
+    character has no usable reference instead of raising — callers decide
+    whether that is an error (Breeze) or a fallback (Chatterbox default).
+    """
+    if ref_voice_id:
+        entry = next(
+            (item for item in character.references if item.id == ref_voice_id), None
+        )
+        if entry is None:
+            raise PermanentJobError(
+                f"unknown reference voice {ref_voice_id!r} for {character.name}"
+            )
+        candidate = directory / entry.file
+        if not candidate.exists():
+            raise PermanentJobError(f"reference file missing: {candidate}")
+        return candidate
+    if character.ref_file:
+        candidate = directory / character.ref_file
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
     payload = job.payload
     project_id = payload["project_id"]
@@ -122,7 +165,20 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
         raise PermanentJobError("reference text and instruction are required")
 
     directory = _STORE.project_dir(project.id)
-    output = directory / "refs" / f"{speaker.lower().replace(' ', '_')}.wav"
+    ref_name = (payload.get("name") or "").strip()
+    speaker_slug = speaker.lower().replace(" ", "_")
+    if ref_name:
+        ref_id = slugify(ref_name, limit=32) or speaker_slug
+        existing_ids = {item.id for item in character.references}
+        suffix = 2
+        base_id = ref_id
+        while ref_id in existing_ids:
+            ref_id = f"{base_id}-{suffix}"
+            suffix += 1
+        output = directory / "refs" / f"{speaker_slug}-{ref_id}.wav"
+    else:
+        ref_id = ""
+        output = directory / "refs" / f"{speaker_slug}.wav"
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg_value = payload.get("cfg_scale")
     seed_value = payload.get("seed")
@@ -148,11 +204,25 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
     result = engine.design_reference(request)
     character.ref_file = str(output.relative_to(directory))
     character.f0_hz = result.f0_hz
+    if ref_name:
+        character.references = [
+            item for item in character.references if item.id != ref_id
+        ] + [
+            RefVoice(
+                id=ref_id,
+                name=ref_name,
+                file=str(output.relative_to(directory)),
+                ref_text=character.ref_text,
+                ref_instruction=character.ref_instruction,
+                f0_hz=result.f0_hz,
+            )
+        ]
     _STORE.save(project)
     ctx.progress(1.0, "reference ready")
     return {
         "speaker": speaker,
         "ref_file": character.ref_file,
+        "ref_voice_id": ref_id or None,
         "reference": result.model_dump(mode="json"),
     }
 
@@ -182,28 +252,46 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         )
 
     directory = _STORE.project_dir(project.id)
+    ref_voice_id = payload.get("ref_voice_id") or stem.ref_voice_id
     ref_path = None
     if engine_name in {"breeze", "breeze-de"}:
-        if not character.ref_file:
+        # A per-stem voice override wins; otherwise the default reference.
+        # Either way Breeze needs a usable reference file.
+        ref_path = _resolve_ref_file(character, directory, ref_voice_id)
+        if ref_path is None:
             raise PermanentJobError(
                 f"no reference voice for {stem.speaker}; design it first"
             )
-        ref_path = directory / character.ref_file
-        if not ref_path.exists():
-            raise PermanentJobError(f"reference file missing: {ref_path}")
     elif engine_name == "chatterbox":
         # Reference clips are optional; the Chatterbox server falls back to its
         # configured default voice when no sample is attached.
-        if character.ref_file:
-            candidate = directory / character.ref_file
-            if candidate.exists():
-                ref_path = candidate
+        ref_path = _resolve_ref_file(character, directory, ref_voice_id)
     elif engine_name == "suno":
         # Suno uses preset voices/personas; no local reference file.
         ref_path = None
 
     cfg_value = payload.get("cfg_scale")
     seed_value = payload.get("seed")
+    lines = _lines_for_stem(project, stem.line_ids)
+    # Suno sings the bracket-tagged lyric sheet, not the flat "..."-joined
+    # prose: explicit payload override wins, then the stored stem sheet, then a
+    # fresh deterministic sheet so legacy stems without one still render.
+    suno_lyrics = payload.get("suno_lyrics") or stem.suno_lyrics
+    if engine_name == "suno" and not suno_lyrics and lines:
+        ctx.progress(0.03, "formatting Suno lyric sheet")
+        suno_lyrics = format_suno_lyrics(
+            lines, character, _scene_heading(project, stem.scene)
+        )
+    if suno_lyrics and suno_lyrics != stem.suno_lyrics:
+        stem.suno_lyrics = suno_lyrics
+
+    def _suno_param(name: str, default: Any = None) -> Any:
+        """Render payload override wins, then the stored stem value."""
+        value = payload.get(name)
+        if value is None:
+            value = getattr(stem, name, None)
+        return default if value is None else value
+
     request = StemRenderRequest(
         project_id=project.id,
         stem_id=stem.id,
@@ -218,7 +306,20 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         seed=int(seed_value) if seed_value is not None else stem.seed,
         candidates=int(payload.get("candidates", 2)),
         persona_id=getattr(character, "suno_persona_id", None),
-        mv=getattr(character, "suno_mv", "chirp-hawk"),
+        persona_model=getattr(character, "suno_persona_model", None),
+        mv=(
+            payload.get("suno_mv")
+            or stem.suno_mv
+            or getattr(character, "suno_mv", None)
+            or "chirp-hawk"
+        ),
+        suno_lyrics=suno_lyrics,
+        suno_title=stem.suno_title,
+        suno_tags=stem.suno_tags,
+        suno_weirdness=_suno_param("suno_weirdness"),
+        suno_style_weight=_suno_param("suno_style_weight"),
+        suno_audio_weight=_suno_param("suno_audio_weight"),
+        suno_vocal_gender=_suno_param("suno_vocal_gender"),
     )
 
     _require_gpu(engine_name)
@@ -231,6 +332,11 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             progress=lambda value, message: ctx.progress(0.05 + 0.7 * value, message),
             cancelled=lambda: ctx.cancelled(),
         )
+    except CaptchaRequiredError as exc:
+        # A verification tick is required; retrying immediately would only pile
+        # more requests onto Cloudflare. Fail permanently so the UI can offer
+        # "Re-check verification" instead of burning attempts.
+        raise PermanentJobError(str(exc)) from exc
     except RuntimeError as exc:
         if "cancelled" in str(exc).lower():
             raise JobCancelled(str(exc)) from exc
@@ -246,9 +352,17 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     alignment = None
     if bool(payload.get("align", True)) and selected is not None:
         ctx.check_cancelled()
-        ctx.progress(0.78, "aligning stem with Whisper")
         lines = _lines_for_stem(project, stem.line_ids)
-        if lines:
+        if lines and engine_name == "suno" and not selected.vocal_isolated:
+            # Suno only separates vocals on paid plans. Whisper on a full song
+            # (instruments + backing vocals) produces confidently wrong cuts,
+            # so estimate timings by word count and mark them low-confidence.
+            ctx.progress(0.78, "estimating line timing (no vocal stem)")
+            alignment = _estimate_alignment(stem.id, selected.duration_s, lines)
+            project.alignments[stem.id] = alignment
+            _STORE.save(project)
+        elif lines:
+            ctx.progress(0.78, "aligning stem with Whisper")
             aligner = WhisperAligner(language=project.language)
             alignment = aligner.align(
                 directory / selected.file,
@@ -266,6 +380,34 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         "render": result.model_dump(mode="json"),
         "alignment": alignment.model_dump(mode="json") if alignment else None,
     }
+
+
+def _estimate_alignment(
+    stem_id: str, duration_s: float, lines: list[Line]
+) -> AlignmentResult:
+    """Proportional timing for audio the aligner cannot trust.
+
+    Used when a Suno take is a full mix (vocal separation is a paid feature):
+    each line gets a slice of the clip proportional to its word count, with a
+    low confidence so the UI flags it as an estimate rather than a cut.
+    """
+    weights = [max(1, len(line.text.split())) for line in lines]
+    total = sum(weights) or 1
+    cursor = 0.0
+    aligned: list[AlignedLine] = []
+    for line, weight in zip(lines, weights, strict=False):
+        span = duration_s * weight / total
+        aligned.append(
+            AlignedLine(
+                line_id=line.id,
+                start_s=round(cursor, 2),
+                end_s=round(cursor + span, 2),
+                confidence=0.05,
+                fallback=True,
+            )
+        )
+        cursor += span
+    return AlignmentResult(stem_id=stem_id, lines=aligned, aligner="estimate")
 
 
 def align_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
@@ -306,6 +448,14 @@ def realign_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         raise PermanentJobError("stem has no lines")
 
     directory = _STORE.project_dir(project.id)
+    if selected.engine == "suno" and not selected.vocal_isolated:
+        ctx.progress(0.2, "estimating line timing (no vocal stem)")
+        alignment = _estimate_alignment(stem.id, selected.duration_s, lines)
+        project.alignments[stem.id] = alignment
+        _STORE.save(project)
+        ctx.progress(1.0, "alignment ready (estimated)")
+        return alignment.model_dump(mode="json")
+
     ctx.progress(0.1, "loading Whisper")
     aligner = WhisperAligner(language=project.language)
     ctx.progress(0.2, f"realigning {len(lines)} lines")

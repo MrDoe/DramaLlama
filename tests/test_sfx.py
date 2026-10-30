@@ -13,6 +13,9 @@ class FailingLLM:
     def chat_json(self, *args, **kwargs):
         raise LLMError("offline")
 
+    def chat_text(self, *args, **kwargs):
+        raise LLMError("offline")
+
 
 SCRIPT = """# TEST
 

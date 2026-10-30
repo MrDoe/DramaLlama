@@ -6,7 +6,33 @@
       "type": "python",
       "request": "launch",
       "module": "drama_studio.cli",
-      "args": ["serve", "--host", "127.0.0.1", "--port", "8770"],
+      "args": [
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8770"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "justMyCode": false
+    },
+    {
+      "name": "Drama Llama: API (in-process worker, port 8771)",
+      "type": "python",
+      "request": "launch",
+      "module": "drama_studio.cli",
+      "args": [
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8771"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "env": {
@@ -20,7 +46,14 @@
       "type": "python",
       "request": "launch",
       "module": "drama_studio.cli",
-      "args": ["serve", "--no-worker", "--host", "127.0.0.1", "--port", "8770"],
+      "args": [
+        "serve",
+        "--no-worker",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8770"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "env": {
@@ -34,7 +67,10 @@
       "type": "python",
       "request": "launch",
       "module": "drama_studio.cli",
-      "args": ["worker", "--once"],
+      "args": [
+        "worker",
+        "--once"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "env": {
@@ -48,7 +84,9 @@
       "type": "python",
       "request": "launch",
       "module": "drama_studio.cli",
-      "args": ["worker"],
+      "args": [
+        "worker"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "env": {
@@ -62,7 +100,9 @@
       "type": "python",
       "request": "launch",
       "module": "drama_studio.cli",
-      "args": ["init"],
+      "args": [
+        "init"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "env": {
@@ -74,7 +114,9 @@
       "type": "python",
       "request": "launch",
       "module": "pytest",
-      "args": ["-q"],
+      "args": [
+        "-q"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "env": {
@@ -87,7 +129,10 @@
       "type": "python",
       "request": "launch",
       "module": "pytest",
-      "args": ["${file}", "-q"],
+      "args": [
+        "${file}",
+        "-q"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "env": {
@@ -103,7 +148,7 @@
       "cwd": "${workspaceFolder}/suno-bridge",
       "console": "integratedTerminal",
       "env": {
-        "BETTERSUNO_MCP_DIR": "${env:HOME}/code/bettersuno-mcp",
+        "BETTERSUNO_MCP_DIR": "${workspaceFolder}/third_party/bettersuno-mcp",
         "SUNO_BRIDGE_PORT": "9430"
       }
     },
@@ -112,7 +157,10 @@
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "cwd": "${workspaceFolder}/web",
       "console": "integratedTerminal"
     },

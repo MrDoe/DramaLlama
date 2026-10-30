@@ -22,12 +22,20 @@ HOST = _env("HOST", "127.0.0.1")
 PORT = int(_env("PORT", "8770"))
 
 # Ollama / local LLM defaults. The app never runs the LLM while Breeze is loaded.
+# Any Ollama-compatible endpoint works here, including hosted/cloud offerings
+# (e.g. Ollama Cloud) when combined with DRAMA_LLAMA_LLM_API_KEY.
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+LLM_URL = _env("LLM_URL", OLLAMA_URL)
+LLM_MODEL = _env("LLM", "gemma4:12b-16k")
+LLM_API_KEY = _env("LLM_API_KEY", "")
+# LLM wire protocol: "ollama" (local Ollama or Ollama-compatible endpoint) or
+# "openai" (OpenAI Chat Completions compatible — e.g. OpenCode Go at
+# https://opencode.ai/inference/go/openai/v1/chat/completions).
+LLM_API = _env("LLM_API", "ollama").lower()
+LLM_KEEP_ALIVE = _env("LLM_KEEP_ALIVE", "0")
 SUNO_BRIDGE_URL = os.environ.get("SUNO_BRIDGE_URL", "http://127.0.0.1:9430")
 CHATTERBOX_URL = os.environ.get("CHATTERBOX_URL", "http://127.0.0.1:4123")
 BREEZE_DE_URL = os.environ.get("BREEZE_DE_URL", "http://127.0.0.1:8137")
-LLM_MODEL = _env("LLM", "gemma4:12b-16k")
-LLM_KEEP_ALIVE = _env("LLM_KEEP_ALIVE", "0")
 
 # Local SFX library roots. Personal subfolders can be excluded in settings.
 SFX_LIBRARY_ROOTS = [

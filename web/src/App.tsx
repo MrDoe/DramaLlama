@@ -3,6 +3,7 @@ import { Shell } from "./components/Shell";
 import { NewProjectPage } from "./pages/NewProjectPage";
 import { ProjectPage } from "./pages/ProjectPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 export default function App() {
   return (
@@ -29,6 +30,14 @@ export default function App() {
           element={
             <Shell>
               <ProjectPage />
+            </Shell>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <Shell>
+              <SettingsPage />
             </Shell>
           }
         />

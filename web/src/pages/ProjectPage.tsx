@@ -22,8 +22,9 @@ import {
   WarningCircle,
   Waveform,
 } from "@phosphor-icons/react";
-import { api } from "../api";
+import { api, waitForJob } from "../api";
 import type {
+  Character,
   EngineInfo,
   EngineName,
   Job,
@@ -31,6 +32,7 @@ import type {
   Project,
   SfxItem,
   Stem,
+  SunoPersona,
 } from "../types";
 import {
   autoEngine,
@@ -50,6 +52,83 @@ const STEPS = [
 
 function projectEngine(project: Project): EngineName {
   return project.default_engine ?? autoEngine(project.language);
+}
+
+/**
+ * The useful line of a job error: the last non-traceback line.
+ * Python tracebacks put the actionable message last, so `split("\n")[0]`
+ * (the old behaviour) showed only "Traceback (most recent call last):".
+ */
+function actionableError(message: string): string {
+  const lines = message
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!/^File ".*", line \d+/.test(lines[i]) && !lines[i].startsWith("Traceback")) {
+      return lines[i];
+    }
+  }
+  return lines[0] ?? message;
+}
+
+function ErrorDialog({
+  title,
+  body,
+  onClose,
+  onRecheck,
+  rechecking,
+}: {
+  title: string;
+  body: string;
+  onClose: () => void;
+  onRecheck?: () => void;
+  rechecking?: boolean;
+}) {
+  const captcha = /CAPTCHA_REQUIRED|turnstile|verify you are human/i.test(body);
+  return (
+    <div className="error-dialog-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="error-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="error-dialog-head">
+          <span>
+            <WarningCircle size={14} weight="fill" /> {title}
+          </span>
+          <button type="button" className="text-button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        {captcha ? (
+          <p className="error-dialog-hint">
+            Suno wants a human verification. Open <code>suno.com/create</code> in
+            the browser where BetterSuno is installed, tick “Verify you are
+            human”, then press the button below and retry.
+          </p>
+        ) : null}
+        <pre className="error-dialog-body">{body}</pre>
+        <div className="error-dialog-foot">
+          {captcha && onRecheck ? (
+            <button
+              type="button"
+              className="button button-primary button-sm"
+              onClick={onRecheck}
+              disabled={rechecking}
+            >
+              {rechecking ? "Checking…" : "Re-check verification"}
+            </button>
+          ) : null}
+          <button type="button" className="button button-secondary button-sm" onClick={onClose}>
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function LineCard({ line }: { line: Line }) {
@@ -130,6 +209,390 @@ function CoveragePanel({ project }: { project: Project }) {
   );
 }
 
+function SunoPersonaPicker({
+  character,
+  onSelect,
+}: {
+  character: Character;
+  onSelect: (speaker: string, persona: SunoPersona | null) => void;
+}) {
+  const [personas, setPersonas] = useState<SunoPersona[] | null | undefined>(
+    undefined,
+  );
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .sunoPersonas()
+      .then((data) => {
+        if (!live) return;
+        const all = [
+          ...(data.own ?? []),
+          ...(data.followed ?? []),
+          ...(data.loved ?? []),
+        ];
+        all.sort((a, b) =>
+          a.persona_model === b.persona_model
+            ? a.name.localeCompare(b.name)
+            : a.persona_model === "voice_persona"
+              ? -1
+              : 1,
+        );
+        setPersonas(all);
+      })
+      .catch(() => {
+        if (live) setPersonas(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  if (personas === undefined)
+    return <span className="panel-sub">loading voices…</span>;
+  // Bridge offline: hide the picker, the preset voice still renders.
+  if (personas === null) return null;
+
+  const selectedId = character.suno_persona_id ?? "";
+  const selected =
+    personas.find((item) => item.id === character.suno_persona_id) ?? null;
+
+  async function preview(persona: SunoPersona) {
+    if (!persona.id) return;
+    setPreviewBusy(true);
+    try {
+      const data = await api.sunoPersonaClip(persona.id);
+      const clip = (data.persona?.clip ?? {}) as {
+        audio_url?: string;
+        video_url?: string;
+        media_urls?: Array<{ url?: string }>;
+      };
+      const media = Array.isArray(clip.media_urls)
+        ? clip.media_urls[0]?.url
+        : undefined;
+      // Empty strings must fall through (?? does not). Preference: mp4
+      // decodes everywhere with zero server cost; otherwise the transcoded
+      // app preview (persona catalog m4a is AES-encrypted opus that Firefox
+      // cannot demux); raw m4a last (Chrome may still play it).
+      const mp4 = clip.video_url || undefined;
+      const httpAudio =
+        clip.audio_url && !clip.audio_url.includes("/forbidden")
+          ? clip.audio_url
+          : undefined;
+      const proxied = persona.root_clip_id
+        ? api.sunoPreviewUrl(persona.root_clip_id)
+        : undefined;
+      setPreviewUrl(mp4 || proxied || httpAudio || media || null);
+    } catch {
+      setPreviewUrl(null);
+    } finally {
+      setPreviewBusy(false);
+    }
+  }
+
+  return (
+    <div className="persona-picker">
+      <select
+        className="input"
+        value={selectedId}
+        onChange={(event) => {
+          const next =
+            personas.find((item) => item.id === event.target.value) ?? null;
+          setPreviewUrl(null);
+          onSelect(character.id, next);
+        }}
+        aria-label={`Suno voice for ${character.name}`}
+      >
+        <option value="">Preset voice (no persona)</option>
+        {personas.map((persona) => (
+          <option key={persona.id ?? persona.name} value={persona.id ?? ""}>
+            {persona.name} ·{" "}
+            {persona.persona_model === "style_persona" ? "style" : "voice"}
+          </option>
+        ))}
+      </select>
+      {selected?.root_clip_id ? (
+        <button
+          type="button"
+          className="button button-ghost button-sm"
+          onClick={() => void preview(selected)}
+          disabled={previewBusy}
+        >
+          {previewBusy ? "Loading…" : "Preview voice"}
+        </button>
+      ) : null}
+      {previewUrl ? (
+        <audio
+          controls
+          preload="metadata"
+          src={previewUrl}
+          style={{ width: "100%" }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function SunoStemFields({
+  stem,
+  character,
+  onSelectPersona,
+  onSave,
+  onSuggest,
+}: {
+  stem: Stem;
+  character: Character;
+  onSelectPersona: (speaker: string, persona: SunoPersona | null) => void;
+  onSave: (stem: Stem, fields: {
+    suno_title: string;
+    suno_tags: string;
+    suno_weirdness: number | null;
+    suno_style_weight: number | null;
+    suno_audio_weight: number | null;
+    suno_mv: string | null;
+    suno_vocal_gender: string | null;
+  }) => void;
+  onSuggest: (stem: Stem) => Promise<void>;
+}) {
+  const [title, setTitle] = useState(stem.suno_title ?? "");
+  const [tags, setTags] = useState(stem.suno_tags ?? "");
+  const [weirdness, setWeirdness] = useState<number | null>(stem.suno_weirdness ?? null);
+  const [styleWeight, setStyleWeight] = useState<number | null>(stem.suno_style_weight ?? null);
+  const [audioWeight, setAudioWeight] = useState<number | null>(stem.suno_audio_weight ?? null);
+  const [mv, setMv] = useState(stem.suno_mv ?? "");
+  const [vocalGender, setVocalGender] = useState(stem.suno_vocal_gender ?? "");
+  const [suggesting, setSuggesting] = useState(false);
+  useEffect(() => {
+    setTitle(stem.suno_title ?? "");
+    setTags(stem.suno_tags ?? "");
+    setWeirdness(stem.suno_weirdness ?? null);
+    setStyleWeight(stem.suno_style_weight ?? null);
+    setAudioWeight(stem.suno_audio_weight ?? null);
+    setMv(stem.suno_mv ?? "");
+    setVocalGender(stem.suno_vocal_gender ?? "");
+  }, [
+    stem.suno_title,
+    stem.suno_tags,
+    stem.suno_weirdness,
+    stem.suno_style_weight,
+    stem.suno_audio_weight,
+    stem.suno_mv,
+    stem.suno_vocal_gender,
+  ]);
+  const dirty =
+    title.trim() !== (stem.suno_title ?? "") ||
+    tags.trim() !== (stem.suno_tags ?? "") ||
+    weirdness !== (stem.suno_weirdness ?? null) ||
+    styleWeight !== (stem.suno_style_weight ?? null) ||
+    audioWeight !== (stem.suno_audio_weight ?? null) ||
+    mv !== (stem.suno_mv ?? "") ||
+    vocalGender !== (stem.suno_vocal_gender ?? "");
+  // Auto-save: every edit persists after a short quiet period, no button.
+  useEffect(() => {
+    if (!dirty) return;
+    const timer = setTimeout(() => {
+      onSave(stem, {
+        suno_title: title.trim(),
+        suno_tags: tags.trim(),
+        suno_weirdness: weirdness,
+        suno_style_weight: styleWeight,
+        suno_audio_weight: audioWeight,
+        suno_mv: mv || null,
+        suno_vocal_gender: vocalGender || null,
+      });
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [
+    dirty,
+    onSave,
+    stem,
+    title,
+    tags,
+    weirdness,
+    styleWeight,
+    audioWeight,
+    mv,
+    vocalGender,
+  ]);
+  async function runSuggest() {
+    setSuggesting(true);
+    try {
+      await onSuggest(stem);
+    } finally {
+      setSuggesting(false);
+    }
+  }
+  return (
+    <div className="suno-stem">
+      <div className="field">
+        <span className="label">
+          Suno voice <span>persona for {character.name}</span>
+        </span>
+        <SunoPersonaPicker character={character} onSelect={onSelectPersona} />
+      </div>
+      <div className="field">
+        <label className="label" htmlFor={`suno-title-${stem.id}`}>
+          Song title <span>sent to Suno with this stem</span>
+        </label>
+        <input
+          id={`suno-title-${stem.id}`}
+          className="input"
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder={`dialogue ${stem.id}`}
+          spellCheck={false}
+        />
+      </div>
+      <div className="field">
+        <label className="label" htmlFor={`suno-tags-${stem.id}`}>
+          Style tags <span>music style prompt for this stem</span>
+        </label>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            id={`suno-tags-${stem.id}`}
+            className="input"
+            value={tags}
+            onChange={(event) => setTags(event.target.value)}
+            placeholder="audio drama radio play"
+            spellCheck={false}
+            style={{ flex: 1 }}
+          />
+          <button
+            type="button"
+            className="button button-secondary button-sm"
+            onClick={() => void runSuggest()}
+            disabled={suggesting}
+            title="Let the local LLM propose style tags (title stays untouched)"
+            aria-label="Suggest style tags with LLM"
+          >
+            {suggesting ? <span className="spinner" /> : <MagicWand size={14} weight="fill" />}
+          </button>
+        </div>
+      </div>
+      <div className="field">
+        <label className="label" htmlFor={`suno-weird-${stem.id}`}>
+          Weirdness{" "}
+          <span>{weirdness === null ? "auto" : weirdness}</span>
+        </label>
+        <div className="slider-row">
+          <input
+            id={`suno-weird-${stem.id}`}
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={weirdness ?? 50}
+            onChange={(event) => setWeirdness(Number(event.target.value))}
+          />
+          {weirdness !== null ? (
+            <button
+              type="button"
+              className="button button-ghost button-sm"
+              onClick={() => setWeirdness(null)}
+              title="Back to Suno default"
+            >
+              auto
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className="field">
+        <label className="label" htmlFor={`suno-style-${stem.id}`}>
+          Style influence{" "}
+          <span>{styleWeight === null ? "auto" : styleWeight}</span>
+        </label>
+        <div className="slider-row">
+          <input
+            id={`suno-style-${stem.id}`}
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={styleWeight ?? 20}
+            onChange={(event) => setStyleWeight(Number(event.target.value))}
+          />
+          {styleWeight !== null ? (
+            <button
+              type="button"
+              className="button button-ghost button-sm"
+              onClick={() => setStyleWeight(null)}
+              title="Back to engine default (20)"
+            >
+              auto
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className="field">
+        <label className="label" htmlFor={`suno-audio-${stem.id}`}>
+          Audio influence{" "}
+          <span>{audioWeight === null ? "auto" : audioWeight}</span>
+        </label>
+        <div className="slider-row">
+          <input
+            id={`suno-audio-${stem.id}`}
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={audioWeight ?? 50}
+            onChange={(event) => setAudioWeight(Number(event.target.value))}
+          />
+          {audioWeight !== null ? (
+            <button
+              type="button"
+              className="button button-ghost button-sm"
+              onClick={() => setAudioWeight(null)}
+              title="Back to Suno default"
+            >
+              auto
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className="field">
+        <label className="label" htmlFor={`suno-mv-${stem.id}`}>
+          Model <span>per-stem override</span>
+        </label>
+        <select
+          id={`suno-mv-${stem.id}`}
+          className="input"
+          value={mv}
+          onChange={(event) => setMv(event.target.value)}
+        >
+          <option value="">Character default</option>
+          <option value="chirp-hawk">v6 · chirp-hawk</option>
+          <option value="chirp-hawk-wild">v6 wild · chirp-hawk-wild</option>
+          <option value="chirp-goose">v6 mini · chirp-goose</option>
+          <option value="chirp-fenix">v5.5 · chirp-fenix</option>
+          <option value="chirp-crow">v5 · chirp-crow</option>
+          <option value="chirp-bluejay">v4.5+ · chirp-bluejay</option>
+          <option value="chirp-auk">v4.5 · chirp-auk</option>
+          <option value="chirp-v4">v4 · chirp-v4</option>
+          <option value="chirp-v3-5">v3.5 · chirp-v3-5</option>
+        </select>
+      </div>
+      <div className="field">
+        <label className="label" htmlFor={`suno-gender-${stem.id}`}>
+          Vocal gender <span>preset voices only</span>
+        </label>
+        <select
+          id={`suno-gender-${stem.id}`}
+          className="input"
+          value={vocalGender}
+          onChange={(event) => setVocalGender(event.target.value)}
+        >
+          <option value="">Auto</option>
+          <option value="f">Female</option>
+          <option value="m">Male</option>
+        </select>
+      </div>
+    </div>
+  );
+}
+
 function CastPanel({
   project,
   jobs,
@@ -138,7 +601,7 @@ function CastPanel({
 }: {
   project: Project;
   jobs: Record<string, Job>;
-  onDesign: (speaker: string) => void;
+  onDesign: (speaker: string, opts?: { name?: string; seed?: number }) => void;
   onUpload: (speaker: string, file: File) => void;
 }) {
   const lines = project.script.scenes.flatMap((scene) => scene.lines);
@@ -196,13 +659,8 @@ function CastPanel({
                   <div className="cast-voice">
                     {character.ref_file ? (
                       <span className="badge">voice sample ready</span>
-                    ) : isSuno ? (
-                      <span className="badge">
-                        {character.suno_persona_id
-                          ? "Suno persona"
-                          : "Suno preset voice"}
-                      </span>
-                    ) : isChatterbox ? (
+                    ) : null}
+                    {!character.ref_file && isChatterbox ? (
                       <label className="button button-secondary button-sm cast-upload">
                         <Waveform size={12} />
                         Upload voice
@@ -215,7 +673,8 @@ function CastPanel({
                           }}
                         />
                       </label>
-                    ) : isBreeze ? (
+                    ) : null}
+                    {!character.ref_file && isBreeze ? (
                       <button
                         type="button"
                         className="button button-secondary button-sm"
@@ -224,6 +683,22 @@ function CastPanel({
                       >
                         {busy ? <span className="spinner" /> : <Waveform size={12} />}
                         {busy ? "Designing…" : "Design voice"}
+                      </button>
+                    ) : null}
+                    {character.ref_file && isBreeze ? (
+                      <button
+                        type="button"
+                        className="button button-ghost button-sm"
+                        onClick={() =>
+                          onDesign(character.id, {
+                            name: `Voice ${(character.references?.length ?? 0) + 1}`,
+                            seed: 42 + (character.references?.length ?? 0),
+                          })
+                        }
+                        disabled={busy}
+                        title="Design an additional named voice for per-stem selection in Render"
+                      >
+                        Add voice
                       </button>
                     ) : null}
                   </div>
@@ -340,17 +815,49 @@ function RenderBoard({
   project,
   jobs,
   engines,
+  batch,
   onRender,
+  onRenderAll,
+  onShowError,
   onSelectTake,
   onEngineChange,
+  onRefVoiceChange,
+  onSelectPersona,
+  onSaveSunoFields,
+  onSuggestSunoStyle,
   onRefresh,
 }: {
   project: Project;
   jobs: Record<string, Job>;
   engines: EngineInfo[];
+  batch: {
+    state: "idle" | "running" | "paused_captcha" | "done";
+    current: Stem | null;
+    done: Stem[];
+    failed: { stem: Stem; message: string }[];
+    skipped: Stem[];
+    total: number;
+  };
   onRender: (stem: Stem) => void;
+  onRenderAll: (stems: Stem[], includeRendered: boolean) => void;
+  onShowError: (title: string, body: string) => void;
   onSelectTake: (stem: Stem, takeId: string) => void;
   onEngineChange: (stem: Stem, engine: string) => void;
+  onRefVoiceChange: (stem: Stem, refVoiceId: string) => void;
+  onSelectPersona: (speaker: string, persona: SunoPersona | null) => void;
+  onSaveSunoFields: (
+    stem: Stem,
+    fields: {
+      suno_title: string;
+      suno_tags: string;
+      suno_weirdness: number | null;
+      suno_style_weight: number | null;
+      suno_audio_weight: number | null;
+      suno_mv: string | null;
+      suno_vocal_gender: string | null;
+    },
+  ) => void;
+  onSuggestSunoStyle: (stem: Stem) => Promise<void>;
   onRefresh: () => void;
 }) {
   const byScene = project.script.scenes
@@ -394,6 +901,24 @@ function RenderBoard({
           </p>
         </div>
         <div className="panel-actions">
+          {batch.state === "running" ? (
+            <span className="panel-sub">
+              batch {Math.min(batch.done.length + 1, batch.total)}/{batch.total}
+              {batch.current ? ` · ${batch.current.speaker}` : ""}
+            </span>
+          ) : null}
+          {batch.state === "paused_captcha" ? (
+            <span className="render-warn">paused · verification needed</span>
+          ) : null}
+          <button
+            type="button"
+            className="button button-primary button-sm"
+            disabled={batch.state === "running" || project.stems.length === 0}
+            onClick={() => onRenderAll(project.stems, false)}
+            title="Render every stem that has no takes yet, one after another"
+          >
+            {batch.state === "running" ? "Rendering…" : "Render all"}
+          </button>
           <button type="button" className="button button-ghost button-sm" onClick={onRefresh}>
             Refresh
           </button>
@@ -416,6 +941,14 @@ function RenderBoard({
                 {stems.map((stem) => {
                   const selectedEngine = engineFor(stem);
                   const readyForStem = voiceReady(stem);
+                  const character = project.script.characters[stem.speaker];
+                  const refVoices = character?.references ?? [];
+                  const showRefVoice =
+                    (selectedEngine === "breeze" ||
+                      selectedEngine === "breeze-de" ||
+                      selectedEngine === "chatterbox") &&
+                    Boolean(character) &&
+                    (Boolean(character?.ref_file) || refVoices.length > 0);
                   const job = jobs[stem.id];
                   const realignJob = jobs[`${stem.id}:realign`];
                   const busy =
@@ -489,6 +1022,26 @@ function RenderBoard({
                             ))}
                           </select>
                         </label>
+                        {showRefVoice ? (
+                          <label className="cue-field">
+                            <span>Reference</span>
+                            <select
+                              value={stem.ref_voice_id ?? ""}
+                              onChange={(event) =>
+                                onRefVoiceChange(stem, event.target.value)
+                              }
+                              disabled={busy}
+                              title="Which of the speaker's designed voices to render with"
+                            >
+                              <option value="">Default voice</option>
+                              {refVoices.map((ref) => (
+                                <option key={ref.id} value={ref.id}>
+                                  {ref.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : null}
                       </div>
 
                       <div className="render-meta">
@@ -498,6 +1051,17 @@ function RenderBoard({
                         {take?.f0_hz ? <span>F0 {Math.round(take.f0_hz)} Hz</span> : null}
                         {take?.mfcc_sim ? <span>MFCC {take.mfcc_sim.toFixed(3)}</span> : null}
                       </div>
+
+                      {selectedEngine === "suno" &&
+                      project.script.characters[stem.speaker] ? (
+                        <SunoStemFields
+                          stem={stem}
+                          character={project.script.characters[stem.speaker]}
+                          onSelectPersona={onSelectPersona}
+                          onSave={onSaveSunoFields}
+                          onSuggest={onSuggestSunoStyle}
+                        />
+                      ) : null}
 
                       {stem.takes.length > 1 ? (
                         <div className="take-list">
@@ -555,7 +1119,18 @@ function RenderBoard({
                       ) : null}
 
                       {job?.status === "failed" ? (
-                        <p className="render-error">{job.error?.split("\n")[0]}</p>
+                        <div className="render-error-row">
+                          <p className="render-error">
+                            {actionableError(job.error ?? "")}
+                          </p>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => onShowError("Render failed", job.error ?? "")}
+                          >
+                            Details
+                          </button>
+                        </div>
                       ) : null}
 
                       <div className="render-actions">
@@ -1213,6 +1788,16 @@ export function ProjectPage() {
   const [jobs, setJobs] = useState<Record<string, Job>>({});
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [error, setError] = useState("");
+  const [batch, setBatch] = useState<{
+    state: "idle" | "running" | "paused_captcha" | "done";
+    current: Stem | null;
+    done: Stem[];
+    failed: { stem: Stem; message: string }[];
+    skipped: Stem[];
+    total: number;
+  }>({ state: "idle", current: null, done: [], failed: [], skipped: [], total: 0 });
+  const [errorDialog, setErrorDialog] = useState<{ title: string; body: string } | null>(null);
+  const [recheckingCaptcha, setRecheckingCaptcha] = useState(false);
 
   useEffect(() => {
     api.engines().then(setEngines).catch(() => setEngines([]));
@@ -1362,6 +1947,52 @@ export function ProjectPage() {
     [project, trackJob],
   );
 
+  const renderAll = useCallback(
+    async (stems: Stem[], includeRendered: boolean) => {
+      if (!project) return;
+      const queue = stems.filter((stem) => includeRendered || stem.takes.length === 0);
+      if (queue.length === 0) return;
+      setBatch({ state: "running", done: [], skipped: [], failed: [], current: null, total: queue.length });
+      for (const stem of queue) {
+        setBatch((prev) => ({ ...prev, current: stem }));
+        let job: Job;
+        try {
+          job = await api.renderStem(project.id, stem.id, {
+            candidates: 2,
+            cfg_scale: stem.cfg_scale,
+            seed: stem.seed,
+            engine: stem.engine ?? undefined,
+          });
+        } catch (reason) {
+          const message = reason instanceof Error ? reason.message : "render failed";
+          setBatch((prev) => ({ ...prev, failed: [...prev.failed, { stem, message }] }));
+          continue;
+        }
+        trackJob(stem.id, job);
+        const finished = await waitForJob(job.id).catch(() => job);
+        if (finished.status === "succeeded") {
+          setBatch((prev) => ({ ...prev, done: [...prev.done, stem] }));
+          await refreshProject();
+          continue;
+        }
+        const message = finished.error ?? finished.status;
+        if (message.includes("CAPTCHA_REQUIRED") || /turnstile|verify you are human/i.test(message)) {
+          setBatch((prev) => ({
+            ...prev,
+            state: "paused_captcha",
+            failed: [...prev.failed, { stem, message }],
+          }));
+          setErrorDialog({ title: `Verification needed · ${stem.speaker}`, body: message });
+          return;
+        }
+        setBatch((prev) => ({ ...prev, failed: [...prev.failed, { stem, message }] }));
+      }
+      setBatch((prev) => ({ ...prev, state: "done", current: null }));
+      await refreshProject();
+    },
+    [project, trackJob, refreshProject],
+  );
+
   const changeEngine = useCallback(
     async (stem: Stem, engine: string) => {
       if (!project) return;
@@ -1370,6 +2001,64 @@ export function ProjectPage() {
         setProject(updated);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Could not change engine");
+      }
+    },
+    [project],
+  );
+
+  const changeRefVoice = useCallback(
+    async (stem: Stem, refVoiceId: string) => {
+      if (!project) return;
+      try {
+        const updated = await api.updateStem(project.id, stem.id, {
+          ref_voice_id: refVoiceId,
+        });
+        setProject(updated);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not change reference voice");
+      }
+    },
+    [project],
+  );
+
+  const saveSunoFields = useCallback(
+    async (
+      stem: Stem,
+      fields: {
+        suno_title: string;
+        suno_tags: string;
+        suno_weirdness: number | null;
+        suno_style_weight: number | null;
+        suno_audio_weight: number | null;
+        suno_mv: string | null;
+        suno_vocal_gender: string | null;
+      },
+    ) => {
+      if (!project) return;
+      setError("");
+      try {
+        const updated = await api.updateStem(project.id, stem.id, fields);
+        setProject(updated);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not save Suno settings");
+      }
+    },
+    [project],
+  );
+
+  const suggestSunoStyle = useCallback(
+    async (stem: Stem) => {
+      if (!project) return;
+      setError("");
+      try {
+        const updated = await api.suggestSunoStyle(project.id, stem.id, {
+          method: "llm",
+          overwrite: true,
+          only: ["tags"],
+        });
+        setProject(updated);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not suggest style tags");
       }
     },
     [project],
@@ -1390,7 +2079,7 @@ export function ProjectPage() {
   );
 
   const designVoice = useCallback(
-    async (speaker: string) => {
+    async (speaker: string, opts?: { name?: string; seed?: number }) => {
       if (!project) return;
       const character = project.script.characters[speaker];
       if (!character) return;
@@ -1412,7 +2101,8 @@ export function ProjectPage() {
               : "") +
             "Speak in the character's baseline mood, clearly and without music or room noise.",
           cfg_scale: 4.0,
-          seed: 42,
+          seed: opts?.seed ?? 42,
+          name: opts?.name,
         });
         trackJob(`char:${speaker}`, job);
       } catch (reason) {
@@ -1445,6 +2135,45 @@ export function ProjectPage() {
     },
     [project],
   );
+
+  const selectPersona = useCallback(
+    async (speaker: string, persona: SunoPersona | null) => {
+      if (!project) return;
+      setError("");
+      try {
+        const updated = await api.updateCharacter(project.id, speaker, {
+          suno_persona_id: persona?.id ?? "",
+          suno_persona_model: persona?.persona_model ?? "",
+        });
+        setProject(updated);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not set Suno voice");
+      }
+    },
+    [project],
+  );
+
+  const recheckCaptcha = useCallback(async () => {
+    setRecheckingCaptcha(true);
+    try {
+      await api.requestSunoCaptcha();
+      setErrorDialog(null);
+      const paused = batch.state === "paused_captcha";
+      setBatch((prev) => ({ ...prev, state: "idle" }));
+      if (paused && project) {
+        // Resume: rendered stems have takes and are skipped; the failed one
+        // has none and is retried first.
+        void renderAll(project.stems, false);
+      }
+    } catch (reason) {
+      setErrorDialog({
+        title: "Verification still blocked",
+        body: reason instanceof Error ? reason.message : "Captcha request failed",
+      });
+    } finally {
+      setRecheckingCaptcha(false);
+    }
+  }, [batch.state, project, renderAll]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -1796,9 +2525,16 @@ export function ProjectPage() {
           project={project}
           jobs={jobs}
           engines={engines}
+          batch={batch}
           onRender={renderStem}
+          onRenderAll={(stems, includeRendered) => void renderAll(stems, includeRendered)}
+          onShowError={(title, body) => setErrorDialog({ title, body })}
           onSelectTake={(stem, takeId) => void selectTake(stem, takeId)}
           onEngineChange={(stem, engine) => void changeEngine(stem, engine)}
+          onRefVoiceChange={(stem, refVoiceId) => void changeRefVoice(stem, refVoiceId)}
+          onSelectPersona={(speaker, persona) => void selectPersona(speaker, persona)}
+          onSaveSunoFields={(stem, fields) => void saveSunoFields(stem, fields)}
+          onSuggestSunoStyle={suggestSunoStyle}
           onRefresh={() => void refreshProject()}
         />
       ) : activeStep === "sound" ? (
@@ -1817,6 +2553,16 @@ export function ProjectPage() {
           onRefresh={() => void refreshProject()}
         />
       )}
+
+      {errorDialog ? (
+        <ErrorDialog
+          title={errorDialog.title}
+          body={errorDialog.body}
+          onClose={() => setErrorDialog(null)}
+          onRecheck={() => void recheckCaptcha()}
+          rechecking={recheckingCaptcha}
+        />
+      ) : null}
     </div>
   );
 }

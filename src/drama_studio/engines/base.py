@@ -49,6 +49,10 @@ class TTSEngine(Protocol):
 
     def unload(self) -> None: ...
 
+    def available(self) -> bool:
+        """Cheap, non-loading reachability check for status displays."""
+        return True
+
     def design_reference(self, request: ReferenceRequest) -> ReferenceResult: ...
 
     def render_stem(
@@ -77,6 +81,9 @@ class BaseEngine:
 
     def unload(self) -> None:
         self._loaded = False
+
+    def available(self) -> bool:
+        return True
 
     def design_reference(self, request: ReferenceRequest) -> ReferenceResult:
         raise UnsupportedOperation(

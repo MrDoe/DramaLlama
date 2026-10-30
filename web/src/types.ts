@@ -15,9 +15,29 @@ export interface Character {
   ref_instruction?: string | null;
   ref_file?: string | null;
   suno_persona_id?: string | null;
+  suno_persona_model?: string | null;
   suno_mv?: string;
   baseline_instruct: string;
   locked: boolean;
+  f0_hz?: number | null;
+  references?: RefVoice[];
+}
+
+export interface SunoPersona {
+  id: string | null;
+  name: string;
+  description: string;
+  persona_model: string | null;
+  image_url?: string | null;
+  root_clip_id?: string | null;
+}
+
+export interface RefVoice {
+  id: string;
+  name: string;
+  file: string;
+  ref_text?: string | null;
+  ref_instruction?: string | null;
   f0_hz?: number | null;
 }
 
@@ -151,6 +171,15 @@ export interface Stem {
   cfg_scale: number;
   seed: number;
   takes: Take[];
+  suno_lyrics?: string | null;
+  suno_title?: string | null;
+  suno_tags?: string | null;
+  suno_weirdness?: number | null;
+  suno_style_weight?: number | null;
+  suno_audio_weight?: number | null;
+  suno_mv?: string | null;
+  suno_vocal_gender?: string | null;
+  ref_voice_id?: string | null;
 }
 
 export interface AlignedLine {
@@ -225,4 +254,5 @@ export interface EngineInfo {
   supports_reference_clone: boolean;
   voice_mode: "reference" | "preset";
   description: string;
+  available?: boolean;
 }

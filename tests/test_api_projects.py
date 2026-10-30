@@ -11,6 +11,9 @@ class FailingLLM:
     def chat_json(self, *args, **kwargs):
         raise LLMError("offline in tests")
 
+    def chat_text(self, *args, **kwargs):
+        raise LLMError("offline in tests")
+
 
 def make_client(tmp_path):
     app = create_app(

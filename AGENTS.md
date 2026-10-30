@@ -41,9 +41,14 @@ CLI alias are intentionally unchanged.
   paraphrase (<85% substring coverage) and the API falls back to deterministic.
 - **Breeze reference clips:** never send a `speaker` field with a reference;
   it prepends `[S0]` and overrides the reference timbre.
-- **Chatterbox needs a running server** at `CHATTERBOX_URL` (default
-  `http://127.0.0.1:4123`). It clones an uploaded voice sample; without one it
-  falls back to the server's default voice. It has no voice-design mode.
+- **Chatterbox runs in a docker container** (`DRAMA_LLAMA_CHATTERBOX_CONTAINER`,
+  default `chatterbox-tts-api`, empty disables) serving `CHATTERBOX_URL`
+  (default `http://127.0.0.1:4123`). Drama Llama owns its lifecycle:
+  `ChatterboxEngine.load()` runs `docker start` and waits for `/health`,
+  `unload()` and the end of `render_stem()` run `docker stop`, so its ~4.4 GB
+  of VRAM is only held while rendering. It clones an uploaded voice sample;
+  without one it falls back to the server's default voice. It has no
+  voice-design mode.
 - **Suno needs the BetterSuno extension** and a live `suno.com` tab. The
   `suno-bridge/` sidecar owns `ws://127.0.0.1:9423`; only one process can own
   it. Download music as WAV (the M4A path is not reliably decodable).
@@ -54,8 +59,10 @@ CLI alias are intentionally unchanged.
   tests under `tests/`.
 - App-specific engine code in `engines/`; `vendor/` and `suno-bridge/node_modules/`
   stay read-only.
-- `suno-bridge/` is a Node HTTP sidecar that imports the installed
-  `bettersuno-mcp` modules. It must be started separately from `serve`.
+- `suno-bridge/` is a Node HTTP sidecar that imports `bettersuno-mcp` from the
+  `third_party/bettersuno-mcp` git subproject (pinned commit; `npm ci
+  --ignore-scripts` inside it after clone — the postinstall script is local-only
+  and gitignored upstream). `serve` auto-starts it (`--no-suno-bridge` opts out).
 - Runtime data under `data/` (gitignored). Projects are file-based:
   `data/projects/<slug>/project.json`, `refs/`, `audio/takes/`, `lines/`, `mix/`.
 - SQLite only for the job queue, never for project content.
@@ -76,8 +83,31 @@ cd web && npm run build
 ~/.venvs/qwen3tts/bin/drama-llama breeze-de           # German Breeze sidecar (port 8137)
 ```
 
-The Suno sidecar needs `bettersuno-mcp` installed under
-`suno-bridge/node_modules` and the BetterSuno browser extension connected.
+The Suno sidecar resolves `bettersuno-mcp` via `suno-bridge/node_modules`
+(symlink into `third_party/`) and needs the BetterSuno browser extension
+connected. After a fresh clone run `git submodule update --init` plus
+`npm ci --ignore-scripts` in `third_party/bettersuno-mcp`.
+
+## UI verification (mandatory)
+
+Every UI change must be verified in a live browser via firefox-devtools
+against the running app (`./start-ui.sh` or `drama-llama serve` on :8770) —
+`npm run build` + pytest alone are not enough. Navigate to the affected page,
+operate the real controls (selects, buttons, audio playback), and assert
+observable behavior, not just DOM presence.
+
+- Drive the automation browser (fresh profile), never the user's session
+  browser. Create scratch projects for tests and delete them afterwards.
+- `take_snapshot` truncates deep subtrees — use `evaluate_script` (takes
+  `function`, not `script`) for targeted reads, `click_by_uid` for trusted
+  clicks (synthetic `el.click()` carries no user gesture: media `play()`
+  then rejects `NotAllowedError`, which proves wiring but not audibility).
+- `navigate_page` acts on the selected tab — confirm with `list_pages`
+  afterwards; a wrong-tab navigation kills page state.
+- Firefox cannot demux Suno `m4a-opus` preview streams (`NotSupportedError`
+  in `<audio>`); preview via the clip's mp4 `video_url`, which decodes.
+- Never kill processes by cmdline-substring patterns that also match your own
+  shell (classic self-kill footgun) — kill exact PIDs, or `fuser -k` the port.
 
 ## Gotchas
 
@@ -95,8 +125,10 @@ The Suno sidecar needs `bettersuno-mcp` installed under
 - Suno `download_song` can fail on M4A even when a progressive media URL is
   listed; request `format: "wav"` and let Suno convert. The bridge's `/download`
   endpoint defaults to the caller's format, so Drama Llama always asks for WAV.
-- Chatterbox is an external GPU service; `EngineManager` does not unload it.
-  Its server owns the GPU memory, not the Drama Llama worker process.
+- Chatterbox is an external GPU service in docker; its server owns the GPU
+  memory, not the Drama Llama worker process. The engine stops the container
+  on unload and after each render — never leave it running idle; the next
+  render restarts it automatically.
 
 <!-- BEGIN opencode-rag -->
 ## Code Navigation

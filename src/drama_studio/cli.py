@@ -6,9 +6,20 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
+from urllib.parse import urlparse
 
-from .config import BREEZE_DE_URL, DATA_DIR, DB_PATH, HOST, PORT, PROJECTS_DIR, ensure_dirs
+from .config import (
+    BREEZE_DE_URL,
+    DATA_DIR,
+    DB_PATH,
+    HOST,
+    PORT,
+    PROJECTS_DIR,
+    SUNO_BRIDGE_URL,
+    ensure_dirs,
+)
 from .handlers import default_handlers
 from .jobs import JobQueue
 from .worker import Worker
@@ -34,6 +45,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     from .api import create_app
 
+    ensure_dirs()
+    bridge_proc = _ensure_suno_bridge() if args.suno_bridge else None
+
     if args.worker:
         queue = _queue()
         worker = Worker(
@@ -46,13 +60,112 @@ def cmd_serve(args: argparse.Namespace) -> int:
         thread.start()
         print(f"worker started in-process (poll {args.poll}s)")
 
-    uvicorn.run(
-        create_app(),
-        host=args.host,
-        port=args.port,
-        log_level=args.log_level,
-    )
+    try:
+        uvicorn.run(
+            create_app(),
+            host=args.host,
+            port=args.port,
+            log_level=args.log_level,
+        )
+    finally:
+        if bridge_proc is not None and bridge_proc.poll() is None:
+            bridge_proc.terminate()
     return 0
+
+
+def _suno_bridge_port() -> int:
+    """HTTP port of the Suno sidecar (env override wins, else SUNO_BRIDGE_URL)."""
+    if os.environ.get("SUNO_BRIDGE_PORT"):
+        return int(os.environ["SUNO_BRIDGE_PORT"])
+    try:
+        return urlparse(SUNO_BRIDGE_URL).port or 9430
+    except ValueError:
+        return 9430
+
+
+def _suno_bridge_healthy(port: int) -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health", timeout=2
+        ) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def _tcp_in_use(port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _ensure_suno_bridge() -> subprocess.Popen | None:
+    """Start the BetterSuno sidecar if needed. Best-effort: never fail `serve`.
+
+    Returns the child process when this command owns it (caller terminates it
+    on shutdown), else None when the bridge was already up or could not start.
+    """
+    port = _suno_bridge_port()
+    if _suno_bridge_healthy(port):
+        print(f"Suno bridge already running on http://127.0.0.1:{port}")
+        return None
+    root = Path(__file__).resolve().parents[2]
+    script = root / "suno-bridge" / "server.mjs"
+    if not script.exists():
+        print(f"warning: {script} not found; Suno engine will be unavailable",
+              file=sys.stderr)
+        return None
+    ws_port = int(os.environ.get("MCP_WS_PORT", "9423"))
+    if _tcp_in_use(ws_port):
+        print(
+            f"warning: ws://127.0.0.1:{ws_port} is already owned (likely the opencode "
+            "bettersuno-mcp server); skipping Suno bridge auto-start. "
+            "Stop the other owner or run `drama-llama suno-bridge` manually.",
+            file=sys.stderr,
+        )
+        return None
+    env = dict(os.environ)
+    env.setdefault("BETTERSUNO_MCP_DIR", str(Path.home() / "code" / "bettersuno-mcp"))
+    env.setdefault("SUNO_BRIDGE_PORT", str(port))
+    log_path = DATA_DIR / "suno-bridge.log"
+    try:
+        log_file = open(log_path, "ab")
+    except OSError as exc:
+        print(f"warning: cannot open {log_path}: {exc}; Suno bridge not started",
+              file=sys.stderr)
+        return None
+    try:
+        proc = subprocess.Popen(
+            ["node", str(script)], env=env, stdout=log_file, stderr=subprocess.STDOUT
+        )
+        log_file.close()  # child keeps its own copy; parent must not hold it open
+    except FileNotFoundError:
+        print("warning: node not found; Suno engine will be unavailable",
+              file=sys.stderr)
+        log_file.close()
+        return None
+    for _ in range(50):
+        if _suno_bridge_healthy(port):
+            print(f"Suno bridge on http://127.0.0.1:{port} (log {log_path})")
+            return proc
+        if proc.poll() is not None:
+            print(
+                f"warning: Suno bridge exited during startup; see {log_path}. "
+                "Suno engine will be unavailable.",
+                file=sys.stderr,
+            )
+            return None
+        time.sleep(0.2)
+    print(
+        f"warning: Suno bridge did not answer on :{port} within 10s; "
+        f"see {log_path}. Continuing without it.",
+        file=sys.stderr,
+    )
+    return proc
 
 
 def cmd_worker(args: argparse.Namespace) -> int:
@@ -184,6 +297,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=PORT)
     p.add_argument("--log-level", default="info")
     p.add_argument("--worker", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument(
+        "--suno-bridge",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="auto-start the BetterSuno sidecar (:9430) with serve",
+    )
     p.add_argument("--poll", type=float, default=0.5)
     p.add_argument("--stale-after", type=float, default=300)
     p.set_defaults(func=cmd_serve)

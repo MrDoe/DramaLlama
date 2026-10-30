@@ -8,6 +8,6 @@
     "start": "node server.mjs"
   },
   "dependencies": {
-    "bettersuno-mcp": "file:../../bettersuno-mcp"
+    "bettersuno-mcp": "file:../third_party/bettersuno-mcp"
   }
 }

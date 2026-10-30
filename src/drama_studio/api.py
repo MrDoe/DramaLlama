@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
+import httpx
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -16,17 +17,27 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .config import DB_PATH, PROJECTS_DIR, WEB_DIST
-from .engines import all_engine_info
+from .config import DB_PATH, PROJECTS_DIR, SUNO_BRIDGE_URL, WEB_DIST
+from .engines import ENGINES, all_engine_info
+
+def _engine_available(name: str) -> bool:
+    factory = ENGINES.get(name)
+    if factory is None:
+        return False
+    try:
+        return bool(factory().available())
+    except Exception:
+        return False
 from .jobs import JobQueue
 from .llm import (
+    LLMClient,
     LLMError,
     LLMParseError,
-    OllamaClient,
-    SYSTEM_PROMPT,
-    _json_schema,
     llm_parse_script,
-    parse_llm_content,
+    make_llm_client,
+    make_llm_client_for,
+    normalize_messages,
+    parse_normalized,
 )
 from .models import (
     Cue,
@@ -39,10 +50,17 @@ from .models import (
     ProjectSettings,
     Script,
 )
+from .settings import preview_llm, resolve_llm, resolve_suno, write_llm, write_suno
 from .sfx import SfxLibrary
 from .stems import build_stems
 from .store import ProjectStore
 from .suno import SunoBridge, SunoError
+from .suno_lyrics import (
+    format_suno_lyrics,
+    llm_format_suno_lyrics,
+    llm_suggest_suno_style,
+    suggest_suno_style_deterministic,
+)
 
 
 class JobCreate(BaseModel):
@@ -81,6 +99,9 @@ class ReferenceBody(BaseModel):
     ref_instruction: str | None = None
     cfg_scale: float = 4.0
     seed: int = 42
+    # Optional display name: stores the design as an additional named voice
+    # instead of only replacing the character default.
+    name: str | None = None
 
 
 class RenderBody(BaseModel):
@@ -88,12 +109,48 @@ class RenderBody(BaseModel):
     cfg_scale: float | None = None
     seed: int | None = None
     engine: str | None = None
+    # Explicit Suno lyric sheet override for this render. When None the
+    # stored stem sheet is used.
+    suno_lyrics: str | None = None
+    # Reference voice override (a RefVoice id of the speaker).
+    ref_voice_id: str | None = None
+    # Per-render Suno params (sliders/model/gender); None = stem value.
+    suno_weirdness: float | None = Field(default=None, ge=0, le=100)
+    suno_style_weight: float | None = Field(default=None, ge=0, le=100)
+    suno_audio_weight: float | None = Field(default=None, ge=0, le=100)
+    suno_mv: str | None = None
+    suno_vocal_gender: str | None = None
 
 
 class StemUpdate(BaseModel):
     engine: str | None = None
     cfg_scale: float | None = None
     seed: int | None = None
+    # Manual lyric sheet edit (empty string clears back to the build default).
+    suno_lyrics: str | None = None
+    # Per-stem Suno title/tags (empty string clears back to engine defaults).
+    suno_title: str | None = None
+    suno_tags: str | None = None
+    # Per-stem Suno params (empty/None clears back to defaults).
+    suno_weirdness: float | None = Field(default=None, ge=0, le=100)
+    suno_style_weight: float | None = Field(default=None, ge=0, le=100)
+    suno_audio_weight: float | None = Field(default=None, ge=0, le=100)
+    suno_mv: str | None = None
+    suno_vocal_gender: str | None = None
+    # Reference voice override (RefVoice id, empty string clears to default).
+    ref_voice_id: str | None = None
+
+
+class SunoLyricsBody(BaseModel):
+    method: str = "llm"
+
+
+class SunoStyleBody(BaseModel):
+    method: str = "llm"
+    overwrite: bool = False
+    # Restrict the suggestion to a subset of {"title", "tags"}.
+    # The tags wand passes ["tags"] so the title is never touched.
+    only: list[str] | None = None
 
 
 class SunoGenerate(BaseModel):
@@ -130,17 +187,34 @@ class CharacterUpdate(BaseModel):
     ref_text: str | None = None
     ref_instruction: str | None = None
     baseline_instruct: str | None = None
+    # Suno voice selection. suno_persona_id "": clear back to preset voice.
+    suno_persona_id: str | None = None
+    suno_persona_model: str | None = None
+    suno_mv: str | None = None
+
+
+class LlmUpdate(BaseModel):
+    api: str | None = None
+    url: str | None = None
+    model: str | None = None
+    # null/absent: keep the stored key; "": clear it.
+    api_key: str | None = None
+
+
+class ConfigUpdate(BaseModel):
+    llm: LlmUpdate | None = None
+    suno: dict[str, str] | None = None
 
 
 def create_app(
     db_path: str | Path | None = None,
     projects_dir: str | Path | None = None,
-    llm_client: OllamaClient | None = None,
+    llm_client: LLMClient | None = None,
     sfx_library: SfxLibrary | None = None,
 ) -> FastAPI:
     queue = JobQueue(db_path or DB_PATH)
     store = ProjectStore(Path(projects_dir) if projects_dir else PROJECTS_DIR)
-    llm = llm_client or OllamaClient()
+    llm = llm_client or make_llm_client()
     sfx = sfx_library or SfxLibrary()
 
     @asynccontextmanager
@@ -168,7 +242,11 @@ def create_app(
             "version": __version__,
             "jobs": queue.stats(),
             "engines": [
-                {**info.__dict__, "languages": sorted(info.languages)}
+                {
+                    **info.__dict__,
+                    "languages": sorted(info.languages),
+                    "available": _engine_available(info.name),
+                }
                 for info in all_engine_info()
             ],
         }
@@ -179,9 +257,96 @@ def create_app(
             {
                 **info.__dict__,
                 "languages": sorted(info.languages),
+                "available": _engine_available(info.name),
             }
             for info in all_engine_info()
         ]
+
+    def llm_status() -> dict[str, Any]:
+        """Public LLM config. Never includes secrets (no API keys)."""
+        settings, sources = resolve_llm()
+        provider = getattr(llm, "provider", "local")
+        if provider not in ("local", "cloud"):
+            provider = "local"
+        return {
+            "llm": {
+                "model": getattr(llm, "model", settings.model),
+                "provider": provider,
+                "api": getattr(llm, "api_name", settings.api),
+                "url": settings.url,
+                "apiKeyConfigured": bool(
+                    getattr(llm, "api_key", settings.api_key)
+                ),
+                "sources": sources,
+            },
+            "suno": suno_block(),
+        }
+
+    def suno_block() -> dict[str, Any]:
+        suno, suno_sources = resolve_suno()
+        return {"plan": suno.plan, "sources": suno_sources}
+
+    @app.get("/api/config")
+    def config() -> dict[str, Any]:
+        return llm_status()
+
+    @app.put("/api/config")
+    def update_config(body: ConfigUpdate) -> dict[str, Any]:
+        nonlocal llm
+        patch = {}
+        if body.llm is not None:
+            patch = {
+                key: value
+                for key, value in body.llm.model_dump().items()
+                if value is not None
+            }
+        try:
+            if patch:
+                write_llm(patch)
+            if body.suno is not None:
+                write_suno(body.suno)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if patch:
+            llm = make_llm_client()
+            app.state.llm = llm
+        return llm_status()
+
+    @app.post("/api/config/test")
+    def test_config(body: ConfigUpdate | None = None) -> dict[str, Any]:
+        patch = {}
+        if body is not None and body.llm is not None:
+            patch = {
+                key: value
+                for key, value in body.llm.model_dump().items()
+                if value is not None
+            }
+        try:
+            settings = preview_llm(patch)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        client = make_llm_client_for(settings)
+        if client.api_name == "openai":
+            result = client.check()
+            ok, usable, excluded, error = (
+                result["ok"],
+                result["models"],
+                result["excluded"],
+                result["error"],
+            )
+        else:
+            ok = client.available()
+            usable, excluded = client.probe_models() if ok else ([], [])
+            error = None if ok else f"no response at {settings.url}"
+        return {
+            "ok": ok,
+            "api": settings.api,
+            "provider": client.provider,
+            "model": settings.model,
+            "models": usable,
+            "excluded": excluded,
+            "error": error,
+        }
 
     def project_or_404(project_id: str) -> Project:
         project = store.find(project_id)
@@ -331,22 +496,10 @@ def create_app(
 
         def generate():
             client = app.state.llm
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Language: {'German' if project.language == 'de' else 'English'}\n"
-                        "Parse this script into the JSON schema:\n\n"
-                        f"{project.raw_script}"
-                    ),
-                },
-            ]
             collected = ""
             try:
                 for chunk in client.chat_stream(
-                    messages,
-                    schema=_json_schema(),
+                    normalize_messages(project.raw_script, project.language),
                     temperature=0.2,
                     keep_alive=LLM_KEEP_ALIVE if False else 0,
                     model=None,
@@ -357,7 +510,9 @@ def create_app(
                 yield f"event: error\ndata: {json.dumps(str(exc))}\n\n"
                 return
             try:
-                result = parse_llm_content(collected, project.raw_script, project.language)
+                result = parse_normalized(
+                    collected, project.raw_script, project.language
+                )
                 result.script.title = project.title
                 updated = store.reparse(
                     project,
@@ -387,6 +542,113 @@ def create_app(
     def build_project_stems(project_id: str) -> dict[str, Any]:
         project = project_or_404(project_id)
         project.stems = build_stems(project)
+        project = store.save(project)
+        return project.model_dump(mode="json")
+
+    @app.post("/api/projects/{project_id}/stems/{stem_id}/suno-lyrics")
+    def suno_lyrics(project_id: str, stem_id: str, body: SunoLyricsBody) -> dict[str, Any]:
+        """(Re)build a stem's Suno lyric sheet.
+
+        ``method="deterministic"`` maps each line's direction metadata to
+        ``[...]`` tags instantly. ``method="llm"`` (default) asks the local LLM
+        for richer delivery tags; dialogue stays verbatim and the sheet is
+        rejected with 502 when the model drops or rewrites a line.
+        """
+        project = project_or_404(project_id)
+        stem = next((item for item in project.stems if item.id == stem_id), None)
+        if stem is None:
+            raise HTTPException(status_code=404, detail="stem not found")
+        if body.method not in {"deterministic", "llm"}:
+            raise HTTPException(status_code=400, detail="method must be deterministic or llm")
+        character = project.script.characters.get(stem.speaker)
+        by_id = {
+            line.id: line
+            for scene in project.script.scenes
+            for line in scene.lines
+        }
+        lines = [by_id[line_id] for line_id in stem.line_ids if line_id in by_id]
+        if not lines:
+            raise HTTPException(status_code=400, detail="stem has no lines")
+        heading = next(
+            (scene.heading for scene in project.script.scenes if scene.id == stem.scene),
+            "",
+        )
+        if body.method == "deterministic":
+            stem.suno_lyrics = format_suno_lyrics(lines, character, heading)
+            project = store.save(project)
+            return project.model_dump(mode="json")
+        if any(
+            job.type in {"stem.render", "reference.design"}
+            for job in queue.list_jobs("running", 50)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="GPU is rendering; wait for the stem to finish before LLM lyrics",
+            )
+        try:
+            stem.suno_lyrics = llm_format_suno_lyrics(
+                lines, character=character, scene_heading=heading, client=llm
+            )
+        except (LLMParseError, LLMError) as exc:
+            raise HTTPException(status_code=502, detail=f"Suno lyrics LLM failed: {exc}")
+        project = store.save(project)
+        return project.model_dump(mode="json")
+
+    @app.post("/api/projects/{project_id}/stems/{stem_id}/suno-style")
+    def suno_style(project_id: str, stem_id: str, body: SunoStyleBody) -> dict[str, Any]:
+        """Prefill a stem's Suno title/tags.
+
+        ``method="deterministic"`` composes tags from direction metadata
+        instantly; ``method="llm"`` (default) asks the local LLM for mood-fit
+        tags. Only blank fields are filled unless ``overwrite`` is true.
+        """
+        project = project_or_404(project_id)
+        stem = next((item for item in project.stems if item.id == stem_id), None)
+        if stem is None:
+            raise HTTPException(status_code=404, detail="stem not found")
+        if body.method not in {"deterministic", "llm"}:
+            raise HTTPException(status_code=400, detail="method must be deterministic or llm")
+        only = body.only if body.only is not None else ["title", "tags"]
+        if unknown := [name for name in only if name not in {"title", "tags"}]:
+            raise HTTPException(
+                status_code=400, detail=f"unknown style fields: {unknown}"
+            )
+        character = project.script.characters.get(stem.speaker)
+        by_id = {
+            line.id: line
+            for scene in project.script.scenes
+            for line in scene.lines
+        }
+        lines = [by_id[line_id] for line_id in stem.line_ids if line_id in by_id]
+        if not lines:
+            raise HTTPException(status_code=400, detail="stem has no lines")
+        heading = next(
+            (scene.heading for scene in project.script.scenes if scene.id == stem.scene),
+            "",
+        )
+        if body.method == "deterministic":
+            suggestion = suggest_suno_style_deterministic(lines, character, heading)
+        else:
+            if any(
+                job.type in {"stem.render", "reference.design"}
+                for job in queue.list_jobs("running", 50)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="GPU is rendering; wait for the stem to finish before LLM style",
+                )
+            try:
+                suggestion = llm_suggest_suno_style(
+                    lines, character=character, scene_heading=heading, client=llm
+                )
+            except (LLMParseError, LLMError) as exc:
+                raise HTTPException(status_code=502, detail=f"Suno style LLM failed: {exc}")
+        if not stem.suno_title or body.overwrite:
+            if "title" in only:
+                stem.suno_title = suggestion["title"] or stem.suno_title
+        if not stem.suno_tags or body.overwrite:
+            if "tags" in only:
+                stem.suno_tags = suggestion["tags"] or stem.suno_tags
         project = store.save(project)
         return project.model_dump(mode="json")
 
@@ -450,6 +712,7 @@ def create_app(
                 "cfg_scale": body.cfg_scale,
                 "seed": body.seed,
                 "engine": character.engine,
+                "name": body.name,
             },
             priority=5,
         )
@@ -469,11 +732,18 @@ def create_app(
         engine_name = body.engine or stem.engine or project.default_engine or (
             "breeze" if project.language == "en" else "chatterbox"
         )
-        if engine_name in {"breeze", "breeze-de"} and not character.ref_file:
-            raise HTTPException(
-                status_code=409,
-                detail=f"design a reference voice for {stem.speaker} first",
-            )
+        if engine_name in {"breeze", "breeze-de"}:
+            voice_ok = bool(character.ref_file)
+            if not voice_ok and (body.ref_voice_id or stem.ref_voice_id):
+                voice_ok = any(
+                    item.id == (body.ref_voice_id or stem.ref_voice_id)
+                    for item in character.references
+                )
+            if not voice_ok:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"design a reference voice for {stem.speaker} first",
+                )
         existing = active_job(project_id, "stem.render", stem_id)
         if existing is not None:
             return existing.model_dump(mode="json")
@@ -486,6 +756,13 @@ def create_app(
                 "cfg_scale": body.cfg_scale,
                 "seed": body.seed,
                 "engine": engine_name,
+                "suno_lyrics": body.suno_lyrics,
+                "ref_voice_id": body.ref_voice_id,
+                "suno_weirdness": body.suno_weirdness,
+                "suno_style_weight": body.suno_style_weight,
+                "suno_audio_weight": body.suno_audio_weight,
+                "suno_mv": body.suno_mv,
+                "suno_vocal_gender": body.suno_vocal_gender,
             },
             priority=10,
         )
@@ -506,7 +783,7 @@ def create_app(
                 )
             except StopIteration as exc:
                 raise HTTPException(status_code=400, detail="unknown engine") from exc
-            if project.language not in info.languages:
+            if not info.language_agnostic and project.language not in info.languages:
                 raise HTTPException(
                     status_code=400,
                     detail=f"{body.engine} does not support {project.language}",
@@ -516,6 +793,30 @@ def create_app(
             stem.cfg_scale = body.cfg_scale
         if body.seed is not None:
             stem.seed = body.seed
+        if body.suno_lyrics is not None:
+            stem.suno_lyrics = body.suno_lyrics.strip() or None
+        if body.suno_title is not None:
+            stem.suno_title = body.suno_title.strip() or None
+        if body.suno_tags is not None:
+            stem.suno_tags = body.suno_tags.strip() or None
+        if body.suno_weirdness is not None:
+            stem.suno_weirdness = body.suno_weirdness
+        if body.suno_style_weight is not None:
+            stem.suno_style_weight = body.suno_style_weight
+        if body.suno_audio_weight is not None:
+            stem.suno_audio_weight = body.suno_audio_weight
+        if body.suno_mv is not None:
+            stem.suno_mv = body.suno_mv.strip() or None
+        if body.suno_vocal_gender is not None:
+            gender = body.suno_vocal_gender.strip()
+            if gender and gender not in {"m", "f"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="suno_vocal_gender must be m or f",
+                )
+            stem.suno_vocal_gender = gender or None
+        if body.ref_voice_id is not None:
+            stem.ref_voice_id = body.ref_voice_id.strip() or None
         project = store.save(project)
         return project.model_dump(mode="json")
 
@@ -543,6 +844,66 @@ def create_app(
             return SunoBridge().health()
         except SunoError as exc:
             return {"ok": False, "error": str(exc)}
+
+    @app.post("/api/suno/captcha")
+    def suno_captcha() -> dict[str, Any]:
+        """Force the extension to mint a Turnstile token now.
+
+        Lets the UI resolve a failed verification without waiting for another
+        generation attempt. The token stays inside the bridge.
+        """
+        try:
+            return SunoBridge().request_captcha()
+        except SunoError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @app.get("/api/suno/personas")
+    def suno_personas() -> dict[str, Any]:
+        """Own + followed Suno voice/style personas for the voice picker."""
+        try:
+            return SunoBridge().list_personas()
+        except SunoError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @app.get("/api/suno/personas/{persona_id}")
+    def suno_persona(persona_id: str) -> dict[str, Any]:
+        """Persona detail incl. root clip for voice preview."""
+        try:
+            return SunoBridge().get_persona(persona_id)
+        except SunoError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @app.get("/api/suno/preview/{clip_id}")
+    def suno_preview(clip_id: str):
+        """Streamable mp3 preview of a clip (transcoded on the fly, nothing saved).
+
+        Persona catalog streams are AES-encrypted m4a-opus that Firefox cannot
+        demux; the bridge decrypts + transcodes to mp3 for preview playback.
+        """
+        url = f"{SUNO_BRIDGE_URL.rstrip('/')}/preview/{clip_id}"
+        try:
+            upstream = httpx.stream("GET", url, timeout=180)
+            response = upstream.__enter__()
+            response.raise_for_status()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail=f"Suno preview failed: {exc}"
+            )
+        else:
+            def generate():
+                try:
+                    for chunk in response.iter_bytes(65536):
+                        yield chunk
+                finally:
+                    upstream.__exit__(None, None, None)
+
+            return StreamingResponse(
+                generate(),
+                media_type="audio/mpeg",
+                headers={"Cache-Control": "no-store"},
+            )
 
     @app.post("/api/projects/{project_id}/suno/generate", status_code=202)
     def generate_suno(project_id: str, body: SunoGenerate) -> dict[str, Any]:
@@ -704,6 +1065,20 @@ def create_app(
             character.ref_instruction = body.ref_instruction
         if body.baseline_instruct is not None:
             character.baseline_instruct = body.baseline_instruct
+        if body.suno_persona_id is not None:
+            character.suno_persona_id = body.suno_persona_id.strip() or None
+            if character.suno_persona_id is None:
+                character.suno_persona_model = None
+        if body.suno_persona_model is not None:
+            model = body.suno_persona_model.strip()
+            if model and model not in {"voice_persona", "style_persona"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="suno_persona_model must be voice_persona or style_persona",
+                )
+            character.suno_persona_model = model or None
+        if body.suno_mv is not None and body.suno_mv.strip():
+            character.suno_mv = body.suno_mv.strip()
         project = store.save(project)
         return project.model_dump(mode="json")
 

@@ -14,6 +14,7 @@ from ..models import (
     Take,
 )
 from ..suno import SunoBridge, SunoError
+from ..settings import resolve_suno
 from .base import (
     BaseEngine,
     CancelCheck,
@@ -22,6 +23,34 @@ from .base import (
     ProgressCallback,
     UnsupportedOperation,
 )
+
+# Stable prefix so the UI can recognise verification failures without parsing
+# the (verbose, model-written) underlying message.
+CAPTCHA_MARKER = "CAPTCHA_REQUIRED:"
+
+_CAPTCHA_HINTS = (
+    "turnstile",
+    "hcaptcha",
+    "could not be solved",
+    "verify you are human",
+    "captcha",
+)
+
+
+def is_captcha_error(message: str) -> bool:
+    """True when a Suno failure is a Cloudflare verification problem."""
+    if CAPTCHA_MARKER in message:
+        return True
+    text = message.lower()
+    return any(hint in text for hint in _CAPTCHA_HINTS)
+
+
+class CaptchaRequiredError(RuntimeError):
+    """Suno needs a human verification tick before it will generate."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(f"{CAPTCHA_MARKER} {detail}".strip())
 
 
 def _pick_vocal_stem(clips: list[dict]) -> dict | None:
@@ -50,9 +79,12 @@ def _convert_to_wav(src: Path, dst: Path, sample_rate: int = 24000) -> None:
 class SunoEngine(BaseEngine):
     """Suno as a dialogue TTS backend.
 
-    Generates a clip whose lyrics are the stem text with an "audio drama radio
-    play" style, optionally extracts the vocal stem, downloads it as m4a and
-    converts to WAV so the existing Whisper aligner and mixer can consume it.
+    Generates a clip whose lyrics are the stem's bracket-tagged lyric sheet
+    (see suno_lyrics.py): dialogue verbatim, delivery/style/emotion in
+    ``[...]`` tag lines. Falls back to the flat stem text for legacy requests
+    without a sheet. Optionally extracts the vocal stem, downloads it as m4a
+    and converts to WAV so the existing Whisper aligner and mixer can consume
+    it.
     """
 
     info = EngineInfo(
@@ -68,6 +100,13 @@ class SunoEngine(BaseEngine):
     def __init__(self) -> None:
         super().__init__()
         self.bridge = SunoBridge()
+
+    def available(self) -> bool:
+        try:
+            health = self.bridge.health()
+        except Exception:
+            return False
+        return bool(health.get("ok", True)) and bool(health.get("extensionConnected"))
 
     def load(self) -> None:
         if self._loaded:
@@ -110,22 +149,42 @@ class SunoEngine(BaseEngine):
         if progress:
             progress(0.05, "submitting dialogue to Suno")
 
+        lyrics = (request.suno_lyrics or "").strip() or request.text
+        title = (request.suno_title or "").strip() or f"dialogue {request.stem_id}"
+        tags = (request.suno_tags or "").strip() or "audio drama radio play"
         payload = {
             "kind": "song",
-            "lyrics": request.text,
-            "title": f"dialogue {request.stem_id}",
-            "tags": "audio drama radio play",
-            "style_weight": 20,
+            "lyrics": lyrics,
+            "title": title,
+            "tags": tags,
             "mv": request.mv or "chirp-hawk",
             "instrumental": False,
         }
-        if request.persona_id:
+        # Style/weirdness/audio influence are paid-plan knobs on Suno's side:
+        # sending them on a free account fails the whole request with
+        # "This feature isn't available on your current plan".
+        plan, _ = resolve_suno()
+        paid_features = plan.plan == "pro"
+        if paid_features and request.suno_style_weight is not None:
+            payload["style_weight"] = request.suno_style_weight
+        if paid_features and request.suno_weirdness is not None:
+            payload["weirdness"] = request.suno_weirdness
+        if paid_features and request.suno_audio_weight is not None:
+            payload["audio_weight"] = request.suno_audio_weight
+        if paid_features and request.persona_id:
             payload["persona_id"] = request.persona_id
+        if paid_features and request.persona_model:
+            payload["persona_model"] = request.persona_model
+        if request.suno_vocal_gender in {"m", "f"}:
+            payload["vocal_gender"] = request.suno_vocal_gender
 
         try:
             result = self.bridge.generate(payload)
         except SunoError as exc:
-            raise RuntimeError(str(exc)) from exc
+            message = str(exc)
+            if is_captcha_error(message):
+                raise CaptchaRequiredError(message) from exc
+            raise RuntimeError(message) from exc
 
         clips = result.get("clips") or []
         if not clips:
@@ -176,6 +235,9 @@ class SunoEngine(BaseEngine):
                         pass
             except SunoError:
                 vocal_clip_id = None
+            except Exception:
+                # Stem extraction is optional; never fail the render over it.
+                vocal_clip_id = None
 
             download_id = vocal_clip_id or clip_id
             try:
@@ -218,6 +280,7 @@ class SunoEngine(BaseEngine):
                     seed=request.seed + index,
                     clip_id=clip_id,
                     preview_url=preview_url,
+                    vocal_isolated=vocal_clip_id is not None,
                     selected=False,
                 )
             )
@@ -235,5 +298,5 @@ class SunoEngine(BaseEngine):
             sample_rate=takes[0].sample_rate,
             takes=takes,
             selected_take_id=best.id,
-            text_sha256=sha256_text(request.text),
+            text_sha256=sha256_text(lyrics),
         )

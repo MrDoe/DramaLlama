@@ -15,6 +15,22 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+class RefVoice(BaseModel):
+    """One named reference voice of a character.
+
+    The legacy single-reference fields on Character (ref_file/ref_text/...)
+    stay the default voice; entries here are additional takes of the same
+    speaker selectable per stem.
+    """
+
+    id: str
+    name: str
+    file: str
+    ref_text: str | None = None
+    ref_instruction: str | None = None
+    f0_hz: float | None = None
+
+
 class Character(BaseModel):
     id: str
     name: str
@@ -26,7 +42,9 @@ class Character(BaseModel):
     ref_instruction: str | None = None
     ref_file: str | None = None
     suno_persona_id: str | None = None
+    suno_persona_model: str | None = None
     suno_mv: str = "chirp-hawk"
+    references: list[RefVoice] = Field(default_factory=list)
     baseline_instruct: str = ""
     locked: bool = False
     f0_hz: float | None = None
@@ -198,6 +216,10 @@ class Take(BaseModel):
     selected: bool = False
     clip_id: str | None = None
     preview_url: str | None = None
+    # True when the take is a vocals-only stem rather than the full mix.
+    # Sung full mixes align badly with Whisper, so the aligner is skipped and
+    # timing is estimated instead.
+    vocal_isolated: bool = False
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -208,6 +230,23 @@ class Stem(BaseModel):
     line_ids: list[str]
     text: str
     instruction: str
+    # Suno lyric sheet for this stem: dialogue verbatim with [bracket] delivery
+    # tags. Deterministic at build time, upgradeable via the LLM lyrics pass.
+    suno_lyrics: str | None = None
+    # Per-stem Suno song title / style tags shown and edited in Render.
+    # None means the engine default (dialogue <stem_id> / audio drama radio play).
+    suno_title: str | None = None
+    suno_tags: str | None = None
+    # Per-stem Suno generation params (0-100 sliders, model, vocal gender).
+    # None means the engine/character default.
+    suno_weirdness: float | None = Field(default=None, ge=0, le=100)
+    suno_style_weight: float | None = Field(default=None, ge=0, le=100)
+    suno_audio_weight: float | None = Field(default=None, ge=0, le=100)
+    suno_mv: str | None = None
+    suno_vocal_gender: str | None = None
+    # Reference voice override for this stem (a RefVoice id of the speaker).
+    # None means the character's default reference.
+    ref_voice_id: str | None = None
     engine: str | None = None
     cfg_scale: float = 2.5
     seed: int = 42
@@ -235,7 +274,20 @@ class StemRenderRequest(BaseModel):
     seed: int = 42
     candidates: int = Field(default=1, ge=1, le=5)
     persona_id: str | None = None
+    persona_model: str | None = None
     mv: str = "chirp-hawk"
+    # Per-stem song title / style tags. None falls back to the engine default.
+    suno_title: str | None = None
+    suno_tags: str | None = None
+    # Per-stem generation params (None = engine/character default).
+    suno_weirdness: float | None = None
+    suno_style_weight: float | None = None
+    suno_audio_weight: float | None = None
+    suno_mv: str | None = None
+    suno_vocal_gender: str | None = None
+    # Suno lyric sheet override. When None the stored stem sheet (or the stem
+    # text as a last resort) is sent to Suno.
+    suno_lyrics: str | None = None
 
 
 class StemRenderResult(BaseModel):
