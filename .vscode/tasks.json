@@ -154,6 +154,24 @@
         "cwd": "${workspaceFolder}"
       },
       "isBackground": true,
+      "problemMatcher": [],
+      "dependsOn": "drama-llama: stop running"
+    },
+    {
+      "label": "drama-llama: stop running",
+      "detail": "SIGTERM every running serve/worker (SIGKILL after 10s); leaves the Suno bridge alone.",
+      "type": "shell",
+      "command": "${config:python.defaultInterpreterPath}",
+      "args": [
+        "${workspaceFolder}/scripts/stop_running.py"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "close": true
+      },
       "problemMatcher": []
     },
     {

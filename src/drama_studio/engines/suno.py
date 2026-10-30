@@ -194,6 +194,7 @@ class SunoEngine(BaseEngine):
             progress(0.15, f"Suno queued {len(clips)} clip(s)")
 
         takes: list[Take] = []
+        failures: list[str] = []
         for index, clip in enumerate(clips[: request.candidates]):
             if cancelled and cancelled():
                 raise RuntimeError("cancelled")
@@ -208,8 +209,10 @@ class SunoEngine(BaseEngine):
             try:
                 finished = self.bridge.wait_for_clip(clip_id, timeout_s=180)
             except SunoError as exc:
+                message = f"clip {clip_id} failed: {exc}"
+                failures.append(message)
                 if progress:
-                    progress(0, f"clip {clip_id} failed: {exc}")
+                    progress(0, message)
                 continue
 
             preview_url = finished.get("audio_url") or clip.get("audio_url")
@@ -217,29 +220,9 @@ class SunoEngine(BaseEngine):
             if not preview_url and media:
                 preview_url = media[0] if isinstance(media, list) else None
 
-            # Extract vocal stem (preview after extraction).
-            vocal_clip_id = None
-            try:
-                stems_result = self.bridge.make_stems(clip_id)
-                stem_clips = stems_result.get("clips") or []
-                vocal = _pick_vocal_stem(stem_clips)
-                if vocal and vocal.get("id"):
-                    vocal_clip_id = vocal.get("id")
-                    # Refresh preview url from the stem clip when available.
-                    try:
-                        stem_clip_data = self.bridge.clip(vocal_clip_id)
-                        stem_clip = stem_clip_data.get("clip") or {}
-                        if stem_clip.get("audio_url"):
-                            preview_url = stem_clip.get("audio_url")
-                    except SunoError:
-                        pass
-            except SunoError:
-                vocal_clip_id = None
-            except Exception:
-                # Stem extraction is optional; never fail the render over it.
-                vocal_clip_id = None
-
-            download_id = vocal_clip_id or clip_id
+            # Stem extraction is now manual (Extract Stem button); render
+            # downloads the full mix so the user can choose Demucs vs Suno stems.
+            download_id = clip_id
             try:
                 m4a_path = self.bridge.download(download_id, take_dir, "m4a")
             except SunoError:
@@ -247,8 +230,10 @@ class SunoEngine(BaseEngine):
                 try:
                     m4a_path = self.bridge.download(download_id, take_dir, "wav")
                 except SunoError as exc:
+                    message = f"download failed for clip {clip_id}: {exc}"
+                    failures.append(message)
                     if progress:
-                        progress(0, f"download failed: {exc}")
+                        progress(0, message)
                     continue
 
             wav_path = take_dir / (m4a_path.stem + ".wav")
@@ -258,8 +243,10 @@ class SunoEngine(BaseEngine):
                 else:
                     wav_path = m4a_path
             except Exception as exc:
+                message = f"conversion failed for clip {clip_id}: {exc}"
+                failures.append(message)
                 if progress:
-                    progress(0, f"conversion failed: {exc}")
+                    progress(0, message)
                 continue
 
             try:
@@ -280,13 +267,17 @@ class SunoEngine(BaseEngine):
                     seed=request.seed + index,
                     clip_id=clip_id,
                     preview_url=preview_url,
-                    vocal_isolated=vocal_clip_id is not None,
+                    vocal_isolated=False,
                     selected=False,
                 )
             )
 
         if not takes:
-            raise RuntimeError("Suno clips finished but no audio could be downloaded")
+            detail = "; ".join(failures[-3:]) if failures else "unknown error"
+            raise RuntimeError(
+                "Suno clips finished but no audio could be downloaded "
+                f"({detail})"
+            )
 
         best = takes[0]
         best.selected = True

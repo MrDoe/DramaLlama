@@ -38,7 +38,9 @@ Project content is JSON (`project.json`) plus `refs/`, `audio/takes/`,
 
 ## UI
 
-Five production steps in `ProjectPage`: Script, Stems, Render, Sound, Mix.
+Four production steps in `ProjectPage`: Script, Stems & Render, Sound, Mix.
+The Stems and Render stages were merged into a single step that shows stem
+scripts and the render queue together.
 The visual system is a dark studio console (deep indigo, amber accent,
 Archivo/Space Grotesk) with a three-pane script/coverage/cast view and
 panel-based later stages.

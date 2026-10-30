@@ -19,7 +19,8 @@
         "PYTHONPATH": "${workspaceFolder}/src",
         "PYTHONUNBUFFERED": "1"
       },
-      "justMyCode": false
+      "justMyCode": false,
+      "preLaunchTask": "drama-llama: stop running"
     },
     {
       "name": "Drama Llama: API (in-process worker, port 8771)",
@@ -39,7 +40,8 @@
         "PYTHONPATH": "${workspaceFolder}/src",
         "PYTHONUNBUFFERED": "1"
       },
-      "justMyCode": false
+      "justMyCode": false,
+      "preLaunchTask": "drama-llama: stop running"
     },
     {
       "name": "Drama Llama: API (no worker)",
@@ -60,7 +62,8 @@
         "PYTHONPATH": "${workspaceFolder}/src",
         "PYTHONUNBUFFERED": "1"
       },
-      "justMyCode": false
+      "justMyCode": false,
+      "preLaunchTask": "drama-llama: stop running"
     },
     {
       "name": "Drama Llama: Worker (once)",

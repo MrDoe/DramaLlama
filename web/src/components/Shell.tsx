@@ -37,7 +37,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </span>
           <span className="brand-text">
             <strong>Drama Llama</strong>
-            <span>local audio drama lab</span>
+            <span>the audio drama lab</span>
           </span>
         </NavLink>
 

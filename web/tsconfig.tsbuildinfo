@@ -1,1 +1,1 @@
-{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/utils.ts","./src/components/Shell.tsx","./src/pages/NewProjectPage.tsx","./src/pages/ProjectPage.tsx","./src/pages/ProjectsPage.tsx","./src/pages/SettingsPage.tsx"],"version":"5.9.3"}
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/utils.ts","./src/components/Shell.tsx","./src/components/WaveformCutter.tsx","./src/pages/NewProjectPage.tsx","./src/pages/ProjectPage.tsx","./src/pages/ProjectsPage.tsx","./src/pages/SettingsPage.tsx"],"version":"5.9.3"}

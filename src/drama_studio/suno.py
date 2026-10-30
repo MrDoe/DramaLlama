@@ -78,6 +78,22 @@ class SunoBridge:
             raise SunoError(data.get("error") or "Suno bridge returned no persona")
         return data
 
+    def list_library(self, limit: int = 50) -> dict[str, Any]:
+        """Newest own Suno library clips (for the import-from-Suno picker)."""
+        try:
+            response = httpx.get(
+                f"{self.base_url}/library",
+                params={"limit": max(1, min(50, limit))},
+                timeout=60,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:
+            raise SunoError(f"Could not list Suno library: {exc}") from exc
+        if not data.get("ok"):
+            raise SunoError(data.get("error") or "Suno bridge returned no clips")
+        return data
+
     def request_captcha(self) -> dict[str, Any]:
         """Ask the BetterSuno extension to mint a Turnstile token now.
 
@@ -164,8 +180,28 @@ def _clip_ready(clip: dict[str, Any]) -> bool:
     status = str(clip.get("status") or "").lower()
     if status in {"error", "failed"}:
         return False
+    if status in {"complete", "completed"}:
+        return True
     audio = str(clip.get("audio_url") or "")
-    media = clip.get("media_urls") or []
-    return status in {"complete", "completed"} or (
-        bool(audio) and "/forbidden" not in audio
-    ) or bool(media)
+    if audio and "/forbidden" not in audio:
+        return True
+    # A streaming clip advertises an encrypted webm relay asset long before
+    # the downloadable progressive mix exists. Only treat media entries as
+    # ready when one looks like progressive audio; otherwise keep polling —
+    # downloading too early fails with "Suno download not available".
+    for entry in clip.get("media_urls") or []:
+        if isinstance(entry, dict):
+            url = str(entry.get("url") or "")
+            delivery = str(entry.get("delivery") or "").lower()
+            content_type = str(entry.get("content_type") or "").lower()
+        else:
+            url, delivery, content_type = str(entry or ""), "", ""
+        if delivery == "progressive":
+            return True
+        blob = f"{url} {content_type}".lower().split("?")[0]
+        if any(
+            marker in blob
+            for marker in (".m4a", ".mp3", ".wav", "audio/mpeg", "audio/mp4")
+        ):
+            return True
+    return False

@@ -175,6 +175,37 @@ def test_suno_engine_prefers_lyric_sheet(tmp_path):
     assert captured["lyrics"] == "You're late. ... Pack."
 
 
+def test_suno_engine_reports_per_clip_download_errors(tmp_path):
+    from drama_studio.engines.suno import SunoEngine
+    from drama_studio.models import StemRenderRequest
+    from drama_studio.suno import SunoError
+
+    class FakeBridge:
+        def generate(self, payload):
+            return {"clips": [{"id": "clip-1"}, {"id": "clip-2"}]}
+
+        def wait_for_clip(self, clip_id, timeout_s=180):
+            return {"id": clip_id, "status": "complete"}
+
+        def download(self, clip_id, output_dir, fmt="wav"):
+            raise SunoError(f"Access denied: song {clip_id} is not in your library")
+
+    engine = SunoEngine()
+    engine.bridge = FakeBridge()  # type: ignore[assignment]
+    engine._loaded = True
+    request = StemRenderRequest(
+        project_id="p",
+        stem_id="s1-mara",
+        speaker="MARA",
+        text="You're late.",
+        instruction="...",
+        output_dir=str(tmp_path),
+        candidates=2,
+    )
+    with pytest.raises(RuntimeError, match="download failed for clip clip-1"):
+        engine.render_stem(request)
+
+
 SCRIPT = """# LYRICS TEST
 
 ## SCENE 1

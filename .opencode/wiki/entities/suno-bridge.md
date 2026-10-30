@@ -45,6 +45,8 @@ as a `music` cue.
 - The extension and an open `suno.com` tab are required.
 - Generation is serialised and captcha-gated; failures usually mean the
   extension is disconnected or Turnstile needs a human click.
+- After a Suno account switch (logout/login), downloads fail until the
+  bridge is restarted — see [[concepts/suno-account-switch]].
 
 ## Related
 

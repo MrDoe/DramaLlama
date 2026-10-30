@@ -14,6 +14,7 @@ import {
   MusicNotes,
   Pause,
   Play,
+  Scissors,
   SlidersHorizontal,
   Sparkle,
   SpeakerHigh,
@@ -23,6 +24,7 @@ import {
   Waveform,
 } from "@phosphor-icons/react";
 import { api, waitForJob } from "../api";
+import { WaveformCutter } from "../components/WaveformCutter";
 import type {
   Character,
   EngineInfo,
@@ -32,6 +34,7 @@ import type {
   Project,
   SfxItem,
   Stem,
+  SunoLibraryClip,
   SunoPersona,
 } from "../types";
 import {
@@ -44,8 +47,7 @@ import {
 
 const STEPS = [
   { id: "script", label: "Script", icon: FileText },
-  { id: "stems", label: "Stems", icon: UsersThree },
-  { id: "render", label: "Render", icon: Waveform },
+  { id: "stems", label: "Stems & Render", icon: Waveform },
   { id: "sound", label: "Sound", icon: MusicNotes },
   { id: "mix", label: "Mix", icon: SlidersHorizontal },
 ] as const;
@@ -335,6 +337,99 @@ function SunoPersonaPicker({
   );
 }
 
+function SunoImportRow({
+  stem,
+  disabled,
+  onImport,
+}: {
+  stem: Stem;
+  disabled: boolean;
+  onImport: (stem: Stem, clipId: string) => void;
+}) {
+  const [clips, setClips] = useState<SunoLibraryClip[] | null | undefined>(
+    undefined,
+  );
+  const [selectedId, setSelectedId] = useState("");
+  // The full 50-entry list is unwieldy as a native dropdown: show the 10
+  // latest, with a "show all" entry that loads the rest on demand.
+  const [limit, setLimit] = useState(10);
+
+  useEffect(() => {
+    let live = true;
+    setClips(undefined);
+    api
+      .sunoLibrary(limit)
+      .then((data) => {
+        if (live) setClips(data.clips ?? []);
+      })
+      .catch(() => {
+        if (live) setClips(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [limit]);
+
+  if (clips === undefined)
+    return <span className="panel-sub">loading Suno files…</span>;
+  // Bridge offline: hide the picker, rendering still works.
+  if (clips === null) return null;
+  if (clips.length === 0)
+    return <span className="panel-sub">no Suno files yet</span>;
+
+  return (
+    <div
+      className="render-extract-row"
+      style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}
+    >
+      <select
+        value={selectedId}
+        onChange={(event) => {
+          if (event.target.value === "__more") {
+            setLimit(50);
+            setSelectedId("");
+            return;
+          }
+          setSelectedId(event.target.value);
+        }}
+        disabled={disabled}
+        title="Pick one of your recent Suno generations to attach as a take"
+        aria-label={`Import Suno file as take for ${stem.speaker}`}
+        style={{ maxWidth: 280, textOverflow: "ellipsis" }}
+      >
+        <option value="">Import from Suno…</option>
+        {clips.map((clip) => (
+          <option
+            key={clip.id ?? `${clip.title}-${clip.created_at}`}
+            value={clip.id ?? ""}
+            disabled={!clip.id}
+          >
+            {clip.title}
+            {clip.created_at ? ` · ${clip.created_at.slice(0, 10)}` : ""}
+            {clip.duration ? ` · ${formatDuration(clip.duration)}` : ""}
+            {clip.status && clip.status !== "complete" ? ` · ${clip.status}` : ""}
+          </option>
+        ))}
+        {limit < 50 ? (
+          <option value="__more">Show all 50 recent files…</option>
+        ) : null}
+      </select>
+      <button
+        type="button"
+        className="button button-secondary button-sm"
+        onClick={() => {
+          if (selectedId) onImport(stem, selectedId);
+        }}
+        disabled={disabled || !selectedId}
+        title="Download this Suno file and attach it as the selected take"
+      >
+        <DownloadSimple size={14} />
+        Import
+      </button>
+    </div>
+  );
+}
+
 function SunoStemFields({
   stem,
   character,
@@ -602,7 +697,7 @@ function CastPanel({
   project: Project;
   jobs: Record<string, Job>;
   onDesign: (speaker: string, opts?: { name?: string; seed?: number }) => void;
-  onUpload: (speaker: string, file: File) => void;
+  onUpload: (speaker: string, file: File, name?: string) => void;
 }) {
   const lines = project.script.scenes.flatMap((scene) => scene.lines);
   const cast = useMemo(
@@ -674,6 +769,25 @@ function CastPanel({
                         />
                       </label>
                     ) : null}
+                    {character.ref_file && isChatterbox ? (
+                      <label className="button button-ghost button-sm cast-upload">
+                        <Waveform size={12} />
+                        Upload voice
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (file)
+                              onUpload(
+                                character.id,
+                                file,
+                                `Voice ${(character.references?.length ?? 0) + 1}`,
+                              );
+                          }}
+                        />
+                      </label>
+                    ) : null}
                     {!character.ref_file && isBreeze ? (
                       <button
                         type="button"
@@ -712,119 +826,26 @@ function CastPanel({
   );
 }
 
-function StemsBoard({
-  project,
-  building,
-  onBuild,
-}: {
-  project: Project;
-  building: boolean;
-  onBuild: () => void;
-}) {
-  const byScene = project.script.scenes
-    .map((scene) => ({
-      scene,
-      stems: project.stems.filter((stem) => stem.scene === scene.id),
-    }))
-    .filter((entry) => entry.stems.length > 0);
-
-  return (
-    <div>
-      <section className="panel stems-toolbar">
-        <div>
-          <h2 className="panel-title">
-            <UsersThree size={15} weight="fill" />
-            Stem scripts
-          </h2>
-          <p className="panel-sub">
-            one continuous performance per character per scene ·{" "}
-            {project.stems.length} stems
-          </p>
-        </div>
-        <div className="panel-actions">
-          <span className="badge">{project.stems.length} stems</span>
-          <button
-            type="button"
-            className="button button-primary button-sm"
-            onClick={onBuild}
-            disabled={building}
-          >
-            {building ? <span className="spinner" /> : <MagicWand size={14} weight="fill" />}
-            {building ? "Building…" : project.stems.length ? "Rebuild" : "Build stems"}
-          </button>
-        </div>
-      </section>
-
-      {byScene.length === 0 ? (
-        <div className="empty-list" style={{ marginTop: 16 }}>
-          No stems yet. Build them from the parsed script — lines are grouped by
-          scene and speaker, ready for one take per character.
-        </div>
-      ) : (
-        <div className="stems-board">
-          {byScene.map(({ scene, stems }) => (
-            <section className="stem-scene" key={scene.id}>
-              <div className="scene-head">
-                <span className="scene-number">{String(scene.id).padStart(2, "0")}</span>
-                <span className="scene-heading">{scene.heading || `Scene ${scene.id}`}</span>
-                <span className="badge" style={{ marginLeft: "auto" }}>
-                  {stems.length} stems
-                </span>
-              </div>
-              <div className="stem-grid">
-                {stems.map((stem) => (
-                  <StemCard key={stem.id} stem={stem} />
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StemCard({ stem }: { stem: Stem }) {
-  const seconds = Math.max(1, stem.text.split(/\s+/).length / 2.6);
-  const status = stem.takes.length
-    ? `${stem.takes.length} take${stem.takes.length === 1 ? "" : "s"}`
-    : "not rendered";
-  return (
-    <article className="panel stem-card">
-      <div className="stem-card-head">
-        <span className="speaker-badge" style={speakerStyle(stem.speaker)}>
-          {stem.speaker}
-        </span>
-        <span className={`badge ${stem.takes.length ? "badge-accent" : ""}`}>
-          {status}
-        </span>
-      </div>
-      <p className="stem-text">{stem.text}</p>
-      <p className="stem-instruction">{stem.instruction}</p>
-      <div className="stem-foot">
-        <span>{stem.line_ids.length} lines</span>
-        <span>~{formatDuration(seconds)}</span>
-        <span>cfg {stem.cfg_scale}</span>
-        <span className="stem-id">{stem.id}</span>
-      </div>
-    </article>
-  );
-}
-
 function RenderBoard({
   project,
   jobs,
   engines,
   batch,
+  building,
+  sunoPlan,
+  onBuild,
   onRender,
   onRenderAll,
   onShowError,
   onSelectTake,
+  onSaveCuts,
   onEngineChange,
   onRefVoiceChange,
   onSelectPersona,
   onSaveSunoFields,
   onSuggestSunoStyle,
+  onExtractStem,
+  onImportSuno,
   onRefresh,
 }: {
   project: Project;
@@ -838,10 +859,17 @@ function RenderBoard({
     skipped: Stem[];
     total: number;
   };
+  building: boolean;
+  sunoPlan: "free" | "pro";
+  onBuild: () => void;
   onRender: (stem: Stem) => void;
   onRenderAll: (stems: Stem[], includeRendered: boolean) => void;
   onShowError: (title: string, body: string) => void;
   onSelectTake: (stem: Stem, takeId: string) => void;
+  onSaveCuts: (
+    stem: Stem,
+    cuts: { line_id: string; start_s: number; end_s: number }[],
+  ) => void;
   onEngineChange: (stem: Stem, engine: string) => void;
   onRefVoiceChange: (stem: Stem, refVoiceId: string) => void;
   onSelectPersona: (speaker: string, persona: SunoPersona | null) => void;
@@ -858,6 +886,8 @@ function RenderBoard({
     },
   ) => void;
   onSuggestSunoStyle: (stem: Stem) => Promise<void>;
+  onExtractStem: (stem: Stem, method: "demucs" | "suno") => Promise<void>;
+  onImportSuno: (stem: Stem, clipId: string) => void;
   onRefresh: () => void;
 }) {
   const byScene = project.script.scenes
@@ -867,6 +897,9 @@ function RenderBoard({
     }))
     .filter((entry) => entry.stems.length > 0);
 
+  const [extractMethods, setExtractMethods] = useState<Record<string, "demucs" | "suno">>({});
+  const [editingCutsFor, setEditingCutsFor] = useState<string | null>(null);
+  const [pendingCuts, setPendingCuts] = useState<{ line_id: string; start_s: number; end_s: number }[] | null>(null);
   const defaultEngine = projectEngine(project);
   const availableEngines = engines.filter(
     (engine) =>
@@ -901,6 +934,15 @@ function RenderBoard({
           </p>
         </div>
         <div className="panel-actions">
+          <button
+            type="button"
+            className="button button-ghost button-sm"
+            onClick={onBuild}
+            disabled={building}
+          >
+            {building ? <span className="spinner" /> : <MagicWand size={14} weight="fill" />}
+            {building ? "Building…" : project.stems.length ? "Rebuild stems" : "Build stems"}
+          </button>
           {batch.state === "running" ? (
             <span className="panel-sub">
               batch {Math.min(batch.done.length + 1, batch.total)}/{batch.total}
@@ -951,11 +993,23 @@ function RenderBoard({
                     (Boolean(character?.ref_file) || refVoices.length > 0);
                   const job = jobs[stem.id];
                   const realignJob = jobs[`${stem.id}:realign`];
+                  const extractJob = jobs[`${stem.id}:extract`];
+                  const importJob = jobs[`${stem.id}:import`];
                   const busy =
                     job?.status === "queued" ||
                     job?.status === "running" ||
                     realignJob?.status === "queued" ||
-                    realignJob?.status === "running";
+                    realignJob?.status === "running" ||
+                    extractJob?.status === "queued" ||
+                    extractJob?.status === "running" ||
+                    importJob?.status === "queued" ||
+                    importJob?.status === "running";
+                  const failedJob =
+                    job?.status === "failed"
+                      ? job
+                      : importJob?.status === "failed"
+                        ? importJob
+                        : null;
                   const alignment = project.alignments[stem.id];
                   const take = stem.takes.find((item) => item.selected) ?? stem.takes[0];
                   const lowConfidence =
@@ -1004,6 +1058,7 @@ function RenderBoard({
                         </div>
                       ) : null}
 
+                      <p className="stem-text">{stem.text.replace(/([.?!])\s+/g, "$1\n")}</p>
                       <div className="engine-row">
                         <label className="cue-field">
                           <span>Engine</span>
@@ -1081,26 +1136,6 @@ function RenderBoard({
                         </div>
                       ) : null}
 
-                      {take ? (
-                        <audio
-                          controls
-                          preload="metadata"
-                          src={api.fileUrl(project.id, take.file)}
-                          style={{ width: "100%", marginTop: 8 }}
-                        />
-                      ) : null}
-                      {take?.preview_url ? (
-                        <div style={{ marginTop: 4 }}>
-                          <span className="panel-sub">Original (before stem extraction)</span>
-                          <audio
-                            controls
-                            preload="metadata"
-                            src={take.preview_url}
-                            style={{ width: "100%" }}
-                          />
-                        </div>
-                      ) : null}
-
                       {alignment ? (
                         <div className="render-align">
                           <span>
@@ -1118,19 +1153,133 @@ function RenderBoard({
                         </div>
                       ) : null}
 
-                      {job?.status === "failed" ? (
+                      {take && alignment ? (
+                        <div style={{ marginTop: 8 }}>
+                          <button
+                            type="button"
+                            className="button button-ghost button-sm"
+                            onClick={() => {
+                              setEditingCutsFor(editingCutsFor === stem.id ? null : stem.id);
+                              setPendingCuts(
+                                editingCutsFor === stem.id
+                                  ? null
+                                  : alignment.lines.map((l) => ({
+                                      line_id: l.line_id,
+                                      start_s: l.start_s,
+                                      end_s: l.end_s,
+                                    })),
+                              );
+                            }}
+                          >
+                            {editingCutsFor === stem.id ? "Hide cut editor" : "Edit cuts manually"}
+                          </button>
+                          {editingCutsFor === stem.id && pendingCuts ? (
+                            <div style={{ marginTop: 8 }}>
+                              <WaveformCutter
+                                audioUrl={api.fileUrl(project.id, take.file)}
+                                cuts={pendingCuts}
+                                onChange={setPendingCuts}
+                              />
+                              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                                <button
+                                  type="button"
+                                  className="button button-primary button-sm"
+                                  onClick={() => {
+                                    if (pendingCuts) void onSaveCuts(stem, pendingCuts);
+                                  }}
+                                >
+                                  Save cuts
+                                </button>
+                                <button
+                                  type="button"
+                                  className="button button-ghost button-sm"
+                                  onClick={() => {
+                                    setEditingCutsFor(null);
+                                    setPendingCuts(null);
+                                  }}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {failedJob ? (
                         <div className="render-error-row">
                           <p className="render-error">
-                            {actionableError(job.error ?? "")}
+                            {actionableError(failedJob.error ?? "")}
                           </p>
                           <button
                             type="button"
                             className="text-button"
-                            onClick={() => onShowError("Render failed", job.error ?? "")}
+                            onClick={() => onShowError("Render failed", failedJob.error ?? "")}
                           >
                             Details
                           </button>
                         </div>
+                      ) : null}
+
+                      {selectedEngine === "suno" && take ? (
+                        <div className="render-extract-row" style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+                          {sunoPlan === "pro" ? (
+                            <select
+                              value={extractMethods[stem.id] ?? "demucs"}
+                              onChange={(event) =>
+                                setExtractMethods((prev) => ({
+                                  ...prev,
+                                  [stem.id]: event.target.value as "demucs" | "suno",
+                                }))
+                              }
+                              disabled={busy}
+                              title="Stem extraction method"
+                            >
+                              <option value="demucs">Demucs (local)</option>
+                              <option value="suno">Suno stems (paid)</option>
+                            </select>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="button button-secondary button-sm"
+                            onClick={() =>
+                              void onExtractStem(
+                                stem,
+                                sunoPlan === "pro"
+                                  ? (extractMethods[stem.id] ?? "demucs")
+                                  : "demucs",
+                              )
+                            }
+                            disabled={busy}
+                            title="Extract vocals and instrumental from this take"
+                          >
+                            {extractJob?.status === "queued" || extractJob?.status === "running" ? (
+                              <span className="spinner" />
+                            ) : (
+                              <Scissors size={14} />
+                            )}
+                            {extractJob?.status === "queued" || extractJob?.status === "running"
+                              ? "Extracting…"
+                              : "Extract Stem"}
+                          </button>
+                        </div>
+                      ) : null}
+
+                      {take ? (
+                        <audio
+                          controls
+                          preload="metadata"
+                          src={api.fileUrl(project.id, take.file)}
+                          style={{ width: "100%", marginTop: 8 }}
+                        />
+                      ) : null}
+
+                      {selectedEngine === "suno" ? (
+                        <SunoImportRow
+                          stem={stem}
+                          disabled={busy}
+                          onImport={onImportSuno}
+                        />
                       ) : null}
 
                       <div className="render-actions">
@@ -1783,10 +1932,11 @@ export function ProjectPage() {
   const [llmOutput, setLlmOutput] = useState("");
   const [buildingStems, setBuildingStems] = useState(false);
   const [activeStep, setActiveStep] = useState<
-    "script" | "stems" | "render" | "sound" | "mix"
+    "script" | "stems" | "sound" | "mix"
   >("script");
   const [jobs, setJobs] = useState<Record<string, Job>>({});
   const [engines, setEngines] = useState<EngineInfo[]>([]);
+  const [sunoPlan, setSunoPlan] = useState<"free" | "pro">("free");
   const [error, setError] = useState("");
   const [batch, setBatch] = useState<{
     state: "idle" | "running" | "paused_captcha" | "done";
@@ -1801,6 +1951,12 @@ export function ProjectPage() {
 
   useEffect(() => {
     api.engines().then(setEngines).catch(() => setEngines([]));
+    api
+      .getConfig()
+      .then((cfg) => {
+        if (cfg.suno) setSunoPlan(cfg.suno.plan);
+      })
+      .catch(() => setSunoPlan("free"));
   }, []);
 
   useEffect(() => {
@@ -1947,6 +2103,44 @@ export function ProjectPage() {
     [project, trackJob],
   );
 
+  const extractStem = useCallback(
+    async (stem: Stem, method: "demucs" | "suno" = "demucs") => {
+      if (!project) return;
+      setError("");
+      const take =
+        stem.takes.find((item) => item.selected) ?? stem.takes[0];
+      if (!take) {
+        setError("Render the stem first");
+        return;
+      }
+      try {
+        const job = await api.extractStem(project.id, stem.id, {
+          take_id: take.id,
+          method,
+          align: true,
+        });
+        trackJob(`${stem.id}:extract`, job);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not start extraction");
+      }
+    },
+    [project, trackJob],
+  );
+
+  const importSunoTake = useCallback(
+    async (stem: Stem, clipId: string) => {
+      if (!project) return;
+      setError("");
+      try {
+        const job = await api.importSunoTake(project.id, stem.id, clipId);
+        trackJob(`${stem.id}:import`, job);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not import Suno file");
+      }
+    },
+    [project, trackJob],
+  );
+
   const renderAll = useCallback(
     async (stems: Stem[], includeRendered: boolean) => {
       if (!project) return;
@@ -2078,6 +2272,19 @@ export function ProjectPage() {
     [project, trackJob],
   );
 
+  const saveCuts = useCallback(
+    async (stem: Stem, cuts: { line_id: string; start_s: number; end_s: number }[]) => {
+      if (!project) return;
+        try {
+        const result = await api.updateAlignment(project.id, stem.id, cuts, true);
+        setProject(result.project);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not save cuts");
+      }
+    },
+    [project],
+  );
+
   const designVoice = useCallback(
     async (speaker: string, opts?: { name?: string; seed?: number }) => {
       if (!project) return;
@@ -2124,10 +2331,10 @@ export function ProjectPage() {
   }, [project, trackJob]);
 
   const uploadVoice = useCallback(
-    async (speaker: string, file: File) => {
+    async (speaker: string, file: File, name?: string) => {
       if (!project) return;
       try {
-        const updated = await api.uploadVoiceSample(project.id, speaker, file);
+        const updated = await api.uploadVoiceSample(project.id, speaker, file, name);
         setProject(updated);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Could not upload voice sample");
@@ -2323,10 +2530,8 @@ export function ProjectPage() {
           const Icon = step.icon;
           const available =
             step.id === "script" ||
-            ((step.id === "stems" ||
-              step.id === "render" ||
-              step.id === "sound" ||
-              step.id === "mix") &&
+            (step.id === "stems" && lineCount > 0) ||
+            ((step.id === "sound" || step.id === "mix") &&
               project.stems.length > 0);
           const active = step.id === activeStep;
           return (
@@ -2334,23 +2539,27 @@ export function ProjectPage() {
               key={step.id}
               type="button"
               className={`step${active ? " active" : ""}${available ? "" : " disabled"}`}
-              disabled={!available}
+              disabled={!available || (step.id === "stems" && buildingStems)}
               onClick={() => {
-                if (
-                  step.id === "script" ||
-                  step.id === "stems" ||
-                  step.id === "render" ||
-                  step.id === "sound" ||
-                  step.id === "mix"
-                ) {
+                if (step.id === "script") {
+                  setActiveStep("script");
+                } else if (step.id === "stems") {
+                  if (project.stems.length === 0) {
+                    void buildStems();
+                  } else {
+                    setActiveStep("stems");
+                  }
+                } else if (step.id === "sound" || step.id === "mix") {
                   setActiveStep(step.id);
                 }
               }}
               title={
                 available
-                  ? undefined
+                  ? step.id === "stems" && project.stems.length === 0
+                    ? "Build stems from the parsed script"
+                    : undefined
                   : step.id === "stems"
-                    ? "Build stems from the script first"
+                    ? "Parse a script with lines first"
                     : "Next milestone"
               }
             >
@@ -2515,28 +2724,28 @@ export function ProjectPage() {
         </div>
         </div>
       ) : activeStep === "stems" ? (
-        <StemsBoard
-          project={project}
-          building={buildingStems}
-          onBuild={buildStems}
-        />
-      ) : activeStep === "render" ? (
         <RenderBoard
-          project={project}
-          jobs={jobs}
-          engines={engines}
-          batch={batch}
-          onRender={renderStem}
-          onRenderAll={(stems, includeRendered) => void renderAll(stems, includeRendered)}
-          onShowError={(title, body) => setErrorDialog({ title, body })}
-          onSelectTake={(stem, takeId) => void selectTake(stem, takeId)}
-          onEngineChange={(stem, engine) => void changeEngine(stem, engine)}
-          onRefVoiceChange={(stem, refVoiceId) => void changeRefVoice(stem, refVoiceId)}
-          onSelectPersona={(speaker, persona) => void selectPersona(speaker, persona)}
-          onSaveSunoFields={(stem, fields) => void saveSunoFields(stem, fields)}
-          onSuggestSunoStyle={suggestSunoStyle}
-          onRefresh={() => void refreshProject()}
-        />
+            project={project}
+            jobs={jobs}
+            engines={engines}
+            batch={batch}
+            building={buildingStems}
+            sunoPlan={sunoPlan}
+            onBuild={buildStems}
+            onRender={renderStem}
+            onExtractStem={extractStem}
+            onImportSuno={(stem, clipId) => void importSunoTake(stem, clipId)}
+            onRenderAll={(stems, includeRendered) => void renderAll(stems, includeRendered)}
+            onShowError={(title, body) => setErrorDialog({ title, body })}
+            onSelectTake={(stem, takeId) => void selectTake(stem, takeId)}
+            onSaveCuts={(stem, cuts) => void saveCuts(stem, cuts)}
+            onEngineChange={(stem, engine) => void changeEngine(stem, engine)}
+            onRefVoiceChange={(stem, refVoiceId) => void changeRefVoice(stem, refVoiceId)}
+            onSelectPersona={(speaker, persona) => void selectPersona(speaker, persona)}
+            onSaveSunoFields={(stem, fields) => void saveSunoFields(stem, fields)}
+            onSuggestSunoStyle={suggestSunoStyle}
+            onRefresh={() => void refreshProject()}
+          />
       ) : activeStep === "sound" ? (
         <SoundBoard
           project={project}

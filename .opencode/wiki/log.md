@@ -18,6 +18,11 @@ takes.
 Added `start-ui.sh` (auto-build + serve, `--dev`, `--open`, health preflight)
 and documented it in the README and agent notes; added
 [[entities/start-ui-launcher]].
+
+## [2026-10-30] update | combined Stems & Render UI steps
+
+Merged the Stems and Render production steps into one "Stems & Render" tab in
+`ProjectPage.tsx`; updated README workflow and app wiki entity.
 ## [2026-10-29] ingest | suno-engine
 
 ## [2026-10-29] query | German Breeze feasibility
@@ -216,3 +221,13 @@ carry `vocal_isolated`; when a Suno take has no isolated vocals both the
 render and the realign path skip Whisper and produce a proportional
 word-count estimate (`aligner="estimate"`, confidence 0.05, fallback=True)
 instead of confidently wrong cuts. 159 tests green; realign verified live.
+
+## [2026-10-30] build | Stop running instances before launching
+
+New `scripts/stop_running.py` (SIGTERM every `serve`/`worker`, SIGKILL after
+10s, never matches itself or its ancestors, leaves the Suno bridge alone) is
+wired as the VS Code task `drama-llama: stop running`. All three `serve` launch
+configs now set `preLaunchTask`, and the `dev: api` task has `dependsOn`.
+Tests: `tests/test_stop_running.py` asserts self-exclusion and that the bridge
+and test processes are never targeted. 163 tests green.
+## [2026-10-30] fix | Suno account-switch download failure

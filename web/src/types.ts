@@ -32,6 +32,15 @@ export interface SunoPersona {
   root_clip_id?: string | null;
 }
 
+export interface SunoLibraryClip {
+  id: string | null;
+  title: string;
+  status: string | null;
+  duration?: number | null;
+  model_name?: string | null;
+  created_at?: string | null;
+}
+
 export interface RefVoice {
   id: string;
   name: string;

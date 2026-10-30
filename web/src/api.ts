@@ -1,4 +1,5 @@
 import type {
+  AlignmentResult,
   EngineInfo,
   EngineName,
   Job,
@@ -7,6 +8,7 @@ import type {
   ProjectSummary,
   Script,
   SfxItem,
+  SunoLibraryClip,
   SunoPersona,
 } from "./types";
 
@@ -221,6 +223,19 @@ export const api = {
       `/projects/${projectId}/stems/${stemId}/take`,
       { method: "PATCH", body: JSON.stringify({ take_id: takeId }) },
     ),
+  updateAlignment: (
+    projectId: string,
+    stemId: string,
+    cuts: { line_id: string; start_s: number; end_s: number }[],
+    rebuildMix = true,
+  ) =>
+    request<{ project: Project; alignment: AlignmentResult }>(
+      `/projects/${projectId}/stems/${stemId}/alignment`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ cuts, rebuild_mix: rebuildMix }),
+      },
+    ),
   sunoStatus: () =>
     request<{
       ok: boolean;
@@ -257,9 +272,15 @@ export const api = {
     request<Job>(`/projects/${projectId}/mix`, { method: "POST" }),
   fileUrl: (projectId: string, path: string) =>
     `${BASE}/projects/${projectId}/files/${path}`,
-  uploadVoiceSample: async (projectId: string, speaker: string, file: File) => {
+  uploadVoiceSample: async (
+    projectId: string,
+    speaker: string,
+    file: File,
+    name?: string,
+  ) => {
     const form = new FormData();
     form.append("file", file);
+    if (name) form.append("name", name);
     const response = await fetch(
       `${BASE}/projects/${projectId}/characters/${encodeURIComponent(speaker)}/voice-sample`,
       { method: "POST", body: form },
@@ -311,6 +332,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  extractStem: (
+    projectId: string,
+    stemId: string,
+    input: { take_id?: string; method?: "demucs" | "suno"; align?: boolean },
+  ) =>
+    request<Job>(`/projects/${projectId}/stems/${stemId}/extract`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  importSunoTake: (projectId: string, stemId: string, clipId: string) =>
+    request<Job>(`/projects/${projectId}/stems/${stemId}/import-suno`, {
+      method: "POST",
+      body: JSON.stringify({ clip_id: clipId }),
+    }),
+  sunoLibrary: (limit = 50) =>
+    request<{ ok: boolean; clips: SunoLibraryClip[] }>(
+      `/suno/library?limit=${limit}`,
+    ),
   updateStem: (
     projectId: string,
     stemId: string,

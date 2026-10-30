@@ -182,6 +182,16 @@ class TakeSelect(BaseModel):
     take_id: str
 
 
+class CutUpdate(BaseModel):
+    line_id: str
+    start_s: float = Field(ge=0)
+    end_s: float = Field(gt=0)
+
+
+class AlignmentPatch(BaseModel):
+    cuts: list[CutUpdate]
+    rebuild_mix: bool = True
+
 class CharacterUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
@@ -671,12 +681,23 @@ def create_app(
         file: UploadFile,
         name: str | None = None,
         name_form: str | None = None,
+        ref_text: str | None = None,
+        ref_instruction: str | None = None,
     ) -> dict[str, Any]:
         name = (name_form or name or "").strip() or None
+        if ref_text is not None:
+            # allow empty? keep None if blank
+            ref_text = ref_text.strip() or None
+        if ref_instruction is not None:
+            ref_instruction = ref_instruction.strip() or None
         project = project_or_404(project_id)
         character = project.script.characters.get(speaker)
         if character is None:
             raise HTTPException(status_code=404, detail="character not found")
+        if ref_text is not None:
+            character.ref_text = ref_text
+        if ref_instruction is not None:
+            character.ref_instruction = ref_instruction
         suffix = Path(file.filename or "sample.wav").suffix.lower()
         if suffix not in {".wav", ".mp3", ".m4a", ".flac", ".ogg"}:
             raise HTTPException(status_code=400, detail="unsupported audio format")
@@ -773,8 +794,17 @@ def create_app(
         file: UploadFile = File(...),
         name_form: str | None = Form(default=None, alias="name"),
         name_query: str | None = Query(default=None, alias="name"),
+        ref_text: str | None = Form(default=None),
+        ref_instruction: str | None = Form(default=None),
     ) -> dict[str, Any]:
-        return _upload_voice_sample(project_id, speaker, file, name=name_form or name_query)
+        return _upload_voice_sample(
+            project_id,
+            speaker,
+            file,
+            name=name_form or name_query,
+            ref_text=ref_text,
+            ref_instruction=ref_instruction,
+        )
 
     # Additional convenience endpoints for uploading named reference voices.
     for _path in (
@@ -793,14 +823,171 @@ def create_app(
                 file: UploadFile = File(...),
                 name: str | None = Form(default=None),
                 name_query: str | None = Query(default=None, alias="name"),
+                ref_text: str | None = Form(default=None),
+                ref_instruction: str | None = Form(default=None),
             ) -> dict[str, Any]:
                 return _upload_voice_sample(
-                    project_id, speaker, file, name=name_query or name
+                    project_id,
+                    speaker,
+                    file,
+                    name=name_query or name,
+                    ref_text=ref_text,
+                    ref_instruction=ref_instruction,
                 )
 
             return _upload
 
         _make(_path)
+
+    @app.post("/api/projects/{project_id}/stems/{stem_id}/extract", status_code=202)
+    def extract_project_stem(
+        project_id: str, stem_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        stem = next((item for item in project.stems if item.id == stem_id), None)
+        if stem is None:
+            raise HTTPException(status_code=404, detail="stem not found")
+        if not stem.takes:
+            raise HTTPException(status_code=409, detail="render the stem first")
+        take_id = body.get("take_id") or (
+            next((t.id for t in stem.takes if t.selected), None)
+            or stem.takes[0].id
+        )
+        if not any(t.id == take_id for t in stem.takes):
+            raise HTTPException(status_code=404, detail="take not found")
+        method = str(body.get("method") or "demucs").strip().lower()
+        if method not in {"demucs", "suno"}:
+            raise HTTPException(status_code=400, detail="method must be demucs or suno")
+        existing = active_job(project_id, "stem.extract", stem_id)
+        if existing is not None:
+            return existing.model_dump(mode="json")
+        job = queue.enqueue(
+            "stem.extract",
+            {
+                "project_id": project_id,
+                "stem_id": stem_id,
+                "take_id": take_id,
+                "method": method,
+                "align": bool(body.get("align", True)),
+            },
+            priority=10,
+        )
+        return job.model_dump(mode="json")
+
+    @app.post("/api/projects/{project_id}/stems/{stem_id}/import-suno", status_code=202)
+    def import_suno_take(
+        project_id: str, stem_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Attach an existing Suno library clip as a take (recover generations).
+
+        Downloads the clip, converts to wav and stores it as the selected take
+        with estimated line timing — the same shape as a fresh Suno render.
+        """
+        project = project_or_404(project_id)
+        stem = next((item for item in project.stems if item.id == stem_id), None)
+        if stem is None:
+            raise HTTPException(status_code=404, detail="stem not found")
+        clip_id = str(body.get("clip_id") or "").strip()
+        if not clip_id:
+            raise HTTPException(status_code=400, detail="clip_id is required")
+        existing = active_job(project_id, "stem.import_suno", stem_id)
+        if existing is not None:
+            return existing.model_dump(mode="json")
+        job = queue.enqueue(
+            "stem.import_suno",
+            {
+                "project_id": project_id,
+                "stem_id": stem_id,
+                "clip_id": clip_id,
+            },
+            priority=10,
+        )
+        return job.model_dump(mode="json")
+
+    @app.patch("/api/projects/{project_id}/stems/{stem_id}/alignment")
+    def update_alignment(
+        request: Request, project_id: str, stem_id: str, body: AlignmentPatch
+    ) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        stem = next((item for item in project.stems if item.id == stem_id), None)
+        if stem is None:
+            raise HTTPException(status_code=404, detail="stem not found")
+        selected = next((take for take in stem.takes if take.selected), None)
+        if selected is None:
+            raise HTTPException(status_code=409, detail="stem has no selected take")
+
+        directory = store.project_dir(project_id)
+        stem_path = directory / selected.file
+        if not stem_path.exists():
+            raise HTTPException(status_code=404, detail="stem audio missing")
+
+        import re
+        import soundfile as sf
+        from .audio import write_mono
+        from .models import AlignedLine, AlignmentResult
+
+        data, sr = sf.read(str(stem_path), always_2d=True, dtype="float32")
+        mono = data.mean(axis=1)
+        duration = len(mono) / sr
+
+        def _safe(value: str) -> str:
+            return re.sub(r"[^a-zA-Z0-9._-]+", "_", value).strip("_") or "line"
+
+        alignment = project.alignments.get(stem_id)
+        if alignment is None:
+            alignment = AlignmentResult(stem_id=stem_id, lines=[], aligner="manual")
+        by_id = {line.line_id: line for line in alignment.lines}
+
+        for cut in body.cuts:
+            if not (0.0 <= cut.start_s < cut.end_s <= duration + 1e-3):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"cut for {cut.line_id} out of range (0..{duration:.2f}s)",
+                )
+
+        out_dir = directory / "lines"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for cut in body.cuts:
+            start = max(0, int(round(cut.start_s * sr)))
+            end = min(len(mono), int(round(cut.end_s * sr)))
+            if end <= start:
+                raise HTTPException(status_code=400, detail=f"empty cut for {cut.line_id}")
+            segment = mono[start:end]
+            write_mono(out_dir / f"{_safe(cut.line_id)}.wav", segment, sr)
+
+            entry = by_id.get(cut.line_id)
+            if entry is None:
+                entry = AlignedLine(
+                    line_id=cut.line_id,
+                    start_s=round(cut.start_s, 3),
+                    end_s=round(cut.end_s, 3),
+                    confidence=1.0,
+                    fallback=False,
+                )
+                alignment.lines.append(entry)
+                by_id[cut.line_id] = entry
+            else:
+                entry.start_s = round(cut.start_s, 3)
+                entry.end_s = round(cut.end_s, 3)
+                entry.confidence = 1.0
+                entry.fallback = False
+
+        alignment.aligner = "manual"
+        project.alignments[stem_id] = alignment
+        project = store.save(project)
+
+        if body.rebuild_mix:
+            from .mixer import build_mix
+
+            sfx = request.app.state.sfx
+            mix_result = build_mix(project, directory, sfx.get)
+            project.mix = mix_result
+            project = store.save(project)
+
+        return {
+            "project": project.model_dump(mode="json"),
+            "alignment": alignment.model_dump(mode="json"),
+        }
 
     @app.post("/api/projects/{project_id}/characters/{speaker}/reference", status_code=202)
     def design_character_reference(
@@ -981,6 +1168,14 @@ def create_app(
         """Persona detail incl. root clip for voice preview."""
         try:
             return SunoBridge().get_persona(persona_id)
+        except SunoError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @app.get("/api/suno/library")
+    def suno_library(limit: int = Query(default=50, ge=1, le=50)) -> dict[str, Any]:
+        """Newest own Suno library clips for the import-from-Suno picker."""
+        try:
+            return SunoBridge().list_library(limit)
         except SunoError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 

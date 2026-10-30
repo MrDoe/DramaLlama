@@ -356,6 +356,23 @@ async function main() {
         return send(res, 200, { ok: true, clip: result.data, text: result.text });
       }
 
+      // Recent library clips for the Drama Llama "import from Suno" picker:
+      // the newest own generations, so failed renders can be recovered
+      // without generating again.
+      if (req.method === "GET" && url.pathname === "/library") {
+        const limit = Math.max(
+          1,
+          Math.min(50, Number(url.searchParams.get("limit")) || 50),
+        );
+        try {
+          const result = await callTool("list_library", { limit });
+          const clips = extractClips(result.data).map(slimClip).slice(0, limit);
+          return send(res, 200, { ok: true, clips });
+        } catch (error) {
+          return send(res, 502, { ok: false, error: error.message });
+        }
+      }
+
       // Force the BetterSuno extension to render its Turnstile widget in the
       // Suno tab and hand back a token. Used when a generation attempt failed
       // with "could not be solved automatically": the extension reuses Suno's

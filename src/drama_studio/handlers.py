@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -9,8 +15,9 @@ from .config import DATA_DIR, PROJECTS_DIR
 from .engines import engine_info
 from .engines.fake import FakeEngine
 from .engines.manager import EngineManager
-from .engines.suno import CaptchaRequiredError
+from .engines.suno import CaptchaRequiredError, _convert_to_wav, _pick_vocal_stem
 from .mixer import build_mix
+from .settings import resolve_suno
 from .models import (
     AlignedLine,
     AlignmentResult,
@@ -22,6 +29,7 @@ from .models import (
     RefVoice,
     StemRenderRequest,
     SunoTrack,
+    Take,
 )
 from .sfx import SfxLibrary
 from .store import ProjectStore, slugify
@@ -472,6 +480,309 @@ def realign_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     return alignment.model_dump(mode="json")
 
 
+def import_suno_take(job: Job, ctx: JobContext) -> dict[str, Any]:
+    """Attach an existing Suno library clip as a stem take.
+
+    Recovers generations whose render job failed before downloading (or any
+    other Suno clip): downloads + converts to wav, stores as the selected
+    take with estimated line timing, like a fresh non-isolated Suno render.
+    """
+    payload = job.payload
+    project_id = payload["project_id"]
+    stem_id = payload["stem_id"]
+    clip_id = str(payload.get("clip_id") or "").strip()
+    if not clip_id:
+        raise PermanentJobError("clip_id is required")
+
+    project = _load_project(project_id)
+    stem = next((item for item in project.stems if item.id == stem_id), None)
+    if stem is None:
+        raise PermanentJobError(f"stem {stem_id!r} not found in project")
+
+    directory = _STORE.project_dir(project.id)
+    take_dir = directory / "audio" / "takes"
+    take_dir.mkdir(parents=True, exist_ok=True)
+    lines = _lines_for_stem(project, stem.line_ids)
+
+    bridge = SunoBridge()
+    ctx.progress(0.1, f"waiting for Suno clip {clip_id}")
+    try:
+        finished = bridge.wait_for_clip(clip_id, timeout_s=120)
+    except SunoError as exc:
+        raise PermanentJobError(f"Suno clip {clip_id} not ready: {exc}") from exc
+    preview_url = finished.get("audio_url")
+
+    ctx.progress(0.4, "downloading Suno clip")
+    try:
+        m4a_path = bridge.download(clip_id, take_dir, "m4a")
+    except SunoError:
+        try:
+            m4a_path = bridge.download(clip_id, take_dir, "wav")
+        except SunoError as exc:
+            raise PermanentJobError(f"Suno download failed: {exc}") from exc
+    uid = uuid.uuid4().hex[:8]
+    slug = slugify(f"{stem.id}-import")[:40]
+    wav_path = take_dir / f"{slug}-{uid}.wav"
+    try:
+        if m4a_path.suffix.lower() != ".wav":
+            _convert_to_wav(m4a_path, wav_path)
+        else:
+            shutil.copy2(m4a_path, wav_path)
+    except Exception as exc:
+        raise PermanentJobError(f"audio conversion failed: {exc}") from exc
+
+    import soundfile as sf
+
+    try:
+        info = sf.info(str(wav_path))
+        duration = float(info.frames) / float(info.samplerate)
+        sample_rate = int(info.samplerate)
+    except Exception:
+        duration = float(finished.get("duration") or 0)
+        sample_rate = 24000
+
+    new_take_id = f"suno-import-{stem.id}-{uid}"
+    take = Take(
+        id=new_take_id,
+        file=str(wav_path.relative_to(directory)),
+        engine="suno",
+        duration_s=duration,
+        sample_rate=sample_rate,
+        seed=stem.seed,
+        clip_id=clip_id,
+        preview_url=preview_url,
+        vocal_isolated=False,
+        selected=True,
+    )
+    for existing in stem.takes:
+        existing.selected = False
+    stem.takes = [t for t in stem.takes if t.id != new_take_id] + [take]
+    stem.engine = stem.engine or "suno"
+    _STORE.save(project)
+
+    alignment = None
+    if lines:
+        ctx.progress(0.8, "estimating line timing (imported Suno mix)")
+        alignment = _estimate_alignment(stem.id, duration, lines)
+        project.alignments[stem.id] = alignment
+        _STORE.save(project)
+
+    ctx.progress(1.0, "Suno clip imported")
+    return {
+        "stem_id": stem.id,
+        "take": take.model_dump(mode="json"),
+        "alignment": alignment.model_dump(mode="json") if alignment else None,
+    }
+
+
+def extract_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
+    payload = job.payload
+    project_id = payload["project_id"]
+    stem_id = payload["stem_id"]
+    take_id = payload["take_id"]
+    method = str(payload.get("method") or "demucs").strip().lower()
+    if method not in {"demucs", "suno"}:
+        raise PermanentJobError(f"unknown extraction method {method!r}")
+
+    project = _load_project(project_id)
+    stem = next((item for item in project.stems if item.id == stem_id), None)
+    if stem is None:
+        raise PermanentJobError(f"stem {stem_id!r} not found in project")
+    take = next((item for item in stem.takes if item.id == take_id), None)
+    if take is None:
+        raise PermanentJobError(f"take {take_id!r} not found in stem")
+
+    directory = _STORE.project_dir(project.id)
+    source = directory / take.file
+    if not source.exists():
+        raise PermanentJobError(f"take audio not found: {source}")
+
+    lines = _lines_for_stem(project, stem.line_ids)
+    take_dir = directory / "audio" / "takes"
+    take_dir.mkdir(parents=True, exist_ok=True)
+
+    slug = slugify(f"{stem.id}-{take.id}")[:40]
+    uid = uuid.uuid4().hex[:8]
+    vocal_name = f"{slug}-{uid}-vocals.wav"
+    instr_name = f"{slug}-{uid}-instrumental.wav"
+    vocal_path = take_dir / vocal_name
+    instr_path = take_dir / instr_name
+
+    ctx.progress(0.05, f"extracting stem ({method})")
+    instrumental_sfx_id = None
+
+    if method == "demucs":
+        device = str(payload.get("device") or "cpu").strip().lower()
+        if device not in {"cpu", "cuda"}:
+            device = "cpu"
+        work_dir = directory / "audio" / "extracted" / take.id
+        work_dir.mkdir(parents=True, exist_ok=True)
+        # Clean previous outputs for this take.
+        for child in work_dir.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+        cmd = [
+            sys.executable,
+            "-m",
+            "demucs",
+            "-n",
+            "htdemucs",
+            "--two-stems",
+            "vocals",
+            "-d",
+            device,
+            "-o",
+            str(work_dir),
+            str(source),
+        ]
+        try:
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or b"").decode("utf-8", "replace").strip()
+            raise PermanentJobError(f"Demucs failed: {detail or exc}") from exc
+        # Demucs writes work_dir/htdemucs/<track>/vocals.wav + no_vocals.wav
+        vocal_src = None
+        instr_src = None
+        for wav in work_dir.rglob("*.wav"):
+            name = wav.name.lower()
+            if name == "vocals.wav":
+                vocal_src = wav
+            elif name == "no_vocals.wav":
+                instr_src = wav
+        if vocal_src is None:
+            raise PermanentJobError("Demucs did not produce vocals.wav")
+        shutil.copy2(vocal_src, vocal_path)
+        if instr_src is not None:
+            shutil.copy2(instr_src, instr_path)
+        engine_name = "demucs"
+    else:
+        plan, _ = resolve_suno()
+        if plan.plan != "pro":
+            raise PermanentJobError(
+                "Suno stem extraction requires a Pro/Premier plan"
+            )
+        if not take.clip_id:
+            raise PermanentJobError("take has no Suno clip id")
+        try:
+            stems_result = SunoBridge().make_stems(take.clip_id)
+        except Exception as exc:
+            raise PermanentJobError(f"Suno stem extraction failed: {exc}") from exc
+        stem_clips = stems_result.get("clips") or []
+        vocal = _pick_vocal_stem(stem_clips)
+        if not vocal or not vocal.get("id"):
+            raise PermanentJobError("Suno returned no vocal stem")
+        instr_clip = None
+        for clip in stem_clips:
+            title = str(clip.get("title") or "").lower()
+            if "instrumental" in title or "no_vocal" in title:
+                instr_clip = clip
+                break
+        if instr_clip is None and len(stem_clips) > 1:
+            # Fall back to the clip that is not the vocal.
+            for clip in stem_clips:
+                if clip.get("id") != vocal.get("id"):
+                    instr_clip = clip
+                    break
+
+        def _download(clip_id: str, dst: Path) -> Path:
+            m4a_path = None
+            try:
+                m4a_path = SunoBridge().download(clip_id, take_dir, "m4a")
+            except SunoError:
+                try:
+                    m4a_path = SunoBridge().download(clip_id, take_dir, "wav")
+                except SunoError as exc:
+                    raise PermanentJobError(f"Suno download failed: {exc}") from exc
+            wav_path = dst
+            try:
+                if m4a_path.suffix.lower() != ".wav":
+                    _convert_to_wav(m4a_path, wav_path)
+                else:
+                    shutil.copy2(m4a_path, wav_path)
+            except Exception as exc:
+                raise PermanentJobError(f"audio conversion failed: {exc}") from exc
+            return wav_path
+
+        _download(vocal.get("id"), vocal_path)
+        if instr_clip and instr_clip.get("id"):
+            _download(instr_clip.get("id"), instr_path)
+        engine_name = "suno"
+
+    # Probe vocal duration.
+    import soundfile as sf
+
+    try:
+        info = sf.info(str(vocal_path))
+        duration = float(info.frames) / float(info.samplerate)
+        sample_rate = int(info.samplerate)
+    except Exception:
+        duration = take.duration_s
+        sample_rate = take.sample_rate
+
+    new_take_id = f"{method}-{stem.id}-{uid}"
+    vocal_take = Take(
+        id=new_take_id,
+        file=str(vocal_path.relative_to(directory)),
+        engine=engine_name,
+        duration_s=duration,
+        sample_rate=sample_rate,
+        seed=take.seed,
+        clip_id=take.clip_id,
+        preview_url=take.preview_url,
+        vocal_isolated=True,
+        selected=True,
+    )
+    # Deselect others, append new vocal take.
+    for existing in stem.takes:
+        existing.selected = False
+    stem.takes = [t for t in stem.takes if t.id != new_take_id] + [vocal_take]
+    stem.engine = stem.engine or take.engine
+    _STORE.save(project)
+
+    # Add instrumental to the Sound library.
+    if instr_path.exists():
+        try:
+            item = _SFX.add_upload(
+                instr_path,
+                filename=f"{stem.speaker} {stem.id} instrumental.wav",
+            )
+            instrumental_sfx_id = item.id
+        except Exception:
+            instrumental_sfx_id = None
+
+    # Auto-align vocal take if requested.
+    alignment = None
+    if bool(payload.get("align", True)) and lines:
+        ctx.progress(0.85, "aligning extracted vocal")
+        aligner = WhisperAligner(language=project.language)
+        try:
+            alignment = aligner.align(
+                directory / vocal_take.file,
+                lines,
+                directory,
+                stem_id=stem.id,
+                language=project.language,
+            )
+            project.alignments[stem.id] = alignment
+            _STORE.save(project)
+        except Exception:
+            alignment = None
+
+    ctx.progress(1.0, "stem extracted")
+    return {
+        "stem_id": stem.id,
+        "take_id": take.id,
+        "new_take_id": new_take_id,
+        "method": method,
+        "instrumental_sfx_id": instrumental_sfx_id,
+        "alignment": alignment.model_dump(mode="json") if alignment else None,
+    }
+
 def suno_generate(job: Job, ctx: JobContext) -> dict[str, Any]:
     project = _load_project(job.payload["project_id"])
     payload = job.payload
@@ -567,6 +878,8 @@ def default_handlers() -> dict[str, Handler]:
         "stem.render.fake": fake_render_stem,
         "stem.render": render_stem,
         "stem.render.breeze": render_stem,
+        "stem.extract": extract_stem,
+        "stem.import_suno": import_suno_take,
         "reference.design": design_reference,
         "reference.design.breeze": design_reference,
         "stem.align.breeze": align_stem,

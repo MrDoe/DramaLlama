@@ -111,16 +111,15 @@ mixer always receives a decodable file.
    `Save & parse` is deterministic; `LLM parse` first has the model normalize
    messy attribution into the canonical format and falls back safely if the
    model is offline.
-2. **Stems** — group lines by scene + speaker. Each stem is one continuous
-   performance, not one TTS call per line.
-3. **Render** — choose an engine per stem. Breeze uses a 6–11 s designed
-   reference; Chatterbox uses an uploaded voice sample or its default voice.
-   The worker renders, aligns with Whisper on CPU, cuts line clips, and stores
-   confidence. Takes stay labelled by engine for A/B comparison.
-4. **Sound** — search `~/Sounds` (plus `data/sfx` and uploads), preview, and
+2. **Stems & Render** — group lines by scene + speaker, then choose an engine per
+   stem and render. Breeze uses a 6–11 s designed reference; Chatterbox uses an
+   uploaded voice sample or its default voice. The worker renders, aligns with
+   Whisper on CPU, cuts line clips, and stores confidence. Takes stay labelled
+   by engine for A/B comparison.
+3. **Sound** — search `~/Sounds` (plus `data/sfx` and uploads), preview, and
    attach beds / one-shots / music to specific lines. Or generate music with
    Suno and add the returned track as a cue.
-5. **Mix** — assemble line clips, duck beds under speech, filter telephone
+4. **Mix** — assemble line clips, duck beds under speech, filter telephone
    lines, loudnorm to podcast (−16 LUFS) or broadcast (−23 LUFS), and download
    WAV/MP3.
 

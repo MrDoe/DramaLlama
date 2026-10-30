@@ -12,6 +12,7 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[concepts/sfx-library-and-mix]] — local SFX index, cue model, mix chain.
 - [[concepts/suno-turnstile-captcha]] — why Suno renders stall on Cloudflare Turnstile, and the fix plan.
 - [[concepts/batch-render-and-captcha-recovery]] — sequential "render all", pause-on-captcha, recovery dialog.
+- [[concepts/suno-account-switch]] — stale identity cache after a Suno login change, and the fix.
 
 ## Engines and music
 

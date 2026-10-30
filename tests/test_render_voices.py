@@ -15,6 +15,7 @@ from drama_studio.models import (
     StemRenderRequest,
 )
 from drama_studio.stems import build_stems
+from drama_studio.sfx import SfxLibrary
 from drama_studio.store import ProjectStore
 from drama_studio.worker import Worker
 
@@ -287,6 +288,70 @@ def test_api_stem_voice_and_params(tmp_path):
         json={"suno_weirdness": 150},
     )
     assert bad_range.status_code == 422
+
+
+def test_extract_stem_demucs(tmp_path):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("T", "en", SCRIPT)
+    project.stems = build_stems(project)
+    store.save(project)
+    project = store.get(project.id)
+    stem = next(s for s in project.stems if s.id == "s1-mara")
+    stem.engine = "fake"
+    store.save(project)
+
+    sfx_root = tmp_path / "sfx"
+    sfx_root.mkdir()
+    library = SfxLibrary(
+        roots=[sfx_root],
+        cache_path=tmp_path / "sfx_index.json",
+        excludes=set(),
+        upload_root=sfx_root,
+    )
+
+    import unittest.mock as mock
+
+    with mock.patch.object(handler_module, "_STORE", store), mock.patch.object(
+        handler_module, "_SFX", library
+    ), mock.patch.object(handler_module, "_MANAGER", FakeManager(FakeEngine())):
+        queue = JobQueue(tmp_path / "jobs.sqlite3")
+        render_job = queue.enqueue(
+            "stem.render",
+            {
+                "project_id": project.id,
+                "stem_id": stem.id,
+                "candidates": 1,
+                "align": False,
+                "engine": "fake",
+            },
+        )
+        Worker(queue, {"stem.render": handler_module.render_stem}, worker_id="test").run_once()
+        assert queue.get(render_job.id).status == "succeeded"
+
+        project = store.get(project.id)
+        stem = next(s for s in project.stems if s.id == stem.id)
+        take = stem.takes[0]
+
+        extract_job = queue.enqueue(
+            "stem.extract",
+            {
+                "project_id": project.id,
+                "stem_id": stem.id,
+                "take_id": take.id,
+                "method": "demucs",
+                "align": False,
+            },
+        )
+        Worker(
+            queue,
+            {"stem.extract": handler_module.extract_stem},
+            worker_id="test",
+        ).run_once()
+        finished = queue.get(extract_job.id)
+        assert finished.status == "succeeded", finished.error
+        project = store.get(project.id)
+        stem = next(s for s in project.stems if s.id == stem.id)
+        assert any(t.engine == "demucs" and t.vocal_isolated for t in stem.takes)
 
 
 def test_api_render_passes_voice_params(tmp_path):
