@@ -3,8 +3,6 @@
 <img src="web/public/llogo.png" width="132" align="right" alt="Drama Llama mascot" />
 
 A local-first web app that turns a pasted script into a finished audio drama.
-Drama Llama is the rename of the project formerly called Drama Studio; the
-Python import package and the checkout directory keep their old names.
 
 ```
 pasted script
