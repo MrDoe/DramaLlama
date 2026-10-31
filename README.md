@@ -1,6 +1,6 @@
 # Drama Llama
 
-<img src="web/public/llogo.png" width="132" align="right" alt="Drama Llama mascot" />
+<img src="web/public/llogo.png" width="132" align="left" alt="Drama Llama mascot" />
 
 A local-first web app that turns a pasted script into a finished audio drama.
 
