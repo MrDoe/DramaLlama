@@ -47,3 +47,8 @@ class EngineManager:
     def unload_all(self) -> None:
         for name in list(self._engines):
             self.unload(name)
+
+    def is_loaded(self, name: str) -> bool:
+        """True when the engine is resident (no fresh VRAM spike to load it)."""
+        engine = self._engines.get(name)
+        return engine is not None and engine.loaded

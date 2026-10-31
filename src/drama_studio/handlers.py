@@ -108,6 +108,10 @@ def _gpu_free_gb() -> float | None:
 def _require_gpu(engine_name: str) -> None:
     if engine_name in {"fake", "chatterbox", "suno"}:
         return
+    if _MANAGER.is_loaded(engine_name):
+        # Resident already: rendering reuses the loaded model instead of
+        # paying the load spike again, so the free-VRAM gate does not apply.
+        return
     needed = 9.0 if engine_name == "breeze" else 5.0
     free = _gpu_free_gb()
     if free is not None and free < needed:

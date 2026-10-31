@@ -24,6 +24,32 @@ class FakeManager:
     def get(self, name: str):
         return FakeEngine()
 
+    def is_loaded(self, name: str) -> bool:
+        return False
+
+
+def test_require_gpu_exempts_resident_engine(monkeypatch):
+    """A second same-engine job must not fail the free-VRAM gate.
+
+    The load spike was already paid; rendering reuses the resident model.
+    """
+    monkeypatch.setattr(handler_module, "_gpu_free_gb", lambda: 0.5)
+    with monkeypatch.context() as patch:
+        patch.setattr(handler_module, "_MANAGER", FakeManager())
+        try:
+            handler_module._require_gpu("breeze")
+        except Exception as exc:
+            assert "GPU busy" in str(exc)
+        else:
+            raise AssertionError("expected GPU busy without a resident engine")
+
+    class ResidentManager(FakeManager):
+        def is_loaded(self, name: str) -> bool:
+            return True
+
+    monkeypatch.setattr(handler_module, "_MANAGER", ResidentManager())
+    handler_module._require_gpu("breeze")  # must not raise
+
 
 def test_render_stem_handler_updates_project(tmp_path, monkeypatch):
     store = ProjectStore(tmp_path / "projects")
