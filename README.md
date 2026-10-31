@@ -60,57 +60,75 @@ Working end-to-end on the English path:
   one shared timeline with per-clip take choice, atomic batch saves and a
   single mix rebuild. A queued realign never clobbers newer manual trims.
 
-## Quick start
+## Installation
 
-Use the existing TTS venv so torch and the audio stack are already available:
+A clean setup needs three prerequisites: Python 3.12 or newer, an `ffmpeg`
+binary on `PATH` (the mixer shells out to it for loudness normalisation and
+MP3 encoding, and uploads are converted with it), and Node.js 20 or newer
+for the web frontend. A local NVIDIA GPU is optional but recommended —
+without one, Breeze renders and Whisper alignment fall back to slow CPU
+execution, while the Fake engine and the full test suite run anywhere.
 
-```bash
-cd ~/code/drama-studio
-~/.venvs/qwen3tts/bin/pip install -e . --no-deps
-
-cd web
-npm install
-npm run build
-cd ..
-
-~/.venvs/qwen3tts/bin/drama-llama serve
-# http://127.0.0.1:8770
-```
-
-The legacy `drama-studio` command is installed as an alias.
-
-Or use the launcher, which builds `web/dist` only when it is missing or stale:
+Clone the repository and pull in the BetterSuno submodule, which the music
+sidecar depends on:
 
 ```bash
-./start-ui.sh            # http://127.0.0.1:8770
-./start-ui.sh --dev      # Vite :5173 + API :8770 (hot reload)
-./start-ui.sh --open     # open the browser once /api/health passes
+git clone git@github.com:MrDoe/DramaLlama.git
+cd DramaLlama
+git submodule update --init
 ```
 
-`--build` forces a rebuild, `--no-build` skips the build (and fails if
-`web/dist` is missing), and extra arguments are forwarded to
-`drama-llama serve` (for example `--no-worker`).
-
-`serve` starts the FastAPI app and an in-process worker. Use
-`--no-worker` if you want to run `drama-llama worker` in a separate
-terminal (recommended while debugging model loads).
+Create a fresh virtual environment and install the package into it. The base
+install only declares the light web dependencies (FastAPI, uvicorn, pydantic),
+so it works immediately for the UI, the queue and the test suite:
 
 ```bash
-~/.venvs/qwen3tts/bin/drama-llama worker --once
-~/.venvs/qwen3tts/bin/drama-llama jobs
+python3.12 -m venv ~/.venvs/drama-llama
+~/.venvs/drama-llama/bin/pip install -U pip
+~/.venvs/drama-llama/bin/pip install -e . --no-deps
+~/.venvs/drama-llama/bin/pip install -e ".[dev]"   # tests + lint
 ```
+
+Rendering and alignment need the audio stack on top. Install it into the same
+environment: `pip install numpy soundfile faster-whisper demucs`, plus a
+matching `torch` build — the CUDA build from pytorch.org for GPU machines,
+the default CPU build otherwise. Demucs is invoked as `python -m demucs`,
+so it must resolve inside the venv; everything else is imported directly,
+and the app degrades gracefully when a model is missing (render jobs fail
+with a plain-language error instead of crashing the worker).
+
+Build the frontend once with npm; afterwards `./start-ui.sh` rebuilds only
+when sources are newer than `web/dist`:
+
+```bash
+cd web && npm install && npm run build && cd ..
+```
+
+Then start the app. `serve` runs the FastAPI backend together with an
+in-process worker on `http://127.0.0.1:8770`:
+
+```bash
+~/.venvs/drama-llama/bin/drama-llama serve
+```
+
+The legacy `drama-studio` command is installed as an alias. If you prefer to
+debug model loads separately, pass `--no-worker` and run
+`~/.venvs/drama-llama/bin/drama-llama worker --once` in a second terminal;
+`~/.venvs/drama-llama/bin/drama-llama jobs` inspects the queue. The
+`./start-ui.sh` launcher wraps all of this: it builds when stale and serves,
+with `--dev` for Vite hot reload on :5173, `--open` to launch the browser
+once `/api/health` passes, and `--build` / `--no-build` to control the
+rebuild.
 
 ### Suno music bridge
 
-Suno needs the BetterSuno browser extension and a `suno.com` tab. Start the
-HTTP sidecar in another terminal:
-
-```bash
-cd ~/code/drama-studio/suno-bridge
-npm install          # installs the local bettersuno-mcp dependency
-cd ..
-~/.venvs/qwen3tts/bin/drama-llama suno-bridge
-```
+Suno needs the BetterSuno browser extension and a `suno.com` tab. The
+submodule was already fetched during installation; make sure its own
+dependencies are installed once (its postinstall script is local-only, so a
+plain install skips it upstream — use `ci --ignore-scripts` inside
+`third_party/bettersuno-mcp`), then start the HTTP sidecar in another
+terminal with `~/.venvs/drama-llama/bin/drama-llama suno-bridge` (`serve`
+starts it automatically unless `--no-suno-bridge` is given).
 
 The bridge listens on `http://127.0.0.1:9430` and owns the extension WebSocket
 on `ws://127.0.0.1:9423`. Only one process can own 9423 at a time; stop any
@@ -190,8 +208,8 @@ stem/aligner is Apache 2.0 code; see `vendor/breeze_stems/VENDORED_FROM.md`.
 | `data/jobs.sqlite3` | job queue (SQLite, WAL) |
 | `tests/` | 186 tests, no GPU required |
 
-The checkout directory is still `drama-studio`, and the Python package keeps
-its `drama_studio` import name; only the product, CLI and UI were renamed.
+The Python package keeps its `drama_studio` import name; only the product,
+CLI and UI were renamed.
 
 ## Configuration
 
