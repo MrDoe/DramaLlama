@@ -168,7 +168,6 @@ mixer always receives a decodable file.
 | English | Breeze TTS 2 | 6–11 s reference design → clone per scene stem |
 | German | Breeze-TTS-2.cpp (Articulatio-DE) | optional sidecar: voice design or clone; research/non-commercial |
 | English/German | Chatterbox Multilingual 0.5B | uploaded voice sample → clone; default voice if none |
-| both | Fake | sine/noise stems, no GPU |
 | music | Suno via BetterSuno | prompt → generated track → music cue |
 
 Chatterbox expects its model server at `http://127.0.0.1:4123`; it can be
