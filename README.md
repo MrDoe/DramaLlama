@@ -30,6 +30,10 @@ WAV/MP3 master.
 Screenshots taken live against the running app (`fake` engine demo project,
 no GPU needed).
 
+▶️ [Watch the guide video](docs/drama-llama-guide.mp4) (96 s) — the full tour
+above, screen-recorded in the app with real Breeze voices: script, render
+queue, Cut board, sound, mix, with the rendered master as soundtrack.
+
 ## Status
 
 Working end-to-end on the English path:
