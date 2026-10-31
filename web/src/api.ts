@@ -219,14 +219,19 @@ export const api = {
   deleteCue: (projectId: string, cueId: string) =>
     request<void>(`/projects/${projectId}/cues/${cueId}`, { method: "DELETE" }),
   selectTake: (projectId: string, stemId: string, takeId: string) =>
-    request<{ project: Project; job: Job }>(
+    request<{ project: Project; job: Job | null }>(
       `/projects/${projectId}/stems/${stemId}/take`,
       { method: "PATCH", body: JSON.stringify({ take_id: takeId }) },
     ),
   updateAlignment: (
     projectId: string,
     stemId: string,
-    cuts: { line_id: string; start_s: number; end_s: number }[],
+    cuts: {
+      line_id: string;
+      take_id?: string | null;
+      start_s: number;
+      end_s: number;
+    }[],
     rebuildMix = true,
   ) =>
     request<{ project: Project; alignment: AlignmentResult }>(
@@ -234,6 +239,21 @@ export const api = {
       {
         method: "PATCH",
         body: JSON.stringify({ cuts, rebuild_mix: rebuildMix }),
+      },
+    ),
+  updateAlignmentsBatch: (
+    projectId: string,
+    stems: Record<
+      string,
+      { line_id: string; take_id?: string | null; start_s: number; end_s: number }[]
+    >,
+    rebuildMix = true,
+  ) =>
+    request<{ project: Project; alignments: Record<string, AlignmentResult> }>(
+      `/projects/${projectId}/alignments`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ stems, rebuild_mix: rebuildMix }),
       },
     ),
   sunoStatus: () =>
@@ -319,7 +339,6 @@ export const api = {
       candidates?: number;
       cfg_scale?: number;
       seed?: number;
-      engine?: string;
       ref_voice_id?: string | null;
       suno_weirdness?: number | null;
       suno_style_weight?: number | null;
@@ -354,7 +373,6 @@ export const api = {
     projectId: string,
     stemId: string,
     input: {
-      engine?: string;
       cfg_scale?: number;
       seed?: number;
       suno_lyrics?: string | null;

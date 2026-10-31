@@ -292,12 +292,11 @@ def test_api_stem_voice_and_params(tmp_path):
 
 def test_extract_stem_demucs(tmp_path):
     store = ProjectStore(tmp_path / "projects")
-    project = store.create("T", "en", SCRIPT)
+    project = store.create("T", "en", SCRIPT, default_engine="fake")
     project.stems = build_stems(project)
     store.save(project)
     project = store.get(project.id)
     stem = next(s for s in project.stems if s.id == "s1-mara")
-    stem.engine = "fake"
     store.save(project)
 
     sfx_root = tmp_path / "sfx"
@@ -358,13 +357,18 @@ def test_api_render_passes_voice_params(tmp_path):
     client = make_client(tmp_path)
     project = client.post(
         "/api/projects",
-        json={"title": "T", "language": "en", "script_text": SCRIPT},
+        json={
+            "title": "T",
+            "language": "en",
+            "script_text": SCRIPT,
+            "default_engine": "fake",
+        },
     ).json()
     built = client.post(f"/api/projects/{project['id']}/stems").json()
     stem = next(s for s in built["stems"] if s["speaker"] == "MARA")
     response = client.post(
         f"/api/projects/{project['id']}/stems/{stem['id']}/render",
-        json={"engine": "fake", "ref_voice_id": "raspy", "suno_weirdness": 10},
+        json={"ref_voice_id": "raspy", "suno_weirdness": 10},
     )
     assert response.status_code == 202
     payload = response.json()["payload"]

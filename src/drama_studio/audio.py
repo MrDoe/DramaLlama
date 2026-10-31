@@ -27,6 +27,21 @@ def duration_s(path: str | Path) -> float:
     return float(info.frames) / float(info.samplerate)
 
 
+def slice_mono(
+    samples: np.ndarray, sample_rate: int, start_s: float, end_s: float
+) -> np.ndarray:
+    """Return the [start_s, end_s) window of a mono buffer.
+
+    Clamps to the buffer; callers that need validation should check the
+    duration first so a silently truncated cut cannot slip through.
+    """
+    start = max(0, int(round(start_s * sample_rate)))
+    end = min(len(samples), int(round(end_s * sample_rate)))
+    if end <= start:
+        return np.zeros(0, dtype=np.float32)
+    return np.asarray(samples[start:end], dtype=np.float32)
+
+
 def peak_normalize(samples: np.ndarray, peak: float = 0.9) -> np.ndarray:
     data = np.asarray(samples, dtype=np.float32)
     current = float(np.max(np.abs(data))) if data.size else 0.0

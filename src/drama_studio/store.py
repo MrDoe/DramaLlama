@@ -90,13 +90,16 @@ class ProjectStore:
         if not path.exists():
             raise KeyError(project_id)
         project = Project.model_validate_json(path.read_text(encoding="utf-8"))
-        # Older parsers stamped the language default onto every character.
-        # Treat that value as "inherit", so switching the project engine does
-        # not silently leave characters on Breeze/Chatterbox.
-        legacy = "breeze" if project.language == "en" else "chatterbox"
-        for character in project.script.characters.values():
-            if character.engine == legacy:
-                character.engine = None
+        # Legacy take_id=None cuts follow the selected take; stamp them so
+        # old projects stay readable after multi-track cuts landed.
+        # (Legacy Stem.engine / Character.engine keys from pre-project-level
+        # projects are ignored by pydantic's default extra=ignore.)
+        from .cuts import normalize_alignment
+
+        for stem in project.stems:
+            alignment = project.alignments.get(stem.id)
+            if alignment is not None:
+                normalize_alignment(alignment, stem.takes)
         return project
 
     def find(self, project_id: str) -> Project | None:

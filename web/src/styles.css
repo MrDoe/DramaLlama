@@ -311,7 +311,9 @@ h3 {
 /* ------------------------------------------------------------------ hero */
 
 .hero {
-  display: grid;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
   gap: 48px;
   align-items: center;
@@ -841,9 +843,9 @@ h3 {
   margin-bottom: 22px;
   padding: 5px;
   overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: rgba(12, 12, 26, 0.58);
+  /* border: 1px solid var(--border); */
+  /* border-radius: 12px; */
+  /* background: rgba(12, 12, 26, 0.58); */
 }
 
 .step {
@@ -859,6 +861,7 @@ h3 {
   font-weight: 600;
   white-space: nowrap;
   transition: color 160ms ease, background 160ms ease;
+  border: none;
 }
 
 .step:hover:not(.disabled) {
@@ -1188,6 +1191,39 @@ h3 {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: rgba(12, 12, 26, 0.38);
+}
+
+.cut-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr);
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .cut-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.cut-wave {
+  width: 100%;
+  min-width: 0;
+}
+
+.cut-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
 }
 
 .stem-grid {
@@ -2235,6 +2271,39 @@ h3 {
   color: rgba(100, 116, 139, 0.65);
 }
 
+/* Bare <select> dropdowns (import picker, extract method, …): same theme as
+   .input, so they don't fall back to native OS styling. More specific rules
+   (.cue-field select, select.input) keep their own look. */
+select {
+  height: 34px;
+  max-width: 100%;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  color: var(--text);
+  background: rgba(8, 8, 18, 0.6);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+select:focus-visible {
+  border-color: rgba(249, 115, 22, 0.5);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1);
+}
+
+select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+select option {
+  color: var(--text);
+  background: rgba(8, 8, 18, 0.95);
+}
+
 .segmented {
   display: inline-flex;
   padding: 3px;
@@ -2630,5 +2699,183 @@ h3 {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Multitrack timeline (Cut board) */
+.mt-timeline {
+  margin-top: 10px;
+  outline: none;
+}
+
+.mt-timeline:focus-visible {
+  border-color: var(--border-strong);
+}
+
+.mt-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.mt-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  opacity: 0.85;
+  min-width: 130px;
+}
+
+.mt-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+
+.mt-zoom-label {
+  font-size: 11px;
+  opacity: 0.7;
+  font-weight: 600;
+}
+
+.mt-view-label {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.mt-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mt-row {
+  display: grid;
+  grid-template-columns: 184px minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.mt-track-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(12, 12, 26, 0.5);
+}
+
+.mt-track-sub {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.mt-track-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mt-toggle.active {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.mt-volume {
+  width: 64px;
+  accent-color: var(--accent);
+}
+
+.mt-dirty-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  margin-right: 4px;
+}
+
+.mt-canvas {
+  display: block;
+  border-radius: 6px;
+  cursor: default;
+  min-width: 0;
+}
+
+.mt-noaudio {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 12px;
+  opacity: 0.6;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  min-height: 110px;
+}
+
+.mt-ruler-head {
+  justify-content: center;
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.mt-scene-divider {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.55;
+  padding: 6px 2px 0;
+}
+
+.mt-selection {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.mt-selection-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.mt-selection-text {
+  font-size: 12px;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mt-selection-controls {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.mt-selection-controls label {
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.mt-hint {
+  margin-top: 10px;
+}
+
+@media (max-width: 900px) {
+  .mt-row {
+    grid-template-columns: 1fr;
   }
 }

@@ -12,6 +12,12 @@ from typing import Any
 
 from .aligner import WhisperAligner
 from .config import DATA_DIR, PROJECTS_DIR
+from .cuts import (
+    freeze_legacy_cuts,
+    normalize_alignment,
+    pick_selected_take,
+    remap_removed_cuts,
+)
 from .engines import engine_info
 from .engines.fake import FakeEngine
 from .engines.manager import EngineManager
@@ -120,6 +126,26 @@ def _lines_for_stem(project: Project, line_ids: list[str]) -> list[Line]:
     return [by_id[line_id] for line_id in line_ids if line_id in by_id]
 
 
+def _freeze_legacy_cuts(
+    alignment: AlignmentResult | None, fallback: Take | None
+) -> None:
+    """Back-compat wrapper around :func:`cuts.freeze_legacy_cuts`."""
+    freeze_legacy_cuts(alignment, fallback)
+
+
+def _remap_removed_cuts(
+    alignment: AlignmentResult | None,
+    removed: dict[str, Take],
+    new_take: Take,
+    directory: Path,
+) -> None:
+    """Back-compat wrapper: re-point cuts, failing clearly on missing audio."""
+    try:
+        remap_removed_cuts(alignment, removed, new_take, directory)
+    except FileNotFoundError as exc:
+        raise PermanentJobError(str(exc)) from exc
+
+
 def _scene_heading(project: Project, scene_id: int) -> str:
     for scene in project.script.scenes:
         if scene.id == scene_id:
@@ -199,7 +225,7 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
         seed=int(seed_value) if seed_value is not None else 42,
     )
 
-    engine_name = str(payload.get("engine") or _engine_name(project))
+    engine_name = _engine_name(project)
     if engine_name == "suno":
         raise PermanentJobError(
             "Suno uses preset voices; set a persona on the character instead "
@@ -247,9 +273,7 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     if character is None:
         raise PermanentJobError(f"character {stem.speaker!r} not found in project")
 
-    engine_name = str(
-        payload.get("engine") or stem.engine or _engine_name(project)
-    )
+    engine_name = _engine_name(project)
     try:
         info = engine_info(engine_name)
     except ValueError as exc:
@@ -350,24 +374,69 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             raise JobCancelled(str(exc)) from exc
         raise
 
-    stem.engine = engine_name
-    for take in stem.takes:
-        take.selected = False
-    stem.takes = [take for take in stem.takes if take.engine != engine_name] + result.takes
+    old_selected = next((take for take in stem.takes if take.selected), None)
+    existing_alignment = project.alignments.get(stem.id)
+    _freeze_legacy_cuts(existing_alignment, old_selected)
+
+    removed: dict[str, Take] = {}
+    picked = pick_selected_take(result.takes, result.selected_take_id)
+    if picked is None and result.takes:
+        picked = result.takes[0]
+    for take in result.takes:
+        take.selected = picked is not None and take.id == picked.id
+    if engine_name == "suno":
+        # Suno generations accumulate: each render adds tracks and leaves the
+        # earlier audio and cuts intact so clips can mix across generations.
+        new_keys = {
+            (take.engine, take.clip_id, take.vocal_isolated)
+            for take in result.takes
+        }
+        kept: list[Take] = []
+        for take in stem.takes:
+            key = (take.engine, take.clip_id, take.vocal_isolated)
+            if take.clip_id and key in new_keys:
+                removed[take.id] = take
+            else:
+                kept.append(take)
+        for take in kept:
+            take.selected = False
+        if picked is not None:
+            picked.selected = True
+        stem.takes = kept + result.takes
+    else:
+        replaced = [take for take in stem.takes if take.engine == engine_name]
+        removed = {take.id: take for take in replaced}
+        stem.takes = [
+            take for take in stem.takes if take.engine != engine_name
+        ] + result.takes
+        for take in stem.takes:
+            take.selected = False
+        chosen = picked or result.takes[0]
+        chosen.selected = True
+
+    selected = next((take for take in stem.takes if take.selected), None)
+    if selected is not None:
+        _remap_removed_cuts(existing_alignment, removed, selected, directory)
+    project.mix_stale = True
     _STORE.save(project)
 
-    selected = next((take for take in result.takes if take.selected), None)
     alignment = None
     if bool(payload.get("align", True)) and selected is not None:
         ctx.check_cancelled()
         lines = _lines_for_stem(project, stem.line_ids)
-        if lines and engine_name == "suno" and not selected.vocal_isolated:
+        if existing_alignment is not None and existing_alignment.lines:
+            # Preserve the user's take-aware cut sheet across re-renders.
+            alignment = existing_alignment
+        elif lines and engine_name == "suno" and not selected.vocal_isolated:
             # Suno only separates vocals on paid plans. Whisper on a full song
             # (instruments + backing vocals) produces confidently wrong cuts,
             # so estimate timings by word count and mark them low-confidence.
             ctx.progress(0.78, "estimating line timing (no vocal stem)")
-            alignment = _estimate_alignment(stem.id, selected.duration_s, lines)
+            alignment = _estimate_alignment(
+                stem.id, selected.duration_s, lines, take_id=selected.id
+            )
             project.alignments[stem.id] = alignment
+            project.mix_stale = True
             _STORE.save(project)
         elif lines:
             ctx.progress(0.78, "aligning stem with Whisper")
@@ -379,7 +448,10 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
                 stem_id=stem.id,
                 language=project.language,
             )
+            for line in alignment.lines:
+                line.take_id = selected.id
             project.alignments[stem.id] = alignment
+            project.mix_stale = True
             _STORE.save(project)
 
     ctx.progress(1.0, "stem ready")
@@ -391,7 +463,10 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
 
 
 def _estimate_alignment(
-    stem_id: str, duration_s: float, lines: list[Line]
+    stem_id: str,
+    duration_s: float,
+    lines: list[Line],
+    take_id: str | None = None,
 ) -> AlignmentResult:
     """Proportional timing for audio the aligner cannot trust.
 
@@ -408,6 +483,7 @@ def _estimate_alignment(
         aligned.append(
             AlignedLine(
                 line_id=line.id,
+                take_id=take_id,
                 start_s=round(cursor, 2),
                 end_s=round(cursor + span, 2),
                 confidence=0.05,
@@ -451,6 +527,12 @@ def realign_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     selected = next((take for take in stem.takes if take.selected), None)
     if selected is None:
         raise PermanentJobError("stem has no selected take")
+    # A queued realign must not clobber newer manual trims: if the cut sheet
+    # became manual (or mixed-take) after the job was queued, keep it.
+    existing = project.alignments.get(stem.id)
+    if existing is not None and existing.lines and existing.aligner == "manual":
+        ctx.progress(1.0, "alignment kept (manual edits beat queued realign)")
+        return existing.model_dump(mode="json")
     lines = _lines_for_stem(project, stem.line_ids)
     if not lines:
         raise PermanentJobError("stem has no lines")
@@ -458,8 +540,11 @@ def realign_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     directory = _STORE.project_dir(project.id)
     if selected.engine == "suno" and not selected.vocal_isolated:
         ctx.progress(0.2, "estimating line timing (no vocal stem)")
-        alignment = _estimate_alignment(stem.id, selected.duration_s, lines)
+        alignment = _estimate_alignment(
+            stem.id, selected.duration_s, lines, take_id=selected.id
+        )
         project.alignments[stem.id] = alignment
+        project.mix_stale = True
         _STORE.save(project)
         ctx.progress(1.0, "alignment ready (estimated)")
         return alignment.model_dump(mode="json")
@@ -474,7 +559,10 @@ def realign_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         stem_id=stem.id,
         language=project.language,
     )
+    for line in alignment.lines:
+        line.take_id = selected.id
     project.alignments[stem.id] = alignment
+    project.mix_stale = True
     _STORE.save(project)
     ctx.progress(1.0, "alignment ready")
     return alignment.model_dump(mode="json")
@@ -554,18 +642,38 @@ def import_suno_take(job: Job, ctx: JobContext) -> dict[str, Any]:
         vocal_isolated=False,
         selected=True,
     )
-    for existing in stem.takes:
+    old_selected = next((item for item in stem.takes if item.selected), None)
+    existing_alignment = project.alignments.get(stem.id)
+    _freeze_legacy_cuts(existing_alignment, old_selected)
+    # Re-importing the same clip refreshes that track instead of duplicating
+    # it; cuts that pointed at the old copy move to the fresh download.
+    removed = {
+        old.id: old
+        for old in stem.takes
+        if old.engine == take.engine
+        and old.clip_id == take.clip_id
+        and old.vocal_isolated == take.vocal_isolated
+    }
+    kept = [old for old in stem.takes if old.id not in removed]
+    for existing in kept:
         existing.selected = False
-    stem.takes = [t for t in stem.takes if t.id != new_take_id] + [take]
-    stem.engine = stem.engine or "suno"
+    stem.takes = kept + [take]
+    _remap_removed_cuts(existing_alignment, removed, take, directory)
+    project.mix_stale = True
     _STORE.save(project)
 
     alignment = None
     if lines:
-        ctx.progress(0.8, "estimating line timing (imported Suno mix)")
-        alignment = _estimate_alignment(stem.id, duration, lines)
-        project.alignments[stem.id] = alignment
-        _STORE.save(project)
+        if existing_alignment is not None and existing_alignment.lines:
+            alignment = existing_alignment
+        else:
+            ctx.progress(0.8, "estimating line timing (imported Suno mix)")
+            alignment = _estimate_alignment(
+                stem.id, duration, lines, take_id=take.id
+            )
+            project.alignments[stem.id] = alignment
+            project.mix_stale = True
+            _STORE.save(project)
 
     ctx.progress(1.0, "Suno clip imported")
     return {
@@ -737,11 +845,15 @@ def extract_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         vocal_isolated=True,
         selected=True,
     )
+    old_selected = next((item for item in stem.takes if item.selected), None)
+    existing_alignment = project.alignments.get(stem.id)
+    _freeze_legacy_cuts(existing_alignment, old_selected)
+
     # Deselect others, append new vocal take.
     for existing in stem.takes:
         existing.selected = False
     stem.takes = [t for t in stem.takes if t.id != new_take_id] + [vocal_take]
-    stem.engine = stem.engine or take.engine
+    project.mix_stale = True
     _STORE.save(project)
 
     # Add instrumental to the Sound library.
@@ -758,20 +870,32 @@ def extract_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     # Auto-align vocal take if requested.
     alignment = None
     if bool(payload.get("align", True)) and lines:
-        ctx.progress(0.85, "aligning extracted vocal")
-        aligner = WhisperAligner(language=project.language)
-        try:
-            alignment = aligner.align(
-                directory / vocal_take.file,
-                lines,
-                directory,
-                stem_id=stem.id,
-                language=project.language,
-            )
-            project.alignments[stem.id] = alignment
-            _STORE.save(project)
-        except Exception:
-            alignment = None
+        mixed = bool(existing_alignment and existing_alignment.lines) and any(
+            line.take_id not in {None, take.id}
+            for line in existing_alignment.lines
+        )
+        if mixed:
+            # The cut sheet mixes several takes; replacing it would throw
+            # those choices away, so leave it (and its line clips) alone.
+            alignment = existing_alignment
+        else:
+            ctx.progress(0.85, "aligning extracted vocal")
+            aligner = WhisperAligner(language=project.language)
+            try:
+                alignment = aligner.align(
+                    directory / vocal_take.file,
+                    lines,
+                    directory,
+                    stem_id=stem.id,
+                    language=project.language,
+                )
+                for line in alignment.lines:
+                    line.take_id = new_take_id
+                project.alignments[stem.id] = alignment
+                project.mix_stale = True
+                _STORE.save(project)
+            except Exception:
+                alignment = None
 
     ctx.progress(1.0, "stem extracted")
     return {
@@ -861,6 +985,7 @@ def mix_project(job: Job, ctx: JobContext) -> dict[str, Any]:
     ctx.progress(0.1, "building dialogue timeline")
     result = build_mix(project, directory, _SFX.get)
     project.mix = result
+    project.mix_stale = False
     _STORE.save(project)
     ctx.progress(1.0, "mix ready")
     return result.model_dump(mode="json")

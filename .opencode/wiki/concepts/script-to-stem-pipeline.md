@@ -6,7 +6,8 @@ sourceRefs:
   - src/drama_studio/llm.py
   - src/drama_studio/stems.py
   - src/drama_studio/aligner.py
-lastReviewed: 2026-10-29
+  - src/drama_studio/handlers.py
+lastReviewed: 2026-10-31
 ---
 
 # Script-to-stem pipeline
@@ -41,8 +42,16 @@ large-v3) produces word timestamps; the vendored `align_cuts()` sequence-matches
 script words to ASR words and returns line cut points plus per-line confidence.
 Line clips are written to `lines/<line_id>.wav`.
 
+Every produced line carries the `take_id` it was aligned on. A re-render only
+runs alignment when the stem has no cut sheet; existing sheets are preserved
+and cuts whose take disappeared are ratio-remapped to the replacement. The cut
+sheet is therefore take-aware and can mix takes per line — see
+[[concepts/take-aware-cuts]].
+
 ## Related
 
 - [[entities/breeze-engine]]
 - [[entities/chatterbox-engine]]
+- [[concepts/cut-board-multitrack]]
+- [[concepts/take-aware-cuts]]
 - [[sources/kepler-stem-pipeline]]

@@ -206,6 +206,49 @@ def test_suno_engine_reports_per_clip_download_errors(tmp_path):
         engine.render_stem(request)
 
 
+def test_suno_engine_generations_use_unique_ids_and_files(tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    from drama_studio.engines.suno import SunoEngine
+    from drama_studio.models import StemRenderRequest
+
+    class FakeBridge:
+        def generate(self, payload):
+            return {"clips": [{"id": "clip-a"}, {"id": "clip-b"}]}
+
+        def wait_for_clip(self, clip_id, timeout_s=180):
+            return {"id": clip_id, "status": "complete"}
+
+        def download(self, clip_id, output_dir, fmt="wav"):
+            from pathlib import Path
+
+            path = Path(output_dir) / f"{clip_id}.wav"
+            sf.write(str(path), np.zeros(1200, dtype=np.float32), 24000)
+            return path
+
+    engine = SunoEngine()
+    engine.bridge = FakeBridge()  # type: ignore[assignment]
+    engine._loaded = True
+    request = StemRenderRequest(
+        project_id="p",
+        stem_id="s1-mara",
+        speaker="MARA",
+        text="You're late.",
+        instruction="...",
+        output_dir=str(tmp_path),
+        candidates=2,
+    )
+    first = engine.render_stem(request)
+    second = engine.render_stem(request)
+
+    ids = [take.id for take in first.takes + second.takes]
+    files = [take.file for take in first.takes + second.takes]
+    assert len(set(ids)) == 4
+    assert len(set(files)) == 4
+    assert all((tmp_path / file).exists() for file in files)
+
+
 SCRIPT = """# LYRICS TEST
 
 ## SCENE 1

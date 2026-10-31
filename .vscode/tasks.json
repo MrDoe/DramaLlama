@@ -112,6 +112,22 @@
       ]
     },
     {
+      "label": "build: web (watch)",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "build:watch"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/web"
+      },
+      "isBackground": true,
+      "problemMatcher": [
+        "$tsc"
+      ]
+    },
+    {
       "label": "dev: vite",
       "type": "shell",
       "command": "npm",

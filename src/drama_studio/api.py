@@ -109,6 +109,8 @@ class RenderBody(BaseModel):
     candidates: int = Field(default=2, ge=1, le=3)
     cfg_scale: float | None = None
     seed: int | None = None
+    # Deprecated per-stem override: engines are project-level only.
+    # Any non-null value is rejected with 400 (see render endpoint).
     engine: str | None = None
     # Explicit Suno lyric sheet override for this render. When None the
     # stored stem sheet is used.
@@ -124,6 +126,8 @@ class RenderBody(BaseModel):
 
 
 class StemUpdate(BaseModel):
+    # Deprecated per-stem override: engines are project-level only.
+    # Any non-null value is rejected with 400 (see update_stem).
     engine: str | None = None
     cfg_scale: float | None = None
     seed: int | None = None
@@ -184,12 +188,19 @@ class TakeSelect(BaseModel):
 
 class CutUpdate(BaseModel):
     line_id: str
+    # Which take this cut window belongs to. None = the selected take.
+    take_id: str | None = None
     start_s: float = Field(ge=0)
     end_s: float = Field(gt=0)
 
 
 class AlignmentPatch(BaseModel):
     cuts: list[CutUpdate]
+    rebuild_mix: bool = True
+
+
+class BatchAlignmentPatch(BaseModel):
+    stems: dict[str, list[CutUpdate]]
     rebuild_mix: bool = True
 
 class CharacterUpdate(BaseModel):
@@ -410,23 +421,13 @@ def create_app(
             project.settings = body.settings
         effective_language = body.language or project.language
         if body.default_engine is not None:
-            previous = project.default_engine or (
-                "breeze" if effective_language == "en" else "chatterbox"
-            )
             if body.default_engine == "auto":
                 project.default_engine = None
             else:
                 check_engine(body.default_engine, effective_language)
                 project.default_engine = body.default_engine
-            current = project.default_engine or (
-                "breeze" if effective_language == "en" else "chatterbox"
-            )
-            # Stems that still sit on the old project default follow the new
-            # one; explicit per-stem choices (fake, a one-off Suno render, ...)
-            # are left alone.
-            for stem in project.stems:
-                if stem.engine in (None, previous):
-                    stem.engine = current
+            # Engines are project-level only: stems inherit the project
+            # default at render time, no per-stem override is stored.
         elif project.default_engine is not None:
             info = next(
                 (item for item in all_engine_info() if item.name == project.default_engine),
@@ -913,52 +914,88 @@ def create_app(
         if stem is None:
             raise HTTPException(status_code=404, detail="stem not found")
         selected = next((take for take in stem.takes if take.selected), None)
-        if selected is None:
+        takes_by_id = {take.id: take for take in stem.takes}
+        if selected is None and any(cut.take_id is None for cut in body.cuts):
             raise HTTPException(status_code=409, detail="stem has no selected take")
 
         directory = store.project_dir(project_id)
-        stem_path = directory / selected.file
-        if not stem_path.exists():
-            raise HTTPException(status_code=404, detail="stem audio missing")
 
-        import re
-        import soundfile as sf
-        from .audio import write_mono
+        from .audio import read_mono, slice_mono, write_mono
+        from .cuts import safe_filename, validate_cut
         from .models import AlignedLine, AlignmentResult
 
-        data, sr = sf.read(str(stem_path), always_2d=True, dtype="float32")
-        mono = data.mean(axis=1)
-        duration = len(mono) / sr
-
-        def _safe(value: str) -> str:
-            return re.sub(r"[^a-zA-Z0-9._-]+", "_", value).strip("_") or "line"
+        # Ownership + duplicate validation before touching any audio.
+        seen_ids: set[str] = set()
+        for cut in body.cuts:
+            if cut.line_id in seen_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"duplicate cut for {cut.line_id}",
+                )
+            seen_ids.add(cut.line_id)
+            if cut.line_id not in stem.line_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"line {cut.line_id} does not belong to stem {stem_id}",
+                )
 
         alignment = project.alignments.get(stem_id)
         if alignment is None:
             alignment = AlignmentResult(stem_id=stem_id, lines=[], aligner="manual")
         by_id = {line.line_id: line for line in alignment.lines}
 
-        for cut in body.cuts:
-            if not (0.0 <= cut.start_s < cut.end_s <= duration + 1e-3):
+        take_audio: dict[str, tuple[Any, int, float]] = {}
+
+        def _take_for(cut: CutUpdate):
+            take = takes_by_id.get(cut.take_id) if cut.take_id else selected
+            if take is None:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"cut for {cut.line_id} out of range (0..{duration:.2f}s)",
+                    status_code=404,
+                    detail=f"take {cut.take_id} not found on stem",
                 )
+            return take
+
+        def _audio_for(take):
+            cached = take_audio.get(take.id)
+            if cached is not None:
+                return cached
+            stem_path = directory / take.file
+            if not stem_path.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"take {take.id} audio missing",
+                )
+            mono, sr = read_mono(stem_path)
+            cached = (mono, sr, len(mono) / sr)
+            take_audio[take.id] = cached
+            return cached
+
+        # Validate everything before writing anything (atomic batches).
+        staged: list[tuple[CutUpdate, Any, int, Any]] = []
+        for cut in body.cuts:
+            take = _take_for(cut)
+            mono, sr, duration = _audio_for(take)
+            try:
+                validate_cut(cut.line_id, take, cut.start_s, cut.end_s, duration)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            segment = slice_mono(mono, sr, cut.start_s, cut.end_s)
+            if segment.size == 0:
+                raise HTTPException(
+                    status_code=400, detail=f"empty cut for {cut.line_id}"
+                )
+            staged.append((cut, take, sr, segment))
 
         out_dir = directory / "lines"
         out_dir.mkdir(parents=True, exist_ok=True)
-        for cut in body.cuts:
-            start = max(0, int(round(cut.start_s * sr)))
-            end = min(len(mono), int(round(cut.end_s * sr)))
-            if end <= start:
-                raise HTTPException(status_code=400, detail=f"empty cut for {cut.line_id}")
-            segment = mono[start:end]
-            write_mono(out_dir / f"{_safe(cut.line_id)}.wav", segment, sr)
+        for cut, take, sr, segment in staged:
+            write_mono(out_dir / f"{safe_filename(cut.line_id)}.wav", segment, sr)
 
             entry = by_id.get(cut.line_id)
             if entry is None:
                 entry = AlignedLine(
                     line_id=cut.line_id,
+                    take_id=take.id,
                     start_s=round(cut.start_s, 3),
                     end_s=round(cut.end_s, 3),
                     confidence=1.0,
@@ -967,6 +1004,7 @@ def create_app(
                 alignment.lines.append(entry)
                 by_id[cut.line_id] = entry
             else:
+                entry.take_id = take.id
                 entry.start_s = round(cut.start_s, 3)
                 entry.end_s = round(cut.end_s, 3)
                 entry.confidence = 1.0
@@ -974,6 +1012,7 @@ def create_app(
 
         alignment.aligner = "manual"
         project.alignments[stem_id] = alignment
+        project.mix_stale = True
         project = store.save(project)
 
         if body.rebuild_mix:
@@ -982,11 +1021,146 @@ def create_app(
             sfx = request.app.state.sfx
             mix_result = build_mix(project, directory, sfx.get)
             project.mix = mix_result
+            project.mix_stale = False
             project = store.save(project)
 
         return {
             "project": project.model_dump(mode="json"),
             "alignment": alignment.model_dump(mode="json"),
+        }
+
+    @app.patch("/api/projects/{project_id}/alignments")
+    def update_alignments_batch(
+        request: Request, project_id: str, body: BatchAlignmentPatch
+    ) -> dict[str, Any]:
+        """Save cuts for several stems, rebuilding the mix once.
+
+        The Cut board's Save-all uses this so N dirty stems cost one mix
+        rebuild instead of N. Validation is per-stem (same rules as the
+        single-stem endpoint); if any stem fails nothing is written.
+        """
+        from .audio import read_mono, slice_mono, write_mono
+        from .cuts import safe_filename, validate_cut
+        from .models import AlignedLine, AlignmentResult
+
+        project = project_or_404(project_id)
+        directory = store.project_dir(project_id)
+        stems_by_id = {stem.id: stem for stem in project.stems}
+
+        # Validate all stems first for atomicity.
+        plans: dict[str, Any] = {}
+        for stem_id, cuts in body.stems.items():
+            stem = stems_by_id.get(stem_id)
+            if stem is None:
+                raise HTTPException(status_code=404, detail=f"stem {stem_id} not found")
+            selected = next((take for take in stem.takes if take.selected), None)
+            takes_by_id = {take.id: take for take in stem.takes}
+            if selected is None and any(cut.take_id is None for cut in cuts):
+                raise HTTPException(
+                    status_code=409, detail=f"stem {stem_id} has no selected take"
+                )
+            seen: set[str] = set()
+            for cut in cuts:
+                if cut.line_id in seen:
+                    raise HTTPException(
+                        status_code=400, detail=f"duplicate cut for {cut.line_id}"
+                    )
+                seen.add(cut.line_id)
+                if cut.line_id not in stem.line_ids:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"line {cut.line_id} does not belong to stem {stem_id}",
+                    )
+            take_audio: dict[str, tuple[Any, int, float]] = {}
+
+            def _take_for(cut: CutUpdate):
+                take = takes_by_id.get(cut.take_id) if cut.take_id else selected
+                if take is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"take {cut.take_id} not found on stem",
+                    )
+                return take
+
+            def _audio_for(take):
+                cached = take_audio.get(take.id)
+                if cached is not None:
+                    return cached
+                stem_path = directory / take.file
+                if not stem_path.exists():
+                    raise HTTPException(
+                        status_code=404, detail=f"take {take.id} audio missing"
+                    )
+                mono, sr = read_mono(stem_path)
+                cached = (mono, sr, len(mono) / sr)
+                take_audio[take.id] = cached
+                return cached
+
+            staged: list[tuple[CutUpdate, Any, int, Any]] = []
+            for cut in cuts:
+                take = _take_for(cut)
+                mono, sr, duration = _audio_for(take)
+                try:
+                    validate_cut(cut.line_id, take, cut.start_s, cut.end_s, duration)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                segment = slice_mono(mono, sr, cut.start_s, cut.end_s)
+                if segment.size == 0:
+                    raise HTTPException(
+                        status_code=400, detail=f"empty cut for {cut.line_id}"
+                    )
+                staged.append((cut, take, sr, segment))
+            plans[stem_id] = staged
+
+        out_dir = directory / "lines"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        alignments: dict[str, Any] = {}
+        for stem_id, staged in plans.items():
+            alignment = project.alignments.get(stem_id)
+            if alignment is None:
+                alignment = AlignmentResult(stem_id=stem_id, lines=[], aligner="manual")
+            by_id = {line.line_id: line for line in alignment.lines}
+            for cut, take, sr, segment in staged:
+                write_mono(out_dir / f"{safe_filename(cut.line_id)}.wav", segment, sr)
+                entry = by_id.get(cut.line_id)
+                if entry is None:
+                    entry = AlignedLine(
+                        line_id=cut.line_id,
+                        take_id=take.id,
+                        start_s=round(cut.start_s, 3),
+                        end_s=round(cut.end_s, 3),
+                        confidence=1.0,
+                        fallback=False,
+                    )
+                    alignment.lines.append(entry)
+                    by_id[cut.line_id] = entry
+                else:
+                    entry.take_id = take.id
+                    entry.start_s = round(cut.start_s, 3)
+                    entry.end_s = round(cut.end_s, 3)
+                    entry.confidence = 1.0
+                    entry.fallback = False
+            alignment.aligner = "manual"
+            project.alignments[stem_id] = alignment
+            alignments[stem_id] = alignment
+        project.mix_stale = True
+        project = store.save(project)
+
+        if body.rebuild_mix:
+            from .mixer import build_mix
+
+            sfx = request.app.state.sfx
+            mix_result = build_mix(project, directory, sfx.get)
+            project.mix = mix_result
+            project.mix_stale = False
+            project = store.save(project)
+
+        return {
+            "project": project.model_dump(mode="json"),
+            "alignments": {
+                stem_id: alignment.model_dump(mode="json")
+                for stem_id, alignment in alignments.items()
+            },
         }
 
     @app.post("/api/projects/{project_id}/characters/{speaker}/reference", status_code=202)
@@ -1009,7 +1183,6 @@ def create_app(
                 "ref_instruction": body.ref_instruction or character.ref_instruction,
                 "cfg_scale": body.cfg_scale,
                 "seed": body.seed,
-                "engine": character.engine,
                 "name": body.name,
             },
             priority=5,
@@ -1027,7 +1200,15 @@ def create_app(
         character = project.script.characters.get(stem.speaker)
         if character is None:
             raise HTTPException(status_code=404, detail="character not found")
-        engine_name = body.engine or stem.engine or project.default_engine or (
+        if body.engine is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "per-stem engine selection was removed; "
+                    "set Project.default_engine instead"
+                ),
+            )
+        engine_name = project.default_engine or (
             "breeze" if project.language == "en" else "chatterbox"
         )
         if engine_name in {"breeze", "breeze-de"}:
@@ -1075,18 +1256,13 @@ def create_app(
         if stem is None:
             raise HTTPException(status_code=404, detail="stem not found")
         if body.engine is not None:
-            try:
-                info = next(
-                    item for item in all_engine_info() if item.name == body.engine
-                )
-            except StopIteration as exc:
-                raise HTTPException(status_code=400, detail="unknown engine") from exc
-            if not info.language_agnostic and project.language not in info.languages:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{body.engine} does not support {project.language}",
-                )
-            stem.engine = body.engine
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "per-stem engine selection was removed; "
+                    "set Project.default_engine instead"
+                ),
+            )
         if body.cfg_scale is not None:
             stem.cfg_scale = body.cfg_scale
         if body.seed is not None:
@@ -1126,15 +1302,37 @@ def create_app(
             raise HTTPException(status_code=404, detail="stem not found")
         if not any(take.id == body.take_id for take in stem.takes):
             raise HTTPException(status_code=404, detail="take not found")
+        previous = next((take for take in stem.takes if take.selected), None)
+        alignment = project.alignments.get(stem_id)
+        if previous is not None and alignment is not None:
+            from .cuts import freeze_legacy_cuts
+
+            freeze_legacy_cuts(alignment, previous)
         for take in stem.takes:
             take.selected = take.id == body.take_id
-        project = store.save(project)
-        job = queue.enqueue(
-            "stem.realign",
-            {"project_id": project_id, "stem_id": stem_id},
-            priority=5,
+
+        # Realigning replaces the whole cut sheet, so only do it when that
+        # cannot discard per-clip take choices or manual trims.
+        safe_realign = not (alignment and alignment.lines) or (
+            previous is not None
+            and alignment is not None
+            and alignment.aligner != "manual"
+            and all(line.take_id == previous.id for line in alignment.lines)
         )
-        return {"project": project.model_dump(mode="json"), "job": job.model_dump(mode="json")}
+        project = store.save(project)
+        job = (
+            queue.enqueue(
+                "stem.realign",
+                {"project_id": project_id, "stem_id": stem_id},
+                priority=5,
+            )
+            if safe_realign
+            else None
+        )
+        return {
+            "project": project.model_dump(mode="json"),
+            "job": job.model_dump(mode="json") if job else None,
+        }
 
     @app.get("/api/suno/status")
     def suno_status() -> dict[str, Any]:

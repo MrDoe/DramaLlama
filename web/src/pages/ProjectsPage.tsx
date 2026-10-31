@@ -122,17 +122,24 @@ export function ProjectsPage() {
   return (
     <div className="page">
       <section className="hero">
+        <div style={{ width: 200, textAlign: "center" }}>
+          <img src="/llogo.png" alt="Drama Llama mascot" width={200} height={200} />
+          <span className="brand-text">
+            <strong>Drama Llama</strong>
+            <span>the audio drama lab</span>
+          </span>
+        </div>
         <div className="hero-copy">
-          <p className="eyebrow">The audio drama lab</p>
           <h1>
             Scripts in.
             <br />
             <em>Drama out.</em>
           </h1>
           <p>
-            Paste a screenplay. The LLM casts it, splits each character into a
-            scene stem, and Breeze performs it. Whisper cuts the stems back into
-            lines, then sound design and the final mix happen here.
+            Paste a script. The LLM splits it into a scene stem and
+            local TTS engines or Suno render the lines. 
+            Whisper aligns the stems to the script.
+            Then you can add SFX and mix the master.
           </p>
           <div className="hero-actions">
             <Link to="/new" className="button button-primary">
@@ -148,14 +155,6 @@ export function ProjectsPage() {
 
         <aside className="hero-aside" aria-label="Engines">
           <div className="studio-panel">
-            <div className="studio-head">
-              <img src="/llogo.png" alt="Drama Llama mascot" width={64} height={64} />
-              <div className="studio-title">
-                <strong>Drama Llama</strong>
-                <span>Parse · voices · align · music</span>
-              </div>
-              <span className="status-dot" aria-hidden="true" />
-            </div>
             <div className="studio-engines">
               <EngineCard
                 icon={<Brain size={19} weight="bold" />}

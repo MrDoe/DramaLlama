@@ -11,15 +11,28 @@ pasted script
    │  deterministic scan + optional LLM normalization to canonical format
    ▼
 scenes / lines ──group by scene+speaker──▶ stem scripts
-   │                                           │ Breeze / Chatterbox
-   │                                           ▼
-   │                                     stem WAV per character
+   │                                           │ project-default engine
+   │                                           ▼ (Breeze / Chatterbox / Suno / Fake)
+   │                                     stem takes per character
    │                                           │ Whisper word alignment
-   ▼                                           ▼
-SFX cues ◀── local library search ────── line clips
+   ▼                                           ▼ (take-aware cut sheet)
+SFX cues ◀── local library search ────── line clips ◀── Cut board trims
    │                                           │
    └──────────────► mix / master ◀─────────────┘
 ```
+
+## Tour
+
+| | |
+|---|---|
+| ![Projects](docs/screenshots/01-projects.png) | **Projects** — every drama on this machine, with the engine stack (LLM → voices → alignment → music) up top. |
+| ![Script](docs/screenshots/02-script.png) | **Script** — paste a script, parse deterministically or via LLM, inspect the cast. |
+| ![Render](docs/screenshots/03-render.png) | **Stems & Render** — per-scene, per-character stems rendered with the project-default engine; takes accumulate for A/B comparison. |
+| ![Cut board](docs/screenshots/04-cutboard.png) | **Cut** — the shared multitrack timeline: every line at its script position, per-clip take choice, drag to trim, Save-all rebuilds the mix once. |
+| ![Mix](docs/screenshots/05-mix.png) | **Mix** — dialogue assembly with ducked SFX, loudness-normalised master, WAV/MP3 download. |
+
+Screenshots taken live against the running app (`fake` engine demo project,
+no GPU needed).
 
 ## Status
 
@@ -44,8 +57,12 @@ Working end-to-end on the English path:
 - **Suno music** through the `bettersuno-mcp` modules: generate a theme/bed/song
   in the Sound stage, preview the returned track, add it as a music cue, then
   mix. Validated with a real BetterSuno extension connection and WAV download.
-- **Engine selection per stem**: Breeze, Chatterbox or the fake engine from a
-  dropdown; takes are labelled by engine and compare side-by-side.
+- **Project-level engines, take-aware cuts**: one engine per project (Breeze,
+  Breeze-DE, Chatterbox, Suno or Fake — no per-stem switching); every cut names
+  the take it was measured on. Suno re-renders append generations instead of
+  replacing them, manual trims survive, and the Cut board edits all stems on
+  one shared timeline with per-clip take choice, atomic batch saves and a
+  single mix rebuild. A queued realign never clobbers newer manual trims.
 
 ## Quick start
 
@@ -111,15 +128,22 @@ mixer always receives a decodable file.
    `Save & parse` is deterministic; `LLM parse` first has the model normalize
    messy attribution into the canonical format and falls back safely if the
    model is offline.
-2. **Stems & Render** — group lines by scene + speaker, then choose an engine per
-   stem and render. Breeze uses a 6–11 s designed reference; Chatterbox uses an
-   uploaded voice sample or its default voice. The worker renders, aligns with
-   Whisper on CPU, cuts line clips, and stores confidence. Takes stay labelled
-   by engine for A/B comparison.
-3. **Sound** — search `~/Sounds` (plus `data/sfx` and uploads), preview, and
+2. **Stems & Render** — group lines by scene + speaker, then render with the
+   project's default engine (picker in the project header; `auto` means Breeze
+   for English, Chatterbox for German). Breeze uses a 6–11 s designed
+   reference; Chatterbox uses an uploaded voice sample or its default voice.
+   The worker renders, aligns with Whisper on CPU, cuts line clips, and stores
+   confidence. Takes accumulate and stay labelled by engine for A/B
+   comparison; switching a cut's take scales its window by the duration ratio.
+3. **Cut** — trim every line on one shared timeline (script order, mixer
+   spacing). Drag edges to trim, drag a region body to slip the audio inside
+   it, switch a clip's take from the Track dropdown, then Save-all: all stems
+   validate atomically and the mix rebuilds once. A `mix stale` badge appears
+   whenever cuts change after the last mix.
+4. **Sound** — search `~/Sounds` (plus `data/sfx` and uploads), preview, and
    attach beds / one-shots / music to specific lines. Or generate music with
    Suno and add the returned track as a cue.
-4. **Mix** — assemble line clips, duck beds under speech, filter telephone
+5. **Mix** — assemble line clips, duck beds under speech, filter telephone
    lines, loudnorm to podcast (−16 LUFS) or broadcast (−23 LUFS), and download
    WAV/MP3.
 
@@ -159,14 +183,16 @@ stem/aligner is Apache 2.0 code; see `vendor/breeze_stems/VENDORED_FROM.md`.
 | Path | Purpose |
 |---|---|
 | `src/drama_studio/` | FastAPI, queue, worker, parser, engines, mixer |
-| `src/drama_studio/engines/` | Breeze / Qwen3 / Fake adapters |
+| `src/drama_studio/engines/` | Breeze / Breeze-DE / Chatterbox / Suno / Fake adapters |
+| `src/drama_studio/cuts.py` | shared take-aware cut logic (freeze/remap/validate) |
 | `vendor/breeze_stems/` | pinned Breeze stem renderer + Whisper aligner |
 | `suno-bridge/` | Node HTTP sidecar over the installed bettersuno-mcp modules |
 | `web/` | React + Vite + TypeScript UI |
-| `web/public/` | Drama Llama mascot and app-icon SVGs |
+| `web/public/` | Drama Llama mascot (`llogo.png`) |
+| `docs/screenshots/` | app tour screenshots (taken live, fake-engine demo) |
 | `data/projects/<id>/` | project JSON, refs, takes, line clips, mix |
 | `data/jobs.sqlite3` | job queue (SQLite, WAL) |
-| `tests/` | 60 tests, no GPU required |
+| `tests/` | 186 tests, no GPU required |
 
 The checkout directory is still `drama-studio`, and the Python package keeps
 its `drama_studio` import name; only the product, CLI and UI were renamed.
@@ -249,6 +275,6 @@ Real-model smoke tests are opt-in:
   recorder or trimmer yet; without a sample it uses the server default voice.
 - Suno generation needs the BetterSuno extension and a live `suno.com` tab.
   The bridge owns port 9423, so other `bettersuno-mcp` instances must be stopped.
-- Cue timing is line-anchored; a drag-and-drop waveform timeline is not built yet.
+- Cue timing is line-anchored; SFX cannot yet be dragged on the Cut timeline.
 - LLM parse requires Ollama and is intentionally serialized against Breeze on
   the 16 GB GPU.

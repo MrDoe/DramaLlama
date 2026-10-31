@@ -7,8 +7,11 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[entities/drama-llama-app]] — product surface, routes, storage, rename notes.
 - [[entities/drama-llama-mascot]] — llogo.png avatar assets, palette, rename boundaries.
 - [[concepts/script-to-stem-pipeline]] — paste → parse → stem → align.
+- [[concepts/cut-board-multitrack]] — shared Cut timeline, script-order clips, WebAudio transport.
+- [[concepts/take-aware-cuts]] — per-clip take selection, render append/dedupe, remap rules.
 - [[concepts/gpu-serialization]] — why Breeze, Chatterbox, Ollama and Whisper are scheduled carefully.
-- [[concepts/engine-selection]] — project default + per-stem providers, inheritance, A/B takes.
+- [[concepts/engine-selection]] — project default only, no per-stem override.
+- [[entities/cuts-module]] — shared `cuts.py` domain (freeze/remap/validate).
 - [[concepts/sfx-library-and-mix]] — local SFX index, cue model, mix chain.
 - [[concepts/suno-turnstile-captcha]] — why Suno renders stall on Cloudflare Turnstile, and the fix plan.
 - [[concepts/batch-render-and-captcha-recovery]] — sequential "render all", pause-on-captcha, recovery dialog.
