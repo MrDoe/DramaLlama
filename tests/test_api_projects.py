@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 from drama_studio.api import create_app
+from drama_studio.audio import read_mono, write_mono
 from drama_studio.llm import LLMError
-from drama_studio.models import Take
+from drama_studio.models import AlignedLine, AlignmentResult, Take
 
 
 class FailingLLM:
@@ -30,6 +32,14 @@ SCRIPT = """# API TEST
 
 MARA: You're late.
 ELIAS: Traffic.
+"""
+
+CUT_SCRIPT = """# CUT TEST
+
+## SCENE 1
+
+MARA: You're late.
+MARA: Pack.
 """
 
 
@@ -163,6 +173,158 @@ def test_select_take_queues_realign(tmp_path):
     assert selected[0]["id"] == "take-b"
 
 
+def _cut_project(tmp_path):
+    app, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "Cut Test", "language": "en", "script_text": CUT_SCRIPT},
+    ).json()
+    project = client.post(f"/api/projects/{project['id']}/stems").json()
+    stored = app.state.store.get(project["id"])
+    stem = stored.stems[0]
+    directory = app.state.store.project_dir(project["id"])
+    (directory / "audio" / "takes").mkdir(parents=True, exist_ok=True)
+    write_mono(
+        directory / "audio" / "takes" / "a.wav",
+        np.full(24000, 0.25, dtype=np.float32),
+        24000,
+    )
+    write_mono(
+        directory / "audio" / "takes" / "b.wav",
+        np.full(48000, -0.25, dtype=np.float32),
+        24000,
+    )
+    stem.takes = [
+        Take(
+            id="take-a",
+            file="audio/takes/a.wav",
+            duration_s=1.0,
+            sample_rate=24000,
+            seed=1,
+            selected=True,
+        ),
+        Take(
+            id="take-b",
+            file="audio/takes/b.wav",
+            duration_s=2.0,
+            sample_rate=24000,
+            seed=2,
+        ),
+    ]
+    app.state.store.save(stored)
+    return app, client, project, stem, directory
+
+
+def test_alignment_slices_each_cut_from_its_take(tmp_path):
+    app, client, project, stem, directory = _cut_project(tmp_path)
+    line_a, line_b = stem.line_ids
+    url = f"/api/projects/{project['id']}/stems/{stem.id}/alignment"
+
+    response = client.patch(
+        url,
+        json={
+            "cuts": [
+                {
+                    "line_id": line_a,
+                    "take_id": "take-b",
+                    "start_s": 0.5,
+                    "end_s": 1.0,
+                },
+                {
+                    "line_id": line_b,
+                    "take_id": "take-a",
+                    "start_s": 0.0,
+                    "end_s": 0.5,
+                },
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
+    lines = {line["line_id"]: line for line in response.json()["alignment"]["lines"]}
+    assert lines[line_a]["take_id"] == "take-b"
+    assert lines[line_b]["take_id"] == "take-a"
+
+    # take-b is the negative constant, take-a the positive one.
+    a_clip, _ = read_mono(directory / "lines" / f"{line_a}.wav")
+    b_clip, _ = read_mono(directory / "lines" / f"{line_b}.wav")
+    assert float(a_clip.mean()) < -0.2
+    assert float(b_clip.mean()) > 0.2
+
+    unknown = client.patch(
+        url,
+        json={
+            "cuts": [
+                {
+                    "line_id": line_a,
+                    "take_id": "nope",
+                    "start_s": 0.0,
+                    "end_s": 0.5,
+                }
+            ]
+        },
+    )
+    assert unknown.status_code == 404
+
+    too_long = client.patch(
+        url,
+        json={
+            "cuts": [
+                {
+                    "line_id": line_a,
+                    "take_id": "take-a",
+                    "start_s": 0.0,
+                    "end_s": 1.5,
+                }
+            ]
+        },
+    )
+    assert too_long.status_code == 400
+    assert "take-a" in too_long.json()["detail"]
+
+
+def test_alignment_accepts_legacy_cut_without_take(tmp_path):
+    app, client, project, stem, directory = _cut_project(tmp_path)
+    line_a = stem.line_ids[0]
+    response = client.patch(
+        f"/api/projects/{project['id']}/stems/{stem.id}/alignment",
+        json={"cuts": [{"line_id": line_a, "start_s": 0.0, "end_s": 0.5}]},
+    )
+    assert response.status_code == 200, response.text
+    line = response.json()["alignment"]["lines"][0]
+    assert line["take_id"] == "take-a"
+    clip, _ = read_mono(directory / "lines" / f"{line_a}.wav")
+    assert float(clip.mean()) > 0.2
+
+
+def test_select_take_keeps_mixed_cut_sheet(tmp_path):
+    app, client, project, stem, _ = _cut_project(tmp_path)
+    stored = app.state.store.get(project["id"])
+    line_a, line_b = stem.line_ids
+    stored.alignments[stem.id] = AlignmentResult(
+        stem_id=stem.id,
+        lines=[
+            AlignedLine(line_id=line_a, take_id="take-a", start_s=0.1, end_s=0.4),
+            AlignedLine(line_id=line_b, take_id="take-b", start_s=0.2, end_s=0.9),
+        ],
+        aligner="manual",
+    )
+    app.state.store.save(stored)
+
+    response = client.patch(
+        f"/api/projects/{project['id']}/stems/{stem.id}/take",
+        json={"take_id": "take-b"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job"] is None
+    lines = {
+        line["line_id"]: line for line in body["project"]["alignments"][stem.id]["lines"]
+    }
+    assert lines[line_a]["take_id"] == "take-a"
+    assert lines[line_a]["start_s"] == 0.1
+    assert lines[line_b]["take_id"] == "take-b"
+
+
 def test_engine_selection_and_suno_queue(tmp_path):
     _, client = make_client(tmp_path)
     project = client.post(
@@ -172,12 +334,13 @@ def test_engine_selection_and_suno_queue(tmp_path):
     project = client.post(f"/api/projects/{project['id']}/stems").json()
     stem = project["stems"][0]
 
-    changed = client.patch(
+    # Per-stem overrides were removed: engines are project-level only.
+    rejected = client.patch(
         f"/api/projects/{project['id']}/stems/{stem['id']}",
         json={"engine": "chatterbox"},
     )
-    assert changed.status_code == 200
-    assert changed.json()["stems"][0]["engine"] == "chatterbox"
+    assert rejected.status_code == 400
+    assert "project" in rejected.json()["detail"].lower()
 
     german = client.post(
         "/api/projects",
@@ -297,8 +460,10 @@ def test_changing_project_engine_updates_default_stems(tmp_path):
         json={"title": "Engine Stems", "language": "de", "script_text": SCRIPT},
     ).json()
     built = client.post(f"/api/projects/{project['id']}/stems").json()
-    assert all(stem["engine"] is None for stem in built["stems"])
+    # Engines are project-level only: stems carry no engine key.
+    assert all("engine" not in stem for stem in built["stems"])
     updated = client.put(
         f"/api/projects/{project['id']}", json={"default_engine": "suno"}
     ).json()
-    assert all(stem["engine"] == "suno" for stem in updated["stems"])
+    assert updated["default_engine"] == "suno"
+    assert all("engine" not in stem for stem in updated["stems"])

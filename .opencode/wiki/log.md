@@ -231,3 +231,58 @@ configs now set `preLaunchTask`, and the `dev: api` task has `dependsOn`.
 Tests: `tests/test_stop_running.py` asserts self-exclusion and that the bridge
 and test processes are never targeted. 163 tests green.
 ## [2026-10-30] fix | Suno account-switch download failure
+
+## [2026-10-30] build | Multitrack Cut board, script-order clips
+
+Replaced the per-stem Cut cards with one shared timeline
+(`MultiTrackEditor.tsx`) where every line region sits at its source-script
+slot: `computeTimeline()` mirrors `mixer.py` (script order, `pause_ms`,
+`scene_gap_ms`, cut length as clip duration, 2 s tail). The earlier
+median-offset approach was dropped — it could push a take's regions far out of
+script order when a take's internal pauses differed from the cut-length
+timeline. Trimming an edge now shifts all later lines like the mix; body drag
+is a slip edit inside the region. `SyncEngine` schedules one `BufferSource`
+per line segment on a shared `AudioContext` clock instead of one source per
+stem. Waveform rows grow to the track card's measured content height. Verified
+live on `hinterkaifeck-2`: total 294.3 s, region order s1-01…s1-16, trim
+294.3→291.3 s, slip preserved 21.85 s length, Space/Enter transport and region
+audition advanced and paused correctly. Added
+[[concepts/cut-board-multitrack]].
+
+## [2026-10-31] build | Take-aware cuts
+
+Suno re-renders now append tracks instead of replacing them, and each cut
+names the take it was measured on (`AlignedLine.take_id`, `None` = the
+stem's selected take). `render_stem` freezes legacy cuts before selection
+changes, dedupes Suno by `(engine, clip_id, vocal_isolated)`, preserves
+non-empty cut sheets, and ratio-remaps cuts whose take disappeared.
+`PATCH .../alignment` slices each line from its own take (cached decode,
+per-take range check); `select_take` only queues a destructive realign when
+safe. The Cut board decodes needed takes lazily, labels regions `T#`, and adds
+a per-region Track dropdown that scales the window by the duration ratio.
+Verified live on a scratch project (3.0-5.0 -> 3.5-5.83 on a 12 s -> 14 s
+switch, saved clip 660 Hz / 2.33 s, reload preserved). Added
+[[concepts/take-aware-cuts]]; updated [[concepts/cut-board-multitrack]],
+[[entities/suno-engine]] and [[concepts/script-to-stem-pipeline]]. 175 tests
+green, web build green.
+
+## [2026-10-31] refactor | Project-level engines + cuts domain hardening
+
+Removed per-stem engine overrides end to end (`Stem.engine`,
+`Character.engine`, `RenderBody.engine`/`StemUpdate.engine` now 400 with
+"set Project.default_engine instead"). Old project.json files with legacy
+engine keys still load (pydantic extra ignore + `store.get` normalizes legacy
+`take_id=None` via `cuts.normalize_alignment`). Added shared
+`src/drama_studio/cuts.py` (freeze/remap/scale/validate/pick-selected) and
+made handlers + API use it; `render_stem` honors
+`StemRenderResult.selected_take_id`, fails clearly on missing replacement
+audio, and sets `mix_stale`. `realign_stem` no longer clobbers manual sheets
+(queued-realign race). `PATCH .../alignment` validates ownership/duplicates,
+writes batches atomically, and sets/clears `mix_stale`; new batch endpoint
+`PATCH .../alignments` rebuilds the mix once for Save-all. Frontend drops the
+per-stem Engine dropdown (badge shows project default), uses batch Save-all,
+shows `mix stale`, surfaces missing takes instead of falling back, guards
+unload when dirty, and LRU-caps/prunes decoded takes in `SyncEngine`. Tests:
+186 passed (11 new: `test_cuts.py`, `test_cut_board.py`); web build green.
+Updated [[concepts/engine-selection]], [[concepts/take-aware-cuts]], added
+[[entities/cuts-module]].

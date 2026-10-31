@@ -35,9 +35,6 @@ class Character(BaseModel):
     id: str
     name: str
     description: str = ""
-    # None means "inherit the project's engine"; avoids silently assuming Breeze
-    # for projects whose default is Chatterbox or Suno.
-    engine: EngineName | None = None
     ref_text: str | None = None
     ref_instruction: str | None = None
     ref_file: str | None = None
@@ -171,6 +168,8 @@ class Project(BaseModel):
     cues: list[Cue] = Field(default_factory=list)
     suno: list[SunoTrack] = Field(default_factory=list)
     mix: MixResult | None = None
+    # True when cuts/takes changed since the last mix render.
+    mix_stale: bool = False
     settings: ProjectSettings = Field(default_factory=ProjectSettings)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -247,7 +246,6 @@ class Stem(BaseModel):
     # Reference voice override for this stem (a RefVoice id of the speaker).
     # None means the character's default reference.
     ref_voice_id: str | None = None
-    engine: str | None = None
     cfg_scale: float = 2.5
     seed: int = 42
     takes: list[Take] = Field(default_factory=list)
@@ -302,6 +300,9 @@ class StemRenderResult(BaseModel):
 
 class AlignedLine(BaseModel):
     line_id: str
+    # Which stem take this cut window lives in. None means "the stem's
+    # selected take" for projects saved before multi-track cuts existed.
+    take_id: str | None = None
     start_s: float
     end_s: float
     confidence: float | None = None

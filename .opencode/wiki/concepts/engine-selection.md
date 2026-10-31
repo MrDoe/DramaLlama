@@ -2,23 +2,28 @@
 title: Engine selection
 tags: [engine, providers, takes, ab-testing]
 sourceRefs:
+  - src/drama_studio/models.py
   - src/drama_studio/engines/manager.py
   - src/drama_studio/handlers.py
+  - src/drama_studio/api.py
   - web/src/pages/ProjectPage.tsx
-lastReviewed: 2026-10-30
+lastReviewed: 2026-10-31
 ---
 
-# Engine selection
+# Engine selection (project-level only)
 
-Engine choice is two-layered:
+Per-stem engine overrides were removed. Engine choice is project-level:
 
-1. **Project default** — `Project.default_engine` (set on create, editable via
-   `PUT /api/projects/{id}` with an engine name or `"auto"`). The project header
-   exposes it as a picker. Engines are not tied to language: Chatterbox and Suno
-   are multilingual, Breeze is English, Breeze-DE is German.
-2. **Per-stem override** — every stem has an optional `engine` field. The Render
-   card shows a dropdown of engines compatible with the project language, and
-   `PATCH /stems/{id}` persists the choice.
+- **Project default** — `Project.default_engine` (set on create, editable via
+  `PUT /api/projects/{id}` with an engine name or `"auto"`). The project header
+  exposes it as a picker. `"auto"` resolves to `breeze` for English and
+  `chatterbox` for German.
+- **No per-stem override** — `Stem.engine` and `Character.engine` no longer
+  exist. Old `project.json` files that still contain them load fine
+  (pydantic ignores the legacy keys); new saves never write them.
+- `PATCH /stems/{id}` and `POST /stems/{id}/render` reject any `engine` field
+  with `400 per-stem engine selection was removed; set Project.default_engine
+  instead`.
 
 | Engine | Languages | Voice source |
 |---|---|---|
@@ -28,35 +33,22 @@ Engine choice is two-layered:
 | `suno` | de, en | preset / Suno persona, no local reference |
 | `fake` | de, en | none, test only |
 
-`"auto"` resolves to `breeze` for English and `chatterbox` for German.
+## Resolution
 
-## Inheritance rules
-
-- Characters parsed before this change carried the language default in
-  `Character.engine`; `ProjectStore.get` treats that legacy value as `None`, so
-  it inherits the project default instead of pinning Breeze/Chatterbox.
-- Changing the project default rewrites stems whose `engine` is `None` or equal
-  to the previous default. Explicit per-stem choices (a one-off Suno render,
-  `fake`) stay put.
-- The render endpoint resolves the engine as
-  `body.engine → stem.engine → project.default_engine → language default`, and
-  only `breeze`/`breeze-de` require a reference file. Suno projects no longer
-  409 with "design a reference voice first".
+Render and reference-design resolve as `project.default_engine → language
+default`. `Take.engine` remains as provenance (which provider rendered this
+take) and drives same-engine replacement, but it is never a selection.
 
 ## Takes and A/B
 
-`Take.engine` records the provider. A render replaces only takes from the same
-engine; other engines' takes stay visible as labelled pills. Selecting a take
-queues `stem.realign`, which re-runs Whisper against the chosen file and
-updates the line clips.
-
-`EngineManager` unloads the previous local engine before loading another
-(Breeze ↔ Chatterbox local model; Chatterbox is external). Chatterbox and Suno
-live outside the worker process.
+A render replaces only takes from the resolved project engine; other engines'
+takes stay visible for A/B comparison. `StemRenderResult.selected_take_id` is
+honored via `cuts.pick_selected_take` (explicit id → flagged take → first).
 
 ## Related
 
 - [[entities/breeze-engine]]
 - [[entities/chatterbox-engine]]
 - [[entities/suno-engine]]
-- [[concepts/script-to-stem-pipeline]]
+- [[concepts/take-aware-cuts]]
+- [[entities/cuts-module]]

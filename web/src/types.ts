@@ -10,7 +10,6 @@ export interface Character {
   id: string;
   name: string;
   description: string;
-  engine?: EngineName | null;
   ref_text?: string | null;
   ref_instruction?: string | null;
   ref_file?: string | null;
@@ -166,6 +165,7 @@ export interface Take {
   selected: boolean;
   clip_id?: string | null;
   preview_url?: string | null;
+  vocal_isolated?: boolean;
   created_at: string;
 }
 
@@ -176,7 +176,6 @@ export interface Stem {
   line_ids: string[];
   text: string;
   instruction: string;
-  engine?: string | null;
   cfg_scale: number;
   seed: number;
   takes: Take[];
@@ -193,6 +192,8 @@ export interface Stem {
 
 export interface AlignedLine {
   line_id: string;
+  /** Take this cut window lives in; null = the stem's selected take. */
+  take_id?: string | null;
   start_s: number;
   end_s: number;
   confidence?: number | null;
@@ -239,6 +240,7 @@ export interface Project {
   cues: Cue[];
   suno: SunoTrack[];
   mix?: MixResult | null;
+  mix_stale?: boolean;
   settings: ProjectSettings;
   created_at: string;
   updated_at: string;

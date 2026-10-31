@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 import httpx
@@ -15,6 +16,7 @@ from ..models import (
 )
 from ..suno import SunoBridge, SunoError
 from ..settings import resolve_suno
+from ..store import slugify
 from .base import (
     BaseEngine,
     CancelCheck,
@@ -193,6 +195,10 @@ class SunoEngine(BaseEngine):
         if progress:
             progress(0.15, f"Suno queued {len(clips)} clip(s)")
 
+        # Every generation owns a unique ID prefix and file prefix, so repeated
+        # renders append tracks instead of overwriting earlier takes/audio.
+        generation = uuid.uuid4().hex[:8]
+        slug = slugify(f"suno-{request.stem_id}")[:40] or "suno"
         takes: list[Take] = []
         failures: list[str] = []
         for index, clip in enumerate(clips[: request.candidates]):
@@ -236,12 +242,12 @@ class SunoEngine(BaseEngine):
                         progress(0, message)
                     continue
 
-            wav_path = take_dir / (m4a_path.stem + ".wav")
+            wav_path = take_dir / f"{slug}-{generation}-{index}.wav"
             try:
                 if m4a_path.suffix.lower() != ".wav":
                     _convert_to_wav(m4a_path, wav_path)
                 else:
-                    wav_path = m4a_path
+                    shutil.copy2(m4a_path, wav_path)
             except Exception as exc:
                 message = f"conversion failed for clip {clip_id}: {exc}"
                 failures.append(message)
@@ -259,7 +265,7 @@ class SunoEngine(BaseEngine):
 
             takes.append(
                 Take(
-                    id=f"suno-{request.stem_id}-{index}",
+                    id=f"suno-{request.stem_id}-{generation}-{index}",
                     file=str(wav_path.relative_to(output_dir)),
                     engine=self.info.name,
                     duration_s=duration,
