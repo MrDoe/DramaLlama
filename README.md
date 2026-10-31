@@ -4,20 +4,18 @@
 
 A local-first web app that turns a pasted script into a finished audio drama.
 
-```
-pasted script
-   │  deterministic scan + optional LLM normalization to canonical format
-   ▼
-scenes / lines ──group by scene+speaker──▶ stem scripts
-   │                                           │ project-default engine
-   │                                           ▼ (Breeze / Chatterbox / Suno / Fake)
-   │                                     stem takes per character
-   │                                           │ Whisper word alignment
-   ▼                                           ▼ (take-aware cut sheet)
-SFX cues ◀── local library search ────── line clips ◀── Cut board trims
-   │                                           │
-   └──────────────► mix / master ◀─────────────┘
-```
+Paste a script and Drama Llama parses it into scenes and dialogue lines
+(deterministically, or normalized by a local LLM for messy formatting), then
+groups the lines by scene and speaker into stem scripts. Each stem is rendered
+with the project's default engine — Breeze or the Breeze-DE sidecar for
+designed-clone voices, Chatterbox for sample-cloned voices, Suno for sung
+dialogue, or the Fake engine for tests — producing one or more takes per
+character. Whisper aligns every take on CPU and cuts per-line clips, which you
+refine on the shared Cut board: trim windows, slip audio inside regions, pick
+each clip's take. SFX beds, one-shots and music cues are anchored to lines —
+music generated live with Suno through the BetterSuno browser extension —
+then everything is assembled, ducked, EQ'd and loudness-normalised into the
+WAV/MP3 master.
 
 ## Tour
 
