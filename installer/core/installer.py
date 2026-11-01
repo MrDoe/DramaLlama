@@ -229,7 +229,7 @@ def run_install(
                 progress.update(step.id, 1.0, "Needs a restart")
             except Cancelled:
                 raise
-            except InstallerError as exc:
+            except Exception as exc:
                 if step.optional:
                     set_component(state, step.component, "failed", message=str(exc))
                     warnings_by_step.append(f"{step.title}: {exc}")

@@ -181,6 +181,18 @@ def test_legacy_engine_paths_are_stable(tmp_path: Path) -> None:
     assert legacy_breeze_de_model(home).name.endswith("Q8_0.gguf")
 
 
+def test_runtime_paths_are_well_formed_on_posix_and_windows() -> None:
+    posix = InstallPaths(prefix=Path("/tmp/foo"))
+    assert posix.node == Path("/tmp/foo/runtime/node/bin/node")
+    assert posix.npm == Path("/tmp/foo/runtime/node/bin/npm")
+    assert posix.uv == Path("/tmp/foo/runtime/uv/uv")
+    windows = InstallPaths(prefix=Path("C:/foo"), system="windows")
+    assert windows.node == Path("C:/foo/runtime/node/node.exe")
+    assert windows.npm == Path("C:/foo/runtime/node/npm.cmd")
+    assert windows.uv == Path("C:/foo/runtime/uv/uv.exe")
+    assert windows.python() == Path("C:/foo/venv/Scripts/python.exe")
+
+
 def test_whisper_cache_matches_the_vendored_aligner(tmp_path: Path) -> None:
     home = tmp_path / "home"
     root = whisper_cache_root(home)
