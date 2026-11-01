@@ -109,20 +109,33 @@ def run_install(
     log = _FileLog(log_path)
     _tee_progress(progress, log)
     progress.log(
-        f"Drama Llama installer {app_version(paths.app)} | "
+        f"Drama Llama installer {INSTALLER_VERSION} | "
         f"{system.os_name}/{system.arch} | device={device} | prefix={paths.prefix}"
     )
     progress.log(f"install log: {log_path}")
 
+    # Before unpack, paths.app has no version yet; read it from the bundled
+    # payload so the header and state are never "0.0.0".
+    def _app_version() -> str:
+        version = app_version(paths.app)
+        if version == "0.0.0":
+            try:
+                from .paths import payload_root
+
+                version = app_version(payload_root())
+            except (OSError, FileNotFoundError):
+                pass
+        return version
+
     state = load_state(paths) or new_state(
-        app_version=app_version(paths.app),
+        app_version=_app_version(),
         installer_version=INSTALLER_VERSION,
         prefix=paths,
         platform=system.os_name,
         device=device,
         components=sorted(selection.components),
     )
-    state["app_version"] = app_version(paths.app)
+    state["app_version"] = _app_version()
     state["platform"] = system.os_name
     state["device"] = device
     state["prefix"] = str(paths.prefix)
@@ -248,7 +261,7 @@ def run_install(
                     error=str(exc),
                 )
         state["completed"] = True
-        state["app_version"] = app_version(paths.app)
+        state["app_version"] = _app_version()
         state["completed_at"] = utc_now()
         save_state(paths, state)
         progress.log("installation complete")
