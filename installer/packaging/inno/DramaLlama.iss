@@ -7,7 +7,7 @@
 ; wizard to install Docker or the Vulkan loader.
 ;
 ; Build with scripts/build_installer.py, or manually:
-;   iscc /DAppVersion=0.1.0 /DSourceDir=..\..\..\dist\DramaLlama-Setup \
+;   iscc /DAppVersion=0.3.0 /DSourceDir=..\..\..\dist\DramaLlama-Setup \
 ;        /DOutputDir=..\..\..\dist installer\packaging\inno\DramaLlama.iss
 
 #ifndef AppVersion

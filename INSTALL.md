@@ -36,21 +36,21 @@ protected your PC*; choose **More info → Run anyway** only after verifying the
 checksum. On Linux, make the AppImage executable and verify the checksum:
 
 ```bash
-chmod +x DramaLlama-0.1.0-x86_64.AppImage
-sha256sum -c DramaLlama-0.1.0-x86_64.AppImage.sha256
+chmod +x DramaLlama-0.3.0-x86_64.AppImage
+sha256sum -c DramaLlama-0.3.0-x86_64.AppImage.sha256
 ```
 
 On Windows PowerShell:
 
 ```powershell
-Get-FileHash .\DramaLlama-Setup-0.1.0.exe -Algorithm SHA256
+Get-FileHash .\DramaLlama-Setup-0.3.0.exe -Algorithm SHA256
 # compare with the .sha256 file
 ```
 
 If your desktop cannot run AppImages (missing FUSE), use:
 
 ```bash
-./DramaLlama-0.1.0-x86_64.AppImage --appimage-extract-and-run
+./DramaLlama-0.3.0-x86_64.AppImage --appimage-extract-and-run
 ```
 
 or install `libfuse2` / `fuse2` from your distribution.
@@ -207,7 +207,7 @@ From the app-wizard welcome page, or:
 ```bash
 # Linux
 ~/.local/share/drama-llama/bin/drama-llama --help   # lists app commands
-./DramaLlama-0.1.0-x86_64.AppImage --headless --uninstall --keep-data
+./DramaLlama-0.3.0-x86_64.AppImage --headless --uninstall --keep-data
 
 # Windows
 DramaLlama-Setup.exe --headless --uninstall --keep-data
