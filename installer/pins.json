@@ -172,9 +172,9 @@
     "bettersuno_commit": "b29b7bb3af00cd4f2a6adfd67a83fffbd74d4700"
   },
   "install_sizes": {
-    "uv": 32000000,
-    "node_linux": 27000000,
-    "node_windows": 32000000,
+    "uv": 16799024,
+    "node_linux": 29734248,
+    "node_windows": 34872043,
     "python": 40000000,
     "core_wheels_cpu": 1200000000,
     "core_wheels_gpu": 4800000000,
