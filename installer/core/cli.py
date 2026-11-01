@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from pathlib import Path
 
 from .. import INSTALLER_VERSION
@@ -311,6 +312,13 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("cancelled", file=sys.stderr)
         return 130
+    except Exception as exc:
+        traceback.print_exc()
+        if as_json:
+            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 def estimate(selection: Selection, pins: dict, system) -> dict[str, int]:
