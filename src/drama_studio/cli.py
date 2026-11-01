@@ -14,7 +14,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .config import (
-    BREEZE_DE_URL,
     DATA_DIR,
     DB_PATH,
     HOST,
@@ -23,6 +22,7 @@ from .config import (
     SUNO_BRIDGE_URL,
     ensure_dirs,
 )
+
 try:
     from .handlers import default_handlers
 except ModuleNotFoundError as exc:
