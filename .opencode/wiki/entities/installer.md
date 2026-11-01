@@ -141,6 +141,16 @@ invocation, `130` cancelled.
 PR touching the installer, builds both targets on their native runners, and
 attaches artifacts plus checksums to a release on a `v*` tag.
 
+## v0.3.0 release
+
+Published at https://github.com/MrDoe/DramaLlama/releases/tag/v0.3.0 with
+assets `DramaLlama-0.3.0-x86_64.AppImage`,
+`DramaLlama-0.3.0-linux-x86_64.tar.gz`,
+`DramaLlama-Setup-0.3.0.exe`, and a `.sha256` for each. The Linux AppImage
+build initially failed because `appimagetool` requires a `.desktop` file and
+icon at the AppDir root; `build-appimage.sh` now writes both there (and keeps
+copies under `usr/share/...`). Moving the tag re-ran the workflow, which
+passed all four jobs.
 ## Tests
 
 `tests/test_installer.py` and `tests/test_windows_paths.py` cover the core

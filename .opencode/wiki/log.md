@@ -295,3 +295,10 @@ runtimes/wheels/models/Docker digests, AppImage and Inno Setup packaging, the
 GitHub Actions build, and the GPU-optional component matrix. Added
 [[entities/installer]] and [[concepts/gpu-optional-install]]; refreshed the
 README and AGENTS notes.
+
+## [2026-11-01] release | v0.3.0 published
+
+Published https://github.com/MrDoe/DramaLlama/releases/tag/v0.3.0 with the
+Linux AppImage, Linux tarball, Windows installer, and SHA-256 checksums.
+Fixed the AppImage build (desktop file + icon at AppDir root) and re-ran the
+workflow after moving the tag.
