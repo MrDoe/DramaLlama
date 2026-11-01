@@ -45,6 +45,14 @@ jobs:
         run: python -m pytest tests/test_installer.py tests/test_windows_paths.py -q
       - name: Lint the installer
         run: python -m ruff check installer scripts/build_installer.py tests/test_installer.py tests/test_windows_paths.py
+      - name: Resolve-check the pinned Python stack
+        # The unit tests mock uv, so unresolvable pins (wrong torch channel
+        # builds, nonexistent package versions) used to reach releases.
+        # This dry-run resolves the exact install_stack() arguments per
+        # channel without downloading anything.
+        run: |
+          python -m pip install -q uv
+          python scripts/check_pins.py
 
   linux:
     name: Linux AppImage

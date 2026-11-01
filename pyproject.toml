@@ -37,7 +37,7 @@ tts = [
   "demucs>=4.1",
   # Static ffmpeg used by the mixer when the host has no compatible build.
   # The installer exposes its binary as <prefix>/bin/ffmpeg.
-  "imageio-ffmpeg==7.0.2",
+  "imageio-ffmpeg==0.7.0",
 ]
 # English Breeze checkpoint support. The Breeze repo code itself is bundled by
 # the installer (see INSTALL.md); these are the extra Python imports it needs.

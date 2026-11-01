@@ -58,7 +58,7 @@
     }
   },
   "ffmpeg": {
-    "pip_package": "imageio-ffmpeg==7.0.2",
+    "pip_package": "imageio-ffmpeg==0.7.0",
     "minimum_system_major": 5
   },
   "whisper": {
