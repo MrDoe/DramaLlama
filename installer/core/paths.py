@@ -108,7 +108,9 @@ class InstallPaths:
 
     @property
     def node(self) -> Path:
-        return self.node_dir / ("node.exe" if self.windows() else "bin" / "node")
+        if self.windows():
+            return self.node_dir / "node.exe"
+        return self.node_dir / "bin" / "node"
 
     @property
     def npm(self) -> Path:
