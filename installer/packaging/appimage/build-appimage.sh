@@ -17,16 +17,12 @@ ICON_SRC="$REPO_ROOT/web/public/llogo.png"
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" \
          "$APPDIR/usr/share/applications" \
-         "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+         "$APPDIR/usr/share/icons/hicolor/512x512/apps"
 
 cp -a "$ONEDIR/." "$APPDIR/usr/bin/"
 chmod +x "$APPDIR/usr/bin/DramaLlama-Setup"
 
-if [ -f "$ICON_SRC" ]; then
-  cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/drama-llama.png"
-fi
-
-cat > "$APPDIR/usr/share/applications/drama-llama-installer.desktop" <<'DESKTOP'
+cat > "$APPDIR/drama-llama-installer.desktop" <<'DESKTOP'
 [Desktop Entry]
 Type=Application
 Name=Drama Llama Installer
@@ -37,6 +33,17 @@ Terminal=false
 Categories=Utility;AudioVideo;
 StartupNotify=true
 DESKTOP
+# appimagetool requires the .desktop file at the AppDir root and also copies it
+# into usr/share/applications, so keep a copy for the extracted fallback.
+cp "$APPDIR/drama-llama-installer.desktop" \
+   "$APPDIR/usr/share/applications/drama-llama-installer.desktop"
+
+if [ -f "$ICON_SRC" ]; then
+  # appimagetool looks for the Icon= name at the AppDir root.
+  cp "$ICON_SRC" "$APPDIR/drama-llama.png"
+  cp "$ICON_SRC" "$APPDIR/.DirIcon"
+  cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/512x512/apps/drama-llama.png"
+fi
 
 cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/sh
