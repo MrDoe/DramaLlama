@@ -1,0 +1,189 @@
+{
+  "schema": 1,
+  "generated": "2026-11-01",
+  "app": {
+    "name": "Drama Llama",
+    "default_port": 8770,
+    "repository": "https://github.com/MrDoe/DramaLlama"
+  },
+  "python": {
+    "series": "3.12"
+  },
+  "uv": {
+    "version": "0.13.6",
+    "assets": {
+      "linux-x86_64": {
+        "url": "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-unknown-linux-gnu.tar.gz",
+        "sha256": "f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645",
+        "size": 32000000,
+        "archive": "tar.gz"
+      },
+      "windows-x86_64": {
+        "url": "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-pc-windows-msvc.zip",
+        "sha256": "a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f",
+        "size": 14500000,
+        "archive": "zip"
+      }
+    }
+  },
+  "node": {
+    "version": "22.12.0",
+    "assets": {
+      "linux-x86_64": {
+        "url": "https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz",
+        "sha256": "22982235e1b71fa8850f82edd09cdae7e3f32df1764a9ec298c72d25ef2c164f",
+        "size": 27000000,
+        "archive": "tar.xz"
+      },
+      "windows-x86_64": {
+        "url": "https://nodejs.org/dist/v22.12.0/node-v22.12.0-win-x64.zip",
+        "sha256": "2b8f2256382f97ad51e29ff71f702961af466c4616393f767455501e6aece9b8",
+        "size": 32000000,
+        "archive": "zip"
+      }
+    }
+  },
+  "torch": {
+    "version": "2.15.0",
+    "torchaudio": "2.11.1",
+    "channels": {
+      "cpu": {
+        "index": "https://download.pytorch.org/whl/cpu",
+        "min_driver": 0
+      },
+      "cu128": {
+        "index": "https://download.pytorch.org/whl/cu128",
+        "min_driver": 525
+      },
+      "cu132": {
+        "index": "https://download.pytorch.org/whl/cu132",
+        "min_driver": 580
+      }
+    }
+  },
+  "ffmpeg": {
+    "pip_package": "imageio-ffmpeg==7.0.2",
+    "minimum_system_major": 5
+  },
+  "whisper": {
+    "repo": "Systran/faster-whisper-large-v3",
+    "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+    "cache_name": "models--Systran--faster-whisper-large-v3",
+    "size": 3090839273,
+    "files": {
+      ".gitattributes": {"size": 1519},
+      "README.md": {"size": 2052},
+      "config.json": {"size": 2394},
+      "model.bin": {
+        "size": 3087284237,
+        "sha256": "69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1"
+      },
+      "preprocessor_config.json": {"size": 340},
+      "tokenizer.json": {"size": 2480617},
+      "vocabulary.json": {"size": 1068114}
+    }
+  },
+  "breeze": {
+    "repo": {
+      "url": "https://codeload.github.com/breezeblue-ai/breeze-tts/tar.gz/6eba901d1845353802652c708a4740fdfc5baa75",
+      "commit": "6eba901d1845353802652c708a4740fdfc5baa75",
+      "archive_root": "breeze-tts-6eba901d1845353802652c708a4740fdfc5baa75",
+      "size": 2000000
+    },
+    "model": {
+      "repo": "BreezeBlue/Breeze-TTS-2",
+      "revision": "3e28c5151381a722f1d8661b4118c298caa77aa4",
+      "size": 7683635994,
+      "files": {
+        ".gitattributes": {"size": 1570},
+        "LICENSE": {"size": 18719},
+        "README.md": {"size": 9818},
+        "audio_tokenizer/config.json": {"size": 2336},
+        "audio_tokenizer/configuration.json": {"size": 76},
+        "audio_tokenizer/model.safetensors": {
+          "size": 682293092,
+          "sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258"
+        },
+        "audio_tokenizer/preprocessor_config.json": {"size": 234},
+        "config.json": {"size": 10161},
+        "generation_config.json": {"size": 251},
+        "model-00001-of-00002.safetensors": {
+          "size": 4961989890,
+          "sha256": "abf813781256e10cbe81f2dbb415f897556225d4dfa0282d67aa8ea164e114a9"
+        },
+        "model-00002-of-00002.safetensors": {
+          "size": 2004567152,
+          "sha256": "36aa73b1a11361e1774db90d9c63c63303b294c022de112aa51904d940edcef1"
+        },
+        "model.safetensors.index.json": {"size": 109004},
+        "special_tokens_map.json": {"size": 886},
+        "tokenizer.json": {
+          "size": 33386945,
+          "sha256": "d3ec9ac3eb2392389b9f5112e85d8b43316494addb587ba7b7a9d61eac23af96"
+        },
+        "tokenizer_config.json": {"size": 1157960}
+      }
+    }
+  },
+  "breeze_de": {
+    "release": "v0.1.6",
+    "assets": {
+      "linux-x86_64": {
+        "url": "https://github.com/HoppouAI/Breeze-TTS-2.cpp/releases/download/v0.1.6/breeze-tts-2-v0.1.6-linux-x64-vulkan.tar.gz",
+        "sha256": "2b5ca9bd3513d46b66aade07922a6c8127d05588d186febb85d0505c1eb28cf8",
+        "size": 72407117,
+        "archive": "tar.gz",
+        "extract_dir": "breeze-tts-2-v0.1.6-linux-x64-vulkan",
+        "binary": "breeze-server"
+      },
+      "windows-x86_64": {
+        "url": "https://github.com/HoppouAI/Breeze-TTS-2.cpp/releases/download/v0.1.6/breeze-tts-2-v0.1.6-windows-x64-vulkan.zip",
+        "sha256": "bd0ac723092407da85d124204fa95a909c3bb41272af1a5c9155ae6e1044dcc2",
+        "size": 74074894,
+        "archive": "zip",
+        "extract_dir": "breeze-tts-2-v0.1.6-windows-x64-vulkan",
+        "binary": "breeze-server.exe"
+      }
+    },
+    "model": {
+      "repo": "eigenhand/Articulatio-DE-Stream-TTS-v1.5-GGUF",
+      "revision": "4ea5dbea566029f684c0665e566e9443b1fb3e2b",
+      "file": "Articulatio-DE-Stream-TTS-v1.5-Q8_0.gguf",
+      "size": 3568845632,
+      "sha256": "3210b117f03fb032e50fe3e324163f2726cfc0dab80a5c38e7bb0561b455937b"
+    }
+  },
+  "chatterbox": {
+    "container": "chatterbox-tts-api",
+    "port": 4123,
+    "model_volume": "dramallama-chatterbox-cache",
+    "image": "travisvn/chatterbox-tts-api",
+    "variants": {
+      "gpu": {
+        "tag": "latest",
+        "digest": "sha256:8c0b379172d48b49d59d8f29a35fa23c0dc27955dba4d3ab41a77b2d71b4711f",
+        "size": 8250355943
+      },
+      "cpu": {
+        "tag": "latest-cpu",
+        "digest": "sha256:900e5ae19e69e8dcce9e1f97b2f047b6a6e9190cd653c1c3c907de2113d8c494",
+        "size": 1274691788
+      }
+    }
+  },
+  "suno": {
+    "bettersuno_version": "1.1.2",
+    "bettersuno_commit": "b29b7bb3af00cd4f2a6adfd67a83fffbd74d4700"
+  },
+  "install_sizes": {
+    "uv": 32000000,
+    "node_linux": 27000000,
+    "node_windows": 32000000,
+    "python": 40000000,
+    "core_wheels_cpu": 1200000000,
+    "core_wheels_gpu": 4800000000,
+    "ffmpeg": 76000000,
+    "breeze_repo": 2000000,
+    "launchers": 100000
+  }
+}

@@ -16,6 +16,7 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[concepts/suno-turnstile-captcha]] — why Suno renders stall on Cloudflare Turnstile, and the fix plan.
 - [[concepts/batch-render-and-captcha-recovery]] — sequential "render all", pause-on-captcha, recovery dialog.
 - [[concepts/suno-account-switch]] — stale identity cache after a Suno login change, and the fix.
+- [[concepts/gpu-optional-install]] — CPU-only installs, CUDA wheel channels, opt-in engines, size envelope.
 
 ## Engines and music
 
@@ -25,6 +26,10 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[entities/suno-bridge]] — Suno music generation through BetterSuno.
 - [[entities/job-worker]] — SQLite queue and single GPU worker.
 - [[entities/start-ui-launcher]] — one-command build + serve, dev mode, health preflight.
+
+## Distribution
+
+- [[entities/installer]] — PySide6 wizard + stdlib core, AppImage/Inno packaging, headless CLI.
 
 ## Sources
 

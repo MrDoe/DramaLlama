@@ -17,12 +17,17 @@ CLI alias are intentionally unchanged.
 - Stem builder, reference design, render + align worker, take/alignment storage.
 - SFX index over `~/Sounds`, cue sheet, mixer with ducking/EQ/loudnorm.
 - React UI: projects, script/parse, stems, render, sound, mix.
-- 60 backend tests, web build green.
+- 236 backend tests, web build green.
 - English Breeze path validated on one real scene; German Chatterbox path
   validated end-to-end (20.7 s ANNA stem, 7/7 cuts). Suno music generation and
   WAV download validated through the BetterSuno bridge.
-- Per-stem engine selection (Breeze / Chatterbox / Fake) with engine-labelled
-  takes for A/B comparison.
+- Project-level engine (`Project.default_engine`: Breeze / Breeze-DE /
+  Chatterbox / Suno / Fake) with engine-labelled takes for A/B comparison and
+  take-aware cuts.
+- Native installers: PySide6 wizard over a stdlib-only core, shared with a
+  headless CLI; AppImage on Linux, Inno Setup around PyInstaller on Windows.
+  Optional Breeze EN, Breeze DE and Chatterbox, GPU auto-detect with
+  `--cpu`/`--gpu`, per-user prefix, pinned versions in `installer/pins.json`.
 
 ## Hard constraints
 
@@ -49,6 +54,23 @@ CLI alias are intentionally unchanged.
   of VRAM is only held while rendering. It clones an uploaded voice sample;
   without one it falls back to the server's default voice. It has no
   voice-design mode.
+- **The installer core must stay stdlib-only.** `installer/core/` is shared by
+  the CLI, the wizard and CI; only `installer/gui/` may import PySide6, and
+  always lazily. Tests must pass without Qt installed.
+- **The installer never installs an LLM.** Deterministic parsing works out of
+  the box; Ollama is configured later in Settings. Docker/Vulkan are the only
+  system packages it may add, and only with explicit consent.
+- **Installer prefixes are per-user** (`~/.local/share/drama-llama`,
+  `%LOCALAPPDATA%\DramaLlama`) but engine paths stay at the legacy locations
+  (`~/code/breeze-tts`, `~/models/Breeze-TTS-2`,
+  `~/code/breeze-tts-cpp/...`, `~/models/Articulatio-DE-...gguf`). The Whisper
+  cache path is hardcoded to the Hugging Face hub layout; do not derive it from
+  `HF_HOME`.
+- **Pin everything in `installer/pins.json`** — uv/Node versions, wheel
+  channels, HF revisions, Breeze repo commit and Docker image digests. Never
+  resolve `latest` at install time.
+- **A GUI launch failure returns exit code 2**; never fall through to a
+  headless install, which would start multi-GB downloads without consent.
 - **Suno needs the BetterSuno extension** and a live `suno.com` tab. The
   `suno-bridge/` sidecar owns `ws://127.0.0.1:9423`; only one process can own
   it. Download music as WAV (the M4A path is not reliably decodable).
@@ -67,6 +89,11 @@ CLI alias are intentionally unchanged.
   `data/projects/<slug>/project.json`, `refs/`, `audio/takes/`, `lines/`, `mix/`.
 - SQLite only for the job queue, never for project content.
 - GPU work runs in `handlers.py`; the API process must not import torch.
+- `installer/` sits at the repo root (not under `src/`) and is importable as a
+  top-level package; `installer/packaging/` holds the PyInstaller spec, the Inno
+  script and the AppImage builder. Build output goes to `build/` and `dist/`
+  (gitignored). `scripts/build_installer.py` stages the same payload the tests
+  exercise.
 
 ## Commands
 
@@ -81,7 +108,16 @@ cd web && npm run build
 ~/.venvs/qwen3tts/bin/drama-llama worker --once
 ~/.venvs/qwen3tts/bin/drama-llama suno-bridge
 ~/.venvs/qwen3tts/bin/drama-llama breeze-de           # German Breeze sidecar (port 8137)
+
+~/.venvs/qwen3tts/bin/python -m installer --dry-run --cpu   # wizard, or headless CLI
+~/.venvs/qwen3tts/bin/python scripts/build_installer.py --target payload
+~/.venvs/qwen3tts/bin/python scripts/build_installer.py --target linux   # AppImage
+~/.venvs/qwen3tts/bin/python scripts/build_installer.py --target windows # Inno, on Windows
 ```
+
+The installer wizard needs `PySide6`; the core and its tests do not. PyInstaller
+cannot cross-compile, so build each target on its own OS (or use
+`.github/workflows/installer.yml`).
 
 The Suno sidecar resolves `bettersuno-mcp` via `suno-bridge/node_modules`
 (symlink into `third_party/`) and needs the BetterSuno browser extension

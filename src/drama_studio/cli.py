@@ -3,10 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
+import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -20,7 +23,20 @@ from .config import (
     SUNO_BRIDGE_URL,
     ensure_dirs,
 )
-from .handlers import default_handlers
+try:
+    from .handlers import default_handlers
+except ModuleNotFoundError as exc:
+    missing = getattr(exc, "name", None) or str(exc)
+    print(
+        f"error: missing Python dependency {missing!r}.\n"
+        "Drama Llama must run with the TTS virtualenv that contains soundfile, "
+        "numpy, faster-whisper, etc.\n"
+        "Use ~/.venvs/qwen3tts/bin/python (or set DRAMA_LLAMA_BIN) instead of "
+        "the system interpreter.\n"
+        "  ~/.venvs/qwen3tts/bin/python -m drama_studio.cli serve",
+        file=sys.stderr,
+    )
+    raise SystemExit(1) from exc
 from .jobs import JobQueue
 from .worker import Worker
 
@@ -103,6 +119,124 @@ def _tcp_in_use(port: int) -> bool:
         return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _bettersuno_env(env: dict[str, str]) -> None:
+    """Point the bridge at the bundled submodule unless a legacy path exists.
+
+    cli used to force ``~/code/bettersuno-mcp`` unconditionally. On a clean
+    install that path does not exist, so the bridge ignored the working
+    ``suno-bridge/node_modules`` resolution and failed to load its modules.
+    """
+    if env.get("BETTERSUNO_MCP_DIR"):
+        return
+    legacy = Path.home() / "code" / "bettersuno-mcp"
+    if legacy.exists():
+        env["BETTERSUNO_MCP_DIR"] = str(legacy)
+
+
+def _breeze_de_binary_default() -> Path:
+    name = "breeze-server.exe" if os.name == "nt" else "breeze-server"
+    tag = "windows-x64-vulkan" if os.name == "nt" else "linux-x64-vulkan"
+    return (
+        Path.home()
+        / "code"
+        / "breeze-tts-cpp"
+        / f"breeze-tts-2-v0.1.6-{tag}"
+        / name
+    )
+
+
+def _web_needs_build() -> bool:
+    root = Path(__file__).resolve().parents[2]
+    web = root / "web"
+    dist = web / "dist"
+    if not (dist / "index.html").exists():
+        return True
+    stamp = (dist / "index.html").stat().st_mtime
+    watched = [
+        web / "src",
+        web / "public",
+        web / "index.html",
+        web / "package.json",
+        web / "vite.config.ts",
+        web / "tsconfig.json",
+    ]
+    for item in watched:
+        if not item.exists():
+            continue
+        files = [item] if item.is_file() else [p for p in item.rglob("*") if p.is_file()]
+        if any(path.stat().st_mtime > stamp for path in files):
+            return True
+    return False
+
+
+def _prepare_web(*, build: bool) -> bool:
+    """Build web/dist when needed. Returns False on a missing build."""
+    root = Path(__file__).resolve().parents[2]
+    web = root / "web"
+    dist = web / "dist"
+    if not build:
+        if (dist / "index.html").exists():
+            return True
+        print(
+            "error: web/dist/index.html is missing and --no-build was given",
+            file=sys.stderr,
+        )
+        return False
+    if not _web_needs_build():
+        print("web/dist is up to date.")
+        return True
+    npm = shutil.which("npm") or shutil.which("npm.cmd")
+    if npm is None:
+        if (dist / "index.html").exists():
+            print("warning: npm not found; using the existing web/dist", file=sys.stderr)
+            return True
+        print("error: npm is required to build the web UI", file=sys.stderr)
+        return False
+    if not (web / "node_modules").is_dir():
+        print("Installing web dependencies...")
+        if subprocess.call([npm, "install"], cwd=web) != 0:
+            return False
+    print("Building web UI...")
+    return subprocess.call([npm, "run", "build"], cwd=web) == 0
+
+
+def _open_when_ready(url: str, health_url: str, timeout_s: float = 60.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(health_url, timeout=2) as response:
+                if response.status == 200:
+                    webbrowser.open(url)
+                    return
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Build if stale, start the API, then open the browser when healthy."""
+    if not _prepare_web(build=args.build):
+        return 1
+    browse_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
+    url = f"http://{browse_host}:{args.port}"
+    if args.open:
+        threading.Thread(
+            target=_open_when_ready,
+            args=(url, f"{url}/api/health"),
+            daemon=True,
+        ).start()
+    serve_args = argparse.Namespace(
+        host=args.host,
+        port=args.port,
+        log_level=args.log_level,
+        worker=args.worker,
+        suno_bridge=args.suno_bridge,
+        poll=args.poll,
+        stale_after=args.stale_after,
+    )
+    return cmd_serve(serve_args)
+
+
 def _ensure_suno_bridge() -> subprocess.Popen | None:
     """Start the BetterSuno sidecar if needed. Best-effort: never fail `serve`.
 
@@ -129,7 +263,7 @@ def _ensure_suno_bridge() -> subprocess.Popen | None:
         )
         return None
     env = dict(os.environ)
-    env.setdefault("BETTERSUNO_MCP_DIR", str(Path.home() / "code" / "bettersuno-mcp"))
+    _bettersuno_env(env)
     env.setdefault("SUNO_BRIDGE_PORT", str(port))
     log_path = DATA_DIR / "suno-bridge.log"
     try:
@@ -196,9 +330,10 @@ def cmd_suno_bridge(args: argparse.Namespace) -> int:
         print(f"error: {script} not found", file=sys.stderr)
         return 1
     env = dict(os.environ)
-    env.setdefault("BETTERSUNO_MCP_DIR", str(Path.home() / "code" / "bettersuno-mcp"))
+    _bettersuno_env(env)
     env.setdefault("SUNO_BRIDGE_PORT", str(args.port))
-    print(f"Suno bridge on http://127.0.0.1:{args.port} (BetterSuno {env['BETTERSUNO_MCP_DIR']})")
+    bettersuno = env.get("BETTERSUNO_MCP_DIR") or "suno-bridge/node_modules"
+    print(f"Suno bridge on http://127.0.0.1:{args.port} (BetterSuno {bettersuno})")
     try:
         return subprocess.call(["node", str(script)], env=env)
     except KeyboardInterrupt:
@@ -206,15 +341,21 @@ def cmd_suno_bridge(args: argparse.Namespace) -> int:
 
 
 def cmd_breeze_de(args: argparse.Namespace) -> int:
-    import os
-
     binary = Path(args.binary).expanduser()
     if not binary.exists():
-        # Fall back to a sibling extracted directory or PATH lookup.
+        # Fall back to a sibling extracted directory or a PATH lookup.
+        name = "breeze-server.exe" if os.name == "nt" else "breeze-server"
         candidates = [
-            Path.home() / "code" / "breeze-tts-cpp" / "breeze-tts-2-v0.1.3-linux-x64-vulkan" / "breeze-server",
-            Path("breeze-server"),
+            _breeze_de_binary_default(),
+            Path.home()
+            / "code"
+            / "breeze-tts-cpp"
+            / "breeze-tts-2-v0.1.3-linux-x64-vulkan"
+            / "breeze-server",
         ]
+        on_path = shutil.which(name)
+        if on_path:
+            candidates.append(Path(on_path))
         for cand in candidates:
             if cand.exists():
                 binary = cand
@@ -230,17 +371,24 @@ def cmd_breeze_de(args: argparse.Namespace) -> int:
     port = args.port
     url = f"http://127.0.0.1:{port}"
     env = dict(os.environ)
-    if "BREEZE_DE_VK_DEVICE" in env:
-        env["GGML_VK_DEVICE"] = env["BREEZE_DE_VK_DEVICE"]
-    elif "GGML_VK_DEVICE" not in env:
-        env["GGML_VK_DEVICE"] = "1"
-    print(f"Breeze-DE sidecar on {url} (model {model})")
+    cpu = bool(args.cpu) or os.environ.get("BREEZE_DE_CPU", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not cpu:
+        if "BREEZE_DE_VK_DEVICE" in env:
+            env["GGML_VK_DEVICE"] = env["BREEZE_DE_VK_DEVICE"]
+        elif "GGML_VK_DEVICE" not in env:
+            env["GGML_VK_DEVICE"] = "1"
+    command = [str(binary), str(model), "--port", str(port), "--host", "127.0.0.1"]
+    if cpu:
+        command.append("--cpu")
+    print(f"Breeze-DE sidecar on {url} (model {model}, {'CPU' if cpu else 'Vulkan/CPU'})")
     print(f"set BREEZE_DE_URL={url} for Drama Llama")
     try:
-        return subprocess.call(
-            [str(binary), str(model), "--port", str(port), "--host", "127.0.0.1"],
-            env=env,
-        )
+        return subprocess.call(command, env=env)
     except KeyboardInterrupt:
         return 0
 
@@ -307,6 +455,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stale-after", type=float, default=300)
     p.set_defaults(func=cmd_serve)
 
+    p = sub.add_parser(
+        "ui",
+        help="build the web UI if needed, serve, and open the browser",
+    )
+    p.add_argument("--host", default=HOST)
+    p.add_argument("--port", type=int, default=PORT)
+    p.add_argument("--log-level", default="info")
+    p.add_argument("--worker", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--suno-bridge", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--open", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--build", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--poll", type=float, default=0.5)
+    p.add_argument("--stale-after", type=float, default=300)
+    p.set_defaults(func=cmd_ui)
+
     p = sub.add_parser("worker", help="run the job worker")
     p.add_argument("--once", action="store_true")
     p.add_argument("--poll", type=float, default=0.5)
@@ -319,13 +482,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("breeze-de", help="run the German Breeze (Breeze-TTS-2.cpp) sidecar")
     p.add_argument("--port", type=int, default=8137)
-    p.add_argument(
-        "--binary",
-        default=str(Path.home() / "code" / "breeze-tts-cpp" / "breeze-tts-2-v0.1.3-linux-x64-vulkan" / "breeze-server"),
-    )
+    p.add_argument("--binary", default=str(_breeze_de_binary_default()))
     p.add_argument(
         "--model",
         default=str(Path.home() / "models" / "Articulatio-DE-Stream-TTS-v1.5-Q8_0.gguf"),
+    )
+    p.add_argument(
+        "--cpu",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="force the CPU backend (--no-cpu leaves Vulkan enabled)",
     )
     p.set_defaults(func=cmd_breeze_de)
 

@@ -37,15 +37,23 @@ SUNO_BRIDGE_URL = os.environ.get("SUNO_BRIDGE_URL", "http://127.0.0.1:9430")
 CHATTERBOX_URL = os.environ.get("CHATTERBOX_URL", "http://127.0.0.1:4123")
 BREEZE_DE_URL = os.environ.get("BREEZE_DE_URL", "http://127.0.0.1:8137")
 
+def _split_paths(value: str) -> list[Path]:
+    """Split a path list using the platform separator (``:`` or ``;``).
+
+    Splitting on a hard-coded ``:`` silently breaks Windows drive letters
+    (``C:\\Users\\...``), so both the default and env overrides go through
+    ``os.pathsep``.
+    """
+    return [Path(p).expanduser() for p in value.split(os.pathsep) if p.strip()]
+
+
 # Local SFX library roots. Personal subfolders can be excluded in settings.
-SFX_LIBRARY_ROOTS = [
-    Path(p).expanduser()
-    for p in _env(
-        "SFX_ROOTS",
-        f"{Path.home() / 'Sounds'}:{REPO_ROOT / 'data' / 'sfx'}",
-    ).split(":")
-    if p.strip()
-]
+# ``DRAMA_LLAMA_SFX_ROOTS`` uses the platform path separator, matching PATH.
+_SFX_ROOTS_ENV = _env("SFX_ROOTS", "")
+if _SFX_ROOTS_ENV.strip():
+    SFX_LIBRARY_ROOTS = _split_paths(_SFX_ROOTS_ENV)
+else:
+    SFX_LIBRARY_ROOTS = [Path.home() / "Sounds", REPO_ROOT / "data" / "sfx"]
 
 
 def ensure_dirs() -> None:

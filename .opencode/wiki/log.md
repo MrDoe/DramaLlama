@@ -286,3 +286,12 @@ unload when dirty, and LRU-caps/prunes decoded takes in `SyncEngine`. Tests:
 186 passed (11 new: `test_cuts.py`, `test_cut_board.py`); web build green.
 Updated [[concepts/engine-selection]], [[concepts/take-aware-cuts]], added
 [[entities/cuts-module]].
+
+## [2026-11-01] ingest | Native installers
+
+Documented the installer package: stdlib-only core shared by the PySide6
+wizard and the headless CLI, per-user layout with legacy engine paths, pinned
+runtimes/wheels/models/Docker digests, AppImage and Inno Setup packaging, the
+GitHub Actions build, and the GPU-optional component matrix. Added
+[[entities/installer]] and [[concepts/gpu-optional-install]]; refreshed the
+README and AGENTS notes.

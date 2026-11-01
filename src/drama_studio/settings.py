@@ -70,7 +70,7 @@ class SunoSettings(BaseModel):
 def resolve_suno() -> tuple[SunoSettings, dict[str, str]]:
     """Effective Suno settings (plan) plus per-key source."""
     try:
-        raw = json.loads(SETTINGS_PATH.read_text())
+        raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         section = raw.get("suno") if isinstance(raw, dict) else None
     except (OSError, ValueError):
         section = None
@@ -94,7 +94,7 @@ def write_suno(patch: dict[str, Any]) -> tuple[SunoSettings, dict[str, str]]:
     if plan is not None and str(plan).strip().lower() not in _VALID_PLANS:
         raise ValueError("Suno plan must be 'free' or 'pro'")
     try:
-        raw = json.loads(SETTINGS_PATH.read_text())
+        raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raw = {}
     except (OSError, ValueError):
@@ -106,13 +106,15 @@ def write_suno(patch: dict[str, Any]) -> tuple[SunoSettings, dict[str, str]]:
         section["plan"] = str(plan).strip().lower()
     raw["suno"] = section
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(raw, indent=2) + "\n")
+    SETTINGS_PATH.write_text(
+        json.dumps(raw, indent=2) + "\n", encoding="utf-8"
+    )
     return resolve_suno()
 
 
 def _file_llm() -> dict[str, Any]:
     try:
-        raw = json.loads(SETTINGS_PATH.read_text())
+        raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     llm = raw.get("llm") if isinstance(raw, dict) else None
@@ -199,7 +201,7 @@ def write_llm(patch: dict[str, Any]) -> tuple[LlmSettings, dict[str, str]]:
     """Merge a validated partial update into the settings file."""
     clean = _check_patch(patch)
     try:
-        raw = json.loads(SETTINGS_PATH.read_text())
+        raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raw = {}
     except (OSError, ValueError):
@@ -214,5 +216,7 @@ def write_llm(patch: dict[str, Any]) -> tuple[LlmSettings, dict[str, str]]:
             file_llm[key] = value
     raw["llm"] = file_llm
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(raw, indent=2) + "\n")
+    SETTINGS_PATH.write_text(
+        json.dumps(raw, indent=2) + "\n", encoding="utf-8"
+    )
     return resolve_llm()

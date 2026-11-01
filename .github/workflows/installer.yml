@@ -1,0 +1,164 @@
+name: Installers
+
+# Build the native Drama Llama installers on their own operating systems:
+#   Linux   -> PyInstaller onedir wizard wrapped as an AppImage (+ tarball)
+#   Windows -> PyInstaller wizard wrapped by Inno Setup
+#
+# PyInstaller cannot cross-compile, so each target runs on its native runner.
+# Tag pushes also attach the artifacts and their SHA-256 files to the release.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "installer/**"
+      - "scripts/build_installer.py"
+      - "pyproject.toml"
+      - ".github/workflows/installer.yml"
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  test:
+    name: Installer core tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Run installer tests
+        run: python -m pytest tests/test_installer.py tests/test_windows_paths.py -q
+      - name: Lint the installer
+        run: python -m ruff check installer scripts/build_installer.py tests/test_installer.py tests/test_windows_paths.py
+
+  linux:
+    name: Linux AppImage
+    needs: test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller PySide6
+          # The Suno bridge imports the BetterSuno modules from this tree and
+          # the payload copies its pure-JavaScript dependencies. The upstream
+          # postinstall script is local-only, so skip lifecycle scripts.
+          npm ci --ignore-scripts --prefix third_party/bettersuno-mcp
+      - name: Build web UI
+        working-directory: web
+        run: npm ci && npm run build
+      - name: Install appimagetool
+        # Optional: without it build_installer.py falls back to a tarball.
+        run: |
+          sudo wget -q -O /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+            || echo "appimagetool download failed; the tarball fallback will be used"
+          sudo chmod +x /usr/local/bin/appimagetool || true
+      - name: Build installers
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            python scripts/build_installer.py --target linux --version "${GITHUB_REF_NAME#v}"
+          else
+            python scripts/build_installer.py --target linux
+          fi
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dramallama-linux
+          path: |
+            dist/*.AppImage
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller PySide6
+          npm ci --ignore-scripts --prefix third_party/bettersuno-mcp
+      - name: Build web UI
+        working-directory: web
+        run: npm ci && npm run build
+      - name: Build installers
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            python scripts/build_installer.py --target windows --version "${GITHUB_REF_NAME#v}"
+          else
+            python scripts/build_installer.py --target windows
+          fi
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dramallama-windows
+          path: |
+            dist/DramaLlama-Setup-*.exe
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: Attach artifacts to the release
+    if: github.ref_type == 'tag'
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" --title "Drama Llama ${GITHUB_REF_NAME#v}" --generate-notes
+          gh release upload "${GITHUB_REF_NAME}" artifacts/* --clobber
