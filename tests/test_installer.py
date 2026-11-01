@@ -193,6 +193,48 @@ def test_runtime_paths_are_well_formed_on_posix_and_windows() -> None:
     assert windows.python() == Path("C:/foo/venv/Scripts/python.exe")
 
 
+def test_cpu_torch_pins_use_channel_builds(tmp_path: Path, monkeypatch) -> None:
+    """CPU installs must never resolve torch from PyPI (CUDA + nvidia deps).
+
+    Regression test: the bare ``torch==x.y.z`` pin matched PyPI's CUDA wheel
+    as soon as PyPI was visible, downloading ~2 GiB of nvidia-* libraries on
+    a CPU-only install. Both pip installs now pin the channel build
+    (``+cpu``/``+cuXX``); the torch-only step uses the channel index alone,
+    and the app step repeats the pins with unsafe-best-match so uv sees the
+    channel-only ``+suffix`` versions.
+    """
+    from installer.core import python_stack
+
+    calls: list[dict] = []
+
+    def fake_uv_pip_install(paths, pins, args, **kwargs):
+        calls.append({"args": list(args), **kwargs})
+
+    monkeypatch.setattr(python_stack, "uv_pip_install", fake_uv_pip_install)
+    monkeypatch.setattr(python_stack, "uv_pip_check", lambda *a, **k: True)
+    monkeypatch.setattr(python_stack, "_smoke_test", lambda *a, **k: None)
+
+    pins = load_pins()
+    paths = InstallPaths(prefix=tmp_path / "prefix")
+    system = make_system()
+    selection = Selection(device="cpu", components=["core"], prefix=tmp_path / "p")
+
+    channel = python_stack.install_stack(paths, pins, system, selection, Progress())
+    assert channel == "cpu"
+    assert len(calls) == 2
+    torch_pin = f"torch=={pins['torch']['version']}+cpu"
+    torchaudio_pin = f"torchaudio=={pins['torch']['torchaudio']}+cpu"
+    first, second = calls
+    # Torch-only step: channel index alone, so PyPI's CUDA wheel is invisible.
+    assert first["args"] == [torch_pin, torchaudio_pin]
+    assert first["index_url"] == pins["torch"]["channels"]["cpu"]["index"]
+    assert first.get("extra_index_url") is None
+    # App step: repeats the channel pins so demucs/faster-whisper cannot
+    # upgrade torch to PyPI's CUDA build.
+    assert torch_pin in second["args"] and torchaudio_pin in second["args"]
+    assert second["index_strategy"] == "unsafe-best-match"
+
+
 def test_whisper_cache_matches_the_vendored_aligner(tmp_path: Path) -> None:
     home = tmp_path / "home"
     root = whisper_cache_root(home)

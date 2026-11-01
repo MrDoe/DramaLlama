@@ -265,6 +265,7 @@ def uv_pip_install(
     progress: Progress,
     index_url: str | None = None,
     extra_index_url: str | None = None,
+    index_strategy: str | None = None,
     timeout: float = 3600,
     system: SystemInfo | None = None,
 ) -> None:
@@ -280,6 +281,8 @@ def uv_pip_install(
         command += ["--index-url", index_url]
     if extra_index_url:
         command += ["--extra-index-url", extra_index_url]
+    if index_strategy:
+        command += ["--index-strategy", index_strategy]
     command += args
     result = run_streaming(command, env=env, timeout=timeout, on_line=progress.log)
     if result.returncode != 0:

@@ -14,6 +14,18 @@ from .util import InstallerError, command_output, human_bytes
 PYPI = "https://pypi.org/simple"
 
 
+def torch_build_suffix(channel: str) -> str:
+    """Local-version suffix of the pinned torch wheels for a channel.
+
+    The PyTorch wheel indexes publish channel-specific builds
+    (``torch==2.15.0+cpu``, ``+cu128``, ``+cu132``). Requesting the bare
+    ``torch==2.15.0`` while PyPI is visible resolves to PyPI's CUDA build
+    with its ~2 GiB of ``nvidia-*`` dependencies, even on a CPU-only
+    install. Pinning the ``+suffix`` build forces the channel's wheel.
+    """
+    return f"+{channel}"
+
+
 def install_stack(
     paths: InstallPaths,
     pins: dict,
@@ -36,13 +48,18 @@ def install_stack(
         f"torch channel: {channel} ({index}); "
         f"GPU: {system.gpu_summary if channel != 'cpu' else 'not used'}"
     )
+    # Pin the channel's build (``+cpu`` / ``+cu128`` / ``+cu132``). The bare
+    # ``torch==x.y.z`` also matches PyPI's CUDA wheel, which uv prefers as
+    # soon as PyPI is visible and which drags in ~2 GiB of nvidia-* libs.
+    suffix = torch_build_suffix(channel)
+    torch_pin = f"torch=={torch_version}{suffix}"
+    torchaudio_pin = f"torchaudio=={torchaudio_version}{suffix}"
     uv_pip_install(
         paths,
         pins,
-        [f"torch=={torch_version}", f"torchaudio=={torchaudio_version}"],
+        [torch_pin, torchaudio_pin],
         progress=progress,
         index_url=str(index),
-        extra_index_url=PYPI,
         timeout=5400,
         system=system,
     )
@@ -53,8 +70,14 @@ def install_stack(
     uv_pip_install(
         paths,
         pins,
-        ["-e", f"{paths.app}[{extras}]"],
+        ["-e", f"{paths.app}[{extras}]", torch_pin, torchaudio_pin],
         progress=progress,
+        index_url=str(index),
+        extra_index_url=PYPI,
+        # The +suffix builds only exist on the torch channel index. Without
+        # this, uv looks at the first index holding the bare version (PyPI)
+        # and never sees them (dependency-confusion guard).
+        index_strategy="unsafe-best-match",
         timeout=3600,
         system=system,
     )
