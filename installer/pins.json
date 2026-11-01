@@ -15,13 +15,13 @@
       "linux-x86_64": {
         "url": "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-unknown-linux-gnu.tar.gz",
         "sha256": "f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645",
-        "size": 32000000,
+        "size": 16799024,
         "archive": "tar.gz"
       },
       "windows-x86_64": {
         "url": "https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-pc-windows-msvc.zip",
         "sha256": "a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f",
-        "size": 14500000,
+        "size": 15239500,
         "archive": "zip"
       }
     }
@@ -32,13 +32,13 @@
       "linux-x86_64": {
         "url": "https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz",
         "sha256": "22982235e1b71fa8850f82edd09cdae7e3f32df1764a9ec298c72d25ef2c164f",
-        "size": 27000000,
+        "size": 29734248,
         "archive": "tar.xz"
       },
       "windows-x86_64": {
         "url": "https://nodejs.org/dist/v22.12.0/node-v22.12.0-win-x64.zip",
         "sha256": "2b8f2256382f97ad51e29ff71f702961af466c4616393f767455501e6aece9b8",
-        "size": 32000000,
+        "size": 34872043,
         "archive": "zip"
       }
     }

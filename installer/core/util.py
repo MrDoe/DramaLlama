@@ -112,11 +112,9 @@ def verify_file(
     try:
         if not target.is_file():
             return False
-        if size is not None and target.stat().st_size != int(size):
-            return False
-        if sha256 and sha256_file(target, cancel=cancel).lower() != sha256.lower():  # noqa: SIM103
-            return False
-        return True
+        if sha256:
+            return sha256_file(target, cancel=cancel).lower() == sha256.lower()
+        return not (size is not None and target.stat().st_size != int(size))
     except OSError:
         return False
 

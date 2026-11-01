@@ -159,10 +159,15 @@ def _download_once(
 
     actual = part.stat().st_size
     if size is not None and actual != int(size):
-        part.unlink(missing_ok=True)
-        raise DownloadError(
-            f"{label}: expected {human_bytes(size)}, got {human_bytes(actual)}"
-        )
+        if sha256:
+            # A stale size pin must not abort a download whose hash is about
+            # to be verified; rely on the checksum below instead of failing.
+            pass
+        else:
+            part.unlink(missing_ok=True)
+            raise DownloadError(
+                f"{label}: expected {human_bytes(size)}, got {human_bytes(actual)}"
+            )
     if sha256:
         digest = sha256_file(part, cancel=cancel)
         if digest.lower() != sha256.lower():
