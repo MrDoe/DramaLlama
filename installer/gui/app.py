@@ -346,6 +346,7 @@ class ComponentsPage(QWizardPage):
             "alignment, ffmpeg and the Suno bridge."
         )
         core_label.setWordWrap(True)
+        core_label.setMinimumHeight(60)
         core_layout.addWidget(core_label)
         layout.addWidget(self.core_box)
 
@@ -389,6 +390,7 @@ class ComponentsPage(QWizardPage):
         inner = QVBoxLayout(box)
         label = QLabel(description)
         label.setWordWrap(True)
+        label.setMinimumHeight(72)
         inner.addWidget(label)
         checkbox = QCheckBox("Install this component")
         inner.addWidget(checkbox)
