@@ -383,7 +383,9 @@ def test_cuda_channel_mapping() -> None:
     pins = load_pins()
     assert cuda_channel(pins, None) == "cpu"
     assert cuda_channel(pins, "580.82", "auto") == "cu132"
-    assert cuda_channel(pins, "535.10", "auto") == "cu128"
+    # No cu128 builds exist for the pinned torch (upstream dropped the
+    # channel); older drivers fall back to CPU.
+    assert cuda_channel(pins, "535.10", "auto") == "cpu"
     assert cuda_channel(pins, "580.82", "cpu") == "cpu"
     assert cuda_channel(pins, "10.0", "auto") == "cpu"
     with pytest.raises(InstallerError):
@@ -416,6 +418,20 @@ def test_effective_device_and_validation() -> None:
     )
     warnings = plan.validate_selection(accepted, pins, cpu)
     assert any("very slow" in warning for warning in warnings)
+    # Auto mode on a GPU box with a pre-CUDA-13 driver warns about the
+    # CPU fallback instead of failing resolution later.
+    old_driver = make_system(
+        gpus=[GpuInfo(name="GTX 1080", driver="535.10", vram_mb=8192)]
+    )
+    auto = Selection(prefix=Path("/tmp/x"))
+    fallback = plan.validate_selection(auto, pins, old_driver)
+    assert any("too old" in warning for warning in fallback)
+    # An explicit --cpu is a deliberate choice: no nagging.
+    explicit = Selection(device="cpu", prefix=Path("/tmp/x"))
+    assert not any(
+        "too old" in warning
+        for warning in plan.validate_selection(explicit, pins, old_driver)
+    )
 
 
 def test_chatterbox_validation_warns_about_docker() -> None:

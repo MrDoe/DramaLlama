@@ -18,7 +18,7 @@ def torch_build_suffix(channel: str) -> str:
     """Local-version suffix of the pinned torch wheels for a channel.
 
     The PyTorch wheel indexes publish channel-specific builds
-    (``torch==2.15.0+cpu``, ``+cu128``, ``+cu132``). Requesting the bare
+    (``torch==2.15.0+cpu``, ``+cu132``). Requesting the bare
     ``torch==2.15.0`` while PyPI is visible resolves to PyPI's CUDA build
     with its ~2 GiB of ``nvidia-*`` dependencies, even on a CPU-only
     install. Pinning the ``+suffix`` build forces the channel's wheel.
@@ -48,7 +48,7 @@ def install_stack(
         f"torch channel: {channel} ({index}); "
         f"GPU: {system.gpu_summary if channel != 'cpu' else 'not used'}"
     )
-    # Pin the channel's build (``+cpu`` / ``+cu128`` / ``+cu132``). The bare
+    # Pin the channel's build (``+cpu`` / ``+cu132``). The bare
     # ``torch==x.y.z`` also matches PyPI's CUDA wheel, which uv prefers as
     # soon as PyPI is visible and which drags in ~2 GiB of nvidia-* libs.
     suffix = torch_build_suffix(channel)

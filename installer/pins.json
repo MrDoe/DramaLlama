@@ -51,10 +51,6 @@
         "index": "https://download.pytorch.org/whl/cpu",
         "min_driver": 0
       },
-      "cu128": {
-        "index": "https://download.pytorch.org/whl/cu128",
-        "min_driver": 525
-      },
       "cu132": {
         "index": "https://download.pytorch.org/whl/cu132",
         "min_driver": 580

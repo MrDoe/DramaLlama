@@ -207,6 +207,19 @@ def validate_selection(selection: Selection, pins: dict, system: SystemInfo) -> 
         )
     device = effective_device(selection, system)
     warnings: list[str] = []
+    # In auto mode effective_device() reports "gpu" for any visible GPU; the
+    # actual CPU fallback happens in torch_channel_for() when the driver fits
+    # no pinned CUDA channel. Warn instead of failing resolution later.
+    if device == "gpu" and selection.device == "auto" and system.has_gpu:
+        # Ask cuda_channel with "auto" (never raises): a "cpu" answer means
+        # the driver fits no pinned CUDA channel and torch will fall back.
+        driver = system.nvidia.driver if system.nvidia else ""
+        if cuda_channel(pins, driver, "auto") == "cpu":
+            warnings.append(
+                f"NVIDIA driver {driver or 'unknown'} is too old for the pinned "
+                f"CUDA wheels (need 580+); installing CPU-only. Update the "
+                f"driver and re-run the installer for GPU acceleration."
+            )
     if device == "cpu" and selection.has(BREEZE_EN):
         warnings.append(
             "Breeze English on CPU is functional but very slow (minutes per "

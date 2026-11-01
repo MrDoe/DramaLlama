@@ -31,8 +31,11 @@ major version (`cuda_channel()` in `detect.py`):
 | Driver | Channel |
 |---|---|
 | 580+ | `cu132` |
-| 525–579 | `cu128` |
-| older / no GPU | `cpu` |
+| older / no GPU | `cpu` (auto mode warns when a GPU is present but the driver is too old) |
+
+Upstream publishes no `cu128` builds for the pinned torch, so the `cu128`
+channel was removed: pre-580 drivers fall back to CPU with a warning telling
+the user to update the driver and re-run for GPU acceleration.
 
 `--gpu` with a driver too old for every pinned channel raises instead of
 downloading a CPU build. Wheel URLs are pinned, so an install is reproducible

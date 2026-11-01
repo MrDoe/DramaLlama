@@ -135,8 +135,7 @@ The installer maps the NVIDIA driver to a pinned PyTorch wheel channel:
 | Driver | Wheel channel |
 |---|---|
 | 580+ | cu132 |
-| 525–579 | cu128 |
-| older / no GPU | CPU wheels |
+| older / no GPU | CPU wheels (update to driver 580+ for CUDA) |
 
 The wizard offers *Automatic*, *Force GPU* and *CPU only*. `--gpu` refuses to
 continue when no NVIDIA GPU is visible; `--cpu` always wins. A CPU install can
