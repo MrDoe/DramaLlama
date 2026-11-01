@@ -318,3 +318,10 @@ run `--verify`; the import smoke test prints the torch version, CUDA version and
 
 **AppImage will not start.** Run with `--appimage-extract-and-run` or install
 FUSE. Check `~/.local/share/drama-llama/logs` for the app's own logs.
+
+**AppImage fails with "Could not load the Qt platform plugin xcb" / missing
+`libxcb-cursor0`.** Install the missing XCB helper and re-run:
+`sudo apt install libxcb-cursor0 libxcb-xkb1 libxkbcommon-x11-0`
+(Debian/Ubuntu) or `sudo dnf install libxcb libxkbcommon-x11` (RHEL/Fedora).
+The installer ships these libraries in v0.3.0+ builds, so re-downloading the
+latest AppImage also resolves it.

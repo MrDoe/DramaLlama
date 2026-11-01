@@ -31,10 +31,47 @@ icon_candidates = [
 ]
 ICON = next((str(path) for path in icon_candidates if path.is_file()), None)
 
+# PySide6 6.5+ loads several xcb helper libraries at runtime via dlopen, so
+# PyInstaller does not collect them automatically. Bundle every one that is
+# present on the build host so the AppImage runs on fresh systems (Ubuntu,
+# RHEL, ...) that ship none of them.
+_extra_binaries = []
+if os.name == "posix":
+    import glob as _glob
+
+    _lib_dirs = (
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib64",
+        "/usr/lib",
+    )
+    _patterns = (
+        "libxcb-cursor.so*",
+        "libxcb-xkb.so*",
+        "libxcb-util.so*",
+        "libxcb-image.so*",
+        "libxcb-render-util.so*",
+        "libxcb-keysyms.so*",
+        "libxcb-icccm.so*",
+        "libxcb-shape.so*",
+        "libxcb-randr.so*",
+        "libxcb-xinerama.so*",
+        "libxcb-sync.so*",
+        "libxcb-xfixes.so*",
+        "libxkbcommon.so*",
+        "libxkbcommon-x11.so*",
+    )
+    _seen: set[str] = set()
+    for _d in _lib_dirs:
+        for _pat in _patterns:
+            for _path in _glob.glob(os.path.join(_d, _pat)):
+                if os.path.isfile(_path) and _path not in _seen:
+                    _seen.add(_path)
+                    _extra_binaries.append((_path, "."))
+
 a = Analysis(
     [str(ROOT / "installer" / "entry.py")],
     pathex=[str(ROOT)],
-    binaries=[],
+    binaries=_extra_binaries,
     datas=[(str(PAYLOAD), "payload")],
     hiddenimports=[
         "PySide6.QtCore",

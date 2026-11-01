@@ -199,6 +199,16 @@ def _tarball(onedir: Path, out: Path, version: str) -> Path:
 
 
 def build_linux(*, onedir: Path, out: Path, version: str, with_appimage: bool) -> list[Path]:
+    # Guard against the Qt xcb platform plugin's runtime dependency on
+    # libxcb-cursor0: if the build host lacked it, the wizard will not start
+    # on a clean system. The PyInstaller spec bundles it when present.
+    if not any(onedir.glob("libxcb-cursor.so*")):
+        print(
+            "WARNING: libxcb-cursor.so.0 was not bundled; the AppImage may fail "
+            "to start on systems without it. Install libxcb-cursor0 on the "
+            "build host and rebuild.",
+            file=sys.stderr,
+        )
     artifacts: list[Path] = []
     archive = _tarball(onedir, out, version)
     artifacts.append(archive)

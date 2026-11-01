@@ -72,6 +72,27 @@ def _qt_available() -> bool:
     return True
 
 
+def _xcb_cursor_available() -> bool:
+    """Whether Qt's xcb platform plugin can find libxcb-cursor0.
+
+    PySide6 6.5+ needs this library at runtime and fails to start the GUI
+    without it. Bundled builds ship it next to the executable; check both the
+    bundle directory and the system search paths.
+    """
+    if os.name != "posix" or sys.platform == "darwin":
+        return True
+    import ctypes.util
+
+    if ctypes.util.find_library("xcb-cursor") is not None:
+        return True
+    # Frozen PyInstaller onedir: the lib sits next to the executable.
+    base = Path(getattr(sys, "_MEIPASS", "") or Path(sys.argv[0]).resolve().parent)
+    for name in ("libxcb-cursor.so.0", "libxcb-cursor.so"):
+        if (base / name).is_file():
+            return True
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     ensure_console_streams()
     args = list(sys.argv[1:] if argv is None else argv)
@@ -81,6 +102,19 @@ def main(argv: list[str] | None = None) -> int:
                 "PySide6 is not installed, so the graphical installer is "
                 "unavailable.\nRun with --headless to use the command-line "
                 "installer.",
+                file=sys.stderr,
+            )
+            return 2
+        if not _xcb_cursor_available():
+            print(
+                "The graphical installer needs the XCB helper libraries "
+                "(libxcb-cursor and friends), which are missing on this "
+                "system.\n"
+                "On Debian/Ubuntu:  sudo apt install libxcb-cursor0 libxcb-xkb1 "
+                "libxkbcommon-x11-0\n"
+                "On RHEL/Fedora:     sudo dnf install libxcb libxkbcommon-x11\n"
+                "Then re-run the installer, or use the command-line installer: "
+                "DramaLlama-Setup --headless",
                 file=sys.stderr,
             )
             return 2

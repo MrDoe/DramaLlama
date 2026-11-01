@@ -1071,7 +1071,18 @@ def run_wizard(argv: list[str] | None = None) -> int:
     args, _unknown = _argument_parser().parse_known_args(argv)
     if args.yes:
         args.allow_docker_install = True
-    app = QApplication.instance() or QApplication(sys.argv[:1])
+    try:
+        app = QApplication.instance() or QApplication(sys.argv[:1])
+    except Exception as exc:  # noqa: BLE001 - surface any Qt platform failure
+        print(
+            "Could not initialise the Qt platform plugin: " + str(exc) + "\n"
+            "On Debian/Ubuntu install the missing XCB helpers with:\n"
+            "  sudo apt install libxcb-cursor0 libxcb-xkb1 libxkbcommon-x11-0\n"
+            "On RHEL/Fedora: sudo dnf install libxcb libxkbcommon-x11\n"
+            "Then re-run the installer, or use --headless.",
+            file=sys.stderr,
+        )
+        return 2
     app.setApplicationName("Drama Llama installer")
     app.setApplicationDisplayName("Drama Llama installer")
     wizard = Wizard(args)

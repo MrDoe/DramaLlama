@@ -68,10 +68,11 @@ English is opt-in because it is English-only and impractically slow on CPU.
 The local LLM is not installed; deterministic parsing works out of the box.
 
 Releases are unsigned for now: Windows SmartScreen asks for *More info → Run
-anyway*, and Linux may need `--appimage-extract-and-run` without FUSE. See
-[`INSTALL.md`](INSTALL.md) for disk-space tables, licence terms, the headless
-CLI, uninstall, and how to build the installers.
-
+anyway*, and Linux may need `--appimage-extract-and-run` without FUSE. If the
+AppImage fails to start with a missing `libxcb-cursor0`, install it with
+`sudo apt install libxcb-cursor0`. See [`INSTALL.md`](INSTALL.md) for disk-space
+tables, licence terms, the headless CLI, uninstall, and how to build the
+installers.
 ### Run from a source checkout
 
 A clean setup needs Python 3.12 or newer, an `ffmpeg` binary on your `PATH` and Node.js 20 or newer. The mixer calls `ffmpeg` for loudness normalisation and MP3 encoding, and uploads are converted with it. The web frontend is built with Node.js. A local NVIDIA GPU is optional but recommended. Without one, Breeze rendering and Whisper alignment fall back to slow CPU execution, while the Fake engine and the full test suite run anywhere.
