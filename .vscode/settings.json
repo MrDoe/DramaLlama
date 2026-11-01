@@ -1,5 +1,5 @@
 {
-  "python.defaultInterpreterPath": "${env:HOME}/.venvs/qwen3tts/bin/python",
+  "python.defaultInterpreterPath": "/home/christoph/.venvs/qwen3tts/bin/python",
   "python.terminal.activateEnvironment": true,
   "python.testing.pytestEnabled": true,
   "python.testing.pytestArgs": ["tests"],

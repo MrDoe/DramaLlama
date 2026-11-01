@@ -362,10 +362,16 @@ async function main() {
       if (req.method === "GET" && url.pathname === "/library") {
         const limit = Math.max(
           1,
-          Math.min(50, Number(url.searchParams.get("limit")) || 50),
+          Math.min(500, Number(url.searchParams.get("limit")) || 50),
         );
+        const stemsOnly =
+          url.searchParams.get("stems_only") === "true" ||
+          url.searchParams.get("stemsOnly") === "true" ||
+          url.searchParams.get("stems") === "true";
         try {
-          const result = await callTool("list_library", { limit });
+          const args = { limit };
+          if (stemsOnly) args.stems_only = true;
+          const result = await callTool("list_library", args);
           const clips = extractClips(result.data).map(slimClip).slice(0, limit);
           return send(res, 200, { ok: true, clips });
         } catch (error) {

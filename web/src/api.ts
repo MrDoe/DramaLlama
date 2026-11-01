@@ -227,10 +227,12 @@ export const api = {
     projectId: string,
     stemId: string,
     cuts: {
+      id?: string;
       line_id: string;
       take_id?: string | null;
       start_s: number;
       end_s: number;
+      position_s?: number;
     }[],
     rebuildMix = true,
   ) =>
@@ -245,7 +247,7 @@ export const api = {
     projectId: string,
     stems: Record<
       string,
-      { line_id: string; take_id?: string | null; start_s: number; end_s: number }[]
+      { id?: string; line_id: string; take_id?: string | null; start_s: number; end_s: number; position_s?: number }[]
     >,
     rebuildMix = true,
   ) =>
@@ -365,7 +367,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ clip_id: clipId }),
     }),
-  sunoLibrary: (limit = 50) =>
+  sunoLibrary: (limit = 500) =>
     request<{ ok: boolean; clips: SunoLibraryClip[] }>(
       `/suno/library?limit=${limit}`,
     ),
@@ -375,9 +377,11 @@ export const api = {
     input: {
       cfg_scale?: number;
       seed?: number;
+      text?: string;
       suno_lyrics?: string | null;
       suno_title?: string | null;
       suno_tags?: string | null;
+      suno_negative_tags?: string | null;
       suno_weirdness?: number | null;
       suno_style_weight?: number | null;
       suno_audio_weight?: number | null;
@@ -448,6 +452,10 @@ export const api = {
     request<Project>(`/projects/${id}/script`, {
       method: "PUT",
       body: JSON.stringify({ script }),
+    }),
+  deleteTake: (projectId: string, stemId: string, takeId: string) =>
+    request<Project>(`/projects/${projectId}/stems/${stemId}/takes/${takeId}`, {
+      method: "DELETE",
     }),
   engines: () => request<EngineInfo[]>("/engines"),
 };

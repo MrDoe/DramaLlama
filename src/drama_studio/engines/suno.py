@@ -162,6 +162,9 @@ class SunoEngine(BaseEngine):
             "mv": request.mv or "chirp-hawk",
             "instrumental": False,
         }
+        negative = (request.suno_negative_tags or "").strip()
+        if negative:
+            payload["negative_tags"] = negative
         # Style/weirdness/audio influence are paid-plan knobs on Suno's side:
         # sending them on a free account fails the whole request with
         # "This feature isn't available on your current plan".

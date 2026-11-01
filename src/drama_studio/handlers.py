@@ -352,6 +352,7 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         suno_lyrics=suno_lyrics,
         suno_title=stem.suno_title,
         suno_tags=stem.suno_tags,
+        suno_negative_tags=stem.suno_negative_tags,
         suno_weirdness=_suno_param("suno_weirdness"),
         suno_style_weight=_suno_param("suno_style_weight"),
         suno_audio_weight=_suno_param("suno_audio_weight"),
@@ -439,6 +440,9 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             alignment = _estimate_alignment(
                 stem.id, selected.duration_s, lines, take_id=selected.id
             )
+            from .cuts import seed_positions
+
+            seed_positions(alignment)
             project.alignments[stem.id] = alignment
             project.mix_stale = True
             _STORE.save(project)
@@ -454,6 +458,9 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             )
             for line in alignment.lines:
                 line.take_id = selected.id
+            from .cuts import seed_positions
+
+            seed_positions(alignment)
             project.alignments[stem.id] = alignment
             project.mix_stale = True
             _STORE.save(project)
@@ -484,12 +491,15 @@ def _estimate_alignment(
     aligned: list[AlignedLine] = []
     for line, weight in zip(lines, weights, strict=False):
         span = duration_s * weight / total
+        pos = round(cursor, 2)
         aligned.append(
             AlignedLine(
+                id=line.id,
                 line_id=line.id,
                 take_id=take_id,
                 start_s=round(cursor, 2),
                 end_s=round(cursor + span, 2),
+                position_s=pos,
                 confidence=0.05,
                 fallback=True,
             )
@@ -547,6 +557,9 @@ def realign_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         alignment = _estimate_alignment(
             stem.id, selected.duration_s, lines, take_id=selected.id
         )
+        from .cuts import seed_positions
+
+        seed_positions(alignment)
         project.alignments[stem.id] = alignment
         project.mix_stale = True
         _STORE.save(project)
@@ -565,6 +578,9 @@ def realign_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     )
     for line in alignment.lines:
         line.take_id = selected.id
+    from .cuts import seed_positions
+
+    seed_positions(alignment)
     project.alignments[stem.id] = alignment
     project.mix_stale = True
     _STORE.save(project)
@@ -675,6 +691,9 @@ def import_suno_take(job: Job, ctx: JobContext) -> dict[str, Any]:
             alignment = _estimate_alignment(
                 stem.id, duration, lines, take_id=take.id
             )
+            from .cuts import seed_positions
+
+            seed_positions(alignment)
             project.alignments[stem.id] = alignment
             project.mix_stale = True
             _STORE.save(project)
@@ -895,6 +914,9 @@ def extract_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
                 )
                 for line in alignment.lines:
                     line.take_id = new_take_id
+                from .cuts import seed_positions
+
+                seed_positions(alignment)
                 project.alignments[stem.id] = alignment
                 project.mix_stale = True
                 _STORE.save(project)

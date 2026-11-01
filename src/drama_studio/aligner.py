@@ -68,18 +68,25 @@ class WhisperAligner:
 
         out_dir = Path(output_dir) / "lines"
         aligned: list[AlignedLine] = []
+        cursor = 0.0
+        PAUSE = 0.5
         for line, (start, end), conf in zip(lines, cuts, confs):
             segment = samples[int(start * sample_rate) : int(end * sample_rate)]
             write_mono(out_dir / f"{_safe(line.id)}.wav", segment, sample_rate)
+            dur = max(0.0, float(end) - float(start))
+            pos = round(cursor, 3)
             aligned.append(
                 AlignedLine(
+                    id=line.id,
                     line_id=line.id,
                     start_s=round(float(start), 3),
                     end_s=round(float(end), 3),
+                    position_s=pos,
                     confidence=round(float(conf), 3),
                     fallback=float(conf) < 0.8,
                 )
             )
+            cursor = pos + dur + PAUSE
         return AlignmentResult(
             stem_id=stem_id or Path(stem_path).stem,
             lines=aligned,

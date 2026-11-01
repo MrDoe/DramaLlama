@@ -182,6 +182,7 @@ export interface Stem {
   suno_lyrics?: string | null;
   suno_title?: string | null;
   suno_tags?: string | null;
+  suno_negative_tags?: string | null;
   suno_weirdness?: number | null;
   suno_style_weight?: number | null;
   suno_audio_weight?: number | null;
@@ -191,11 +192,13 @@ export interface Stem {
 }
 
 export interface AlignedLine {
+  id?: string;
   line_id: string;
   /** Take this cut window lives in; null = the stem's selected take. */
   take_id?: string | null;
   start_s: number;
   end_s: number;
+  position_s?: number | null;
   confidence?: number | null;
   fallback: boolean;
 }

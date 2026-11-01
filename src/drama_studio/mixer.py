@@ -88,39 +88,82 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
     pause = project.settings.pause_ms / 1000.0
     scene_gap = project.settings.scene_gap_ms / 1000.0
     lines = project.script.iter_lines()
+    line_by_id = {line.id: line for line in lines}
 
     line_starts: dict[str, float] = {}
-    line_durations: dict[str, float] = {}
     scene_end: dict[int, float] = {}
-    timeline = 0.0
-    previous_scene: int | None = None
+    # Freeform: placement comes from alignment segments when available.
+    segments: list[tuple[str, str, Path, float]] = []  # (seg_id, line_id, path, position)
+    if project.alignments:
+        for alignment in project.alignments.values():
+            for seg in alignment.lines:
+                seg_id = seg.id or seg.line_id
+                clip_path = project_dir / "lines" / f"{seg_id}.wav"
+                if not clip_path.exists():
+                    # Fall back to legacy line_id filename.
+                    alt = project_dir / "lines" / f"{seg.line_id}.wav"
+                    if alt.exists():
+                        clip_path = alt
+                pos = seg.position_s if seg.position_s is not None else 0.0
+                segments.append((seg_id, seg.line_id, clip_path, float(pos)))
+    else:
+        # Legacy: script order + cut durations.
+        timeline = 0.0
+        previous_scene: int | None = None
+        for line in lines:
+            if previous_scene is not None and line.scene != previous_scene:
+                timeline += scene_gap
+            clip_path = project_dir / "lines" / f"{line.id}.wav"
+            if clip_path.exists():
+                info = sf.info(str(clip_path))
+                duration = float(info.frames) / float(info.samplerate)
+            else:
+                duration = 0.0
+                warnings.append(f"missing line clip for {line.id} ({line.speaker})")
+            segments.append((line.id, line.id, clip_path, timeline))
+            timeline += duration + pause
+            previous_scene = line.scene
 
-    for line in lines:
-        if previous_scene is not None and line.scene != previous_scene:
-            timeline += scene_gap
-        line_starts[line.id] = timeline
-        clip_path = project_dir / "lines" / f"{line.id}.wav"
+    # line_starts: first segment position per line; scene_end: max end per scene.
+    for seg_id, line_id, clip_path, pos in segments:
+        if line_id not in line_starts or pos < line_starts[line_id]:
+            line_starts[line_id] = pos
+        line = line_by_id.get(line_id)
+        scene = line.scene if line else None
+        dur = 0.0
         if clip_path.exists():
-            info = sf.info(str(clip_path))
-            duration = float(info.frames) / float(info.samplerate)
+            try:
+                info = sf.info(str(clip_path))
+                dur = float(info.frames) / float(info.samplerate)
+            except Exception:
+                dur = 0.0
         else:
-            duration = 0.0
-            warnings.append(f"missing line clip for {line.id} ({line.speaker})")
-        line_durations[line.id] = duration
-        timeline += duration + pause
-        scene_end[line.scene] = timeline
-        previous_scene = line.scene
+            warnings.append(f"missing line clip for {line_id} ({line.speaker if line else ''})")
+        if scene is not None:
+            scene_end[scene] = max(scene_end.get(scene, 0.0), pos + dur)
 
-    total_s = timeline + TAIL_S
+    max_end = 0.0
+    for seg_id, line_id, clip_path, pos in segments:
+        dur = 0.0
+        if clip_path.exists():
+            try:
+                info = sf.info(str(clip_path))
+                dur = float(info.frames) / float(info.samplerate)
+            except Exception:
+                dur = 0.0
+        max_end = max(max_end, pos + dur)
+
+    total_s = max_end + TAIL_S if segments else (0.0 + TAIL_S)
     total = max(1, int(total_s * SR))
     dialogue = np.zeros(total, dtype=np.float32)
 
-    for line in lines:
-        clip_path = project_dir / "lines" / f"{line.id}.wav"
+    # Place every segment clip at its (freeform) position.
+    seen_paths: set[Path] = set()
+    for seg_id, line_id, clip_path, pos in segments:
         if not clip_path.exists():
             continue
         clip = _load_audio(clip_path)
-        _place(dialogue, clip, line_starts[line.id])
+        _place(dialogue, clip, pos)
     dialogue = _highpass(dialogue, 80.0)
 
     speech = _speech_envelope(dialogue)
@@ -222,7 +265,7 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
         mp3=mp3_path,
         duration_s=round(total_s, 2),
         loudness_target=f"{target} LUFS",
-        line_count=sum(1 for line in lines if (project_dir / "lines" / f"{line.id}.wav").exists()),
+        line_count=len({lid for (_sid, lid, cp, _p) in segments if cp.exists()}),
         cue_count=cue_count,
         warnings=warnings,
     )

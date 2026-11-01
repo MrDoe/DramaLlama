@@ -78,12 +78,12 @@ class SunoBridge:
             raise SunoError(data.get("error") or "Suno bridge returned no persona")
         return data
 
-    def list_library(self, limit: int = 50) -> dict[str, Any]:
+    def list_library(self, limit: int = 500) -> dict[str, Any]:
         """Newest own Suno library clips (for the import-from-Suno picker)."""
         try:
             response = httpx.get(
                 f"{self.base_url}/library",
-                params={"limit": max(1, min(50, limit))},
+                params={"limit": max(1, min(500, limit))},
                 timeout=60,
             )
             response.raise_for_status()

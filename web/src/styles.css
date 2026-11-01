@@ -1254,6 +1254,24 @@ h3 {
   line-height: 1.65;
   white-space: pre-line;
 }
+.stem-text-input {
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: rgba(12, 12, 26, 0.5);
+  color: #e2e8f0;
+  font-size: 13px;
+  line-height: 1.65;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 48px;
+}
+.stem-text-input:focus {
+  outline: none;
+  border-color: var(--accent, #f97316);
+}
 
 .stem-instruction {
   margin: 0 0 14px;

@@ -22,6 +22,14 @@ def safe_filename(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", value).strip("_") or "line"
 
 
+def segment_filename(seg: AlignedLine) -> str:
+    """Filename (without extension) for a segment's line clip."""
+    base = seg.id.strip() if seg.id else ""
+    if not base:
+        base = seg.line_id
+    return safe_filename(base)
+
+
 def freeze_legacy_cuts(
     alignment: AlignmentResult | None, fallback: Take | None
 ) -> None:
@@ -104,28 +112,48 @@ def remap_removed_cuts(
         segment = slice_mono(mono, sr, start, end)
         if segment.size == 0:
             continue
-        write_mono(out_dir / f"{safe_filename(line.line_id)}.wav", segment, sr)
+        write_mono(out_dir / f"{segment_filename(line)}.wav", segment, sr)
 
 
 def normalize_alignment(
     alignment: AlignmentResult | None, takes: list[Take]
 ) -> AlignmentResult | None:
-    """Fill legacy take_id=None with the selected (or first) take id.
+    """Fill legacy take_id=None / id / position_s with sensible values.
 
     Makes old projects readable without mutating audio: pure in-memory fixup
     applied on load. Callers persist via store.save when they mutate further.
     """
     if alignment is None:
-        return None
+        return alignment
     fallback = next((take for take in takes if take.selected), None)
     if fallback is None and takes:
         fallback = takes[0]
     if fallback is None:
         return alignment
-    for line in alignment.lines:
-        if line.take_id is None:
-            line.take_id = fallback.id
+    PAUSE = 0.5
+    cursor = 0.0
+    for entry in alignment.lines:
+        if entry.take_id is None:
+            entry.take_id = fallback.id
+        if not entry.id:
+            entry.id = entry.line_id
+        if entry.position_s is None:
+            entry.position_s = round(cursor, 3)
+        dur = max(0.0, (entry.end_s or 0) - (entry.start_s or 0))
+        cursor += dur + PAUSE
     return alignment
+
+
+def seed_positions(alignment: AlignmentResult, pause_s: float = 0.5) -> None:
+    """Set position_s cumulatively from cut durations (legacy seed)."""
+    cursor = 0.0
+    for entry in alignment.lines:
+        if entry.id is None or not entry.id:
+            entry.id = entry.line_id
+        if entry.position_s is None:
+            entry.position_s = round(cursor, 3)
+        dur = max(0.0, (entry.end_s or 0) - (entry.start_s or 0))
+        cursor = entry.position_s + dur + pause_s
 
 
 def pick_selected_take(takes: list[Take], selected_take_id: str | None) -> Take | None:

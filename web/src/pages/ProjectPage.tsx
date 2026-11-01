@@ -350,82 +350,111 @@ function SunoImportRow({
     undefined,
   );
   const [selectedId, setSelectedId] = useState("");
-  // The full 50-entry list is unwieldy as a native dropdown: show the 10
+  // The full list is unwieldy as a native dropdown: show the 10
   // latest, with a "show all" entry that loads the rest on demand.
   const [limit, setLimit] = useState(10);
+  const [stemsOnly, setStemsOnly] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     let live = true;
     setClips(undefined);
+    setLoading(true);
     api
       .sunoLibrary(limit)
       .then((data) => {
-        if (live) setClips(data.clips ?? []);
+        if (!live) return;
+        setClips(data.clips ?? []);
+        setLoading(false);
       })
       .catch(() => {
-        if (live) setClips(null);
+        if (!live) return;
+        setClips(null);
+        setLoading(false);
       });
     return () => {
       live = false;
     };
   }, [limit]);
 
-  if (clips === undefined)
-    return <span className="panel-sub">loading Suno files…</span>;
   // Bridge offline: hide the picker, rendering still works.
   if (clips === null) return null;
-  if (clips.length === 0)
+
+  if (clips === undefined && loading) {
+    return <span className="panel-sub">loading Suno files…</span>;
+  }
+
+  if (clips === undefined) {
+    return <span className="panel-sub">loading Suno files…</span>;
+  }
+
+  if (!clips || clips.length === 0) {
+    if (loading) {
+      return <span className="panel-sub">loading Suno files…</span>;
+    }
     return <span className="panel-sub">no Suno files yet</span>;
+  }
 
   return (
-    <div
-      className="render-extract-row"
-      style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 3, marginBottom: 10 }}
-    >
-      <select
-        value={selectedId}
-        onChange={(event) => {
-          if (event.target.value === "__more") {
-            setLimit(50);
-            setSelectedId("");
-            return;
-          }
-          setSelectedId(event.target.value);
-        }}
-        disabled={disabled}
-        title="Pick one of your recent Suno generations to attach as a take"
-        aria-label={`Import Suno file as take for ${stem.speaker}`}
-        style={{ maxWidth: 280, textOverflow: "ellipsis" }}
+    <div style={{ marginTop: 3, marginBottom: 10 }}>
+      <div
+        className="render-extract-row"
+        style={{ display: "flex", gap: 8, alignItems: "center" }}
       >
-        <option value="">Import from Suno…</option>
-        {clips.map((clip) => (
-          <option
-            key={clip.id ?? `${clip.title}-${clip.created_at}`}
-            value={clip.id ?? ""}
-            disabled={!clip.id}
-          >
-            {clip.title}
-            {clip.created_at ? ` · ${clip.created_at.slice(0, 10)}` : ""}
-            {clip.duration ? ` · ${formatDuration(clip.duration)}` : ""}
-            {clip.status && clip.status !== "complete" ? ` · ${clip.status}` : ""}
-          </option>
-        ))}
-        {limit < 50 ? (
-          <option value="__more">Show all 50 recent files…</option>
-        ) : null}
-      </select>
-      <button
-        type="button"
-        className="button button-secondary button-sm"
-        onClick={() => {
-          if (selectedId) onImport(stem, selectedId);
-        }}
-        disabled={disabled || !selectedId}
-        title="Download this Suno file and attach it as the selected take"
-      >
-        <DownloadSimple size={14} />
-        Import
-      </button>
+        <select
+          value={selectedId}
+          onChange={(event) => {
+            if (event.target.value === "__more") {
+              setLimit(500);
+              setSelectedId("");
+              return;
+            }
+            setSelectedId(event.target.value);
+          }}
+          disabled={disabled || loading}
+          title="Pick one of your recent Suno generations to attach as a take"
+          aria-label={`Import Suno file as take for ${stem.speaker}`}
+          style={{ maxWidth: 280, textOverflow: "ellipsis" }}
+        >
+          <option value="">{loading ? "Loading…" : "Import from Suno…"}</option>
+          {clips.map((clip) => (
+            <option
+              key={clip.id ?? `${clip.title}-${clip.created_at}`}
+              value={clip.id ?? ""}
+              disabled={!clip.id}
+            >
+              {clip.title}
+              {clip.created_at ? ` · ${clip.created_at.slice(0, 10)}` : ""}
+              {clip.duration ? ` · ${formatDuration(clip.duration)}` : ""}
+              {clip.status && clip.status !== "complete" ? ` · ${clip.status}` : ""}
+            </option>
+          ))}
+          {limit < 500 ? (
+            <option value="__more">Show all recent files…</option>
+          ) : null}
+        </select>
+        <button
+          type="button"
+          className="button button-secondary button-sm"
+          onClick={() => {
+            if (selectedId) onImport(stem, selectedId);
+          }}
+          disabled={disabled || !selectedId || loading}
+          title="Download this Suno file and attach it as the selected take"
+        >
+          <DownloadSimple size={14} />
+          Import
+        </button>
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "var(--text-muted)" }}>
+        <input
+          type="checkbox"
+          checked={stemsOnly}
+          onChange={(event) => setStemsOnly(event.target.checked)}
+          disabled={disabled || loading}
+        />
+        Show stems only
+      </label>
     </div>
   );
 }
@@ -443,6 +472,7 @@ function SunoStemFields({
   onSave: (stem: Stem, fields: {
     suno_title: string;
     suno_tags: string;
+    suno_negative_tags: string;
     suno_weirdness: number | null;
     suno_style_weight: number | null;
     suno_audio_weight: number | null;
@@ -453,6 +483,7 @@ function SunoStemFields({
 }) {
   const [title, setTitle] = useState(stem.suno_title ?? "");
   const [tags, setTags] = useState(stem.suno_tags ?? "");
+  const [excludeTags, setExcludeTags] = useState(stem.suno_negative_tags ?? "");
   const [weirdness, setWeirdness] = useState<number | null>(stem.suno_weirdness ?? null);
   const [styleWeight, setStyleWeight] = useState<number | null>(stem.suno_style_weight ?? null);
   const [audioWeight, setAudioWeight] = useState<number | null>(stem.suno_audio_weight ?? null);
@@ -462,6 +493,7 @@ function SunoStemFields({
   useEffect(() => {
     setTitle(stem.suno_title ?? "");
     setTags(stem.suno_tags ?? "");
+    setExcludeTags(stem.suno_negative_tags ?? "");
     setWeirdness(stem.suno_weirdness ?? null);
     setStyleWeight(stem.suno_style_weight ?? null);
     setAudioWeight(stem.suno_audio_weight ?? null);
@@ -470,6 +502,7 @@ function SunoStemFields({
   }, [
     stem.suno_title,
     stem.suno_tags,
+    stem.suno_negative_tags,
     stem.suno_weirdness,
     stem.suno_style_weight,
     stem.suno_audio_weight,
@@ -479,6 +512,7 @@ function SunoStemFields({
   const dirty =
     title.trim() !== (stem.suno_title ?? "") ||
     tags.trim() !== (stem.suno_tags ?? "") ||
+    excludeTags.trim() !== (stem.suno_negative_tags ?? "") ||
     weirdness !== (stem.suno_weirdness ?? null) ||
     styleWeight !== (stem.suno_style_weight ?? null) ||
     audioWeight !== (stem.suno_audio_weight ?? null) ||
@@ -491,6 +525,7 @@ function SunoStemFields({
       onSave(stem, {
         suno_title: title.trim(),
         suno_tags: tags.trim(),
+        suno_negative_tags: excludeTags.trim(),
         suno_weirdness: weirdness,
         suno_style_weight: styleWeight,
         suno_audio_weight: audioWeight,
@@ -505,6 +540,7 @@ function SunoStemFields({
     stem,
     title,
     tags,
+    excludeTags,
     weirdness,
     styleWeight,
     audioWeight,
@@ -565,6 +601,19 @@ function SunoStemFields({
             {suggesting ? <span className="spinner" /> : <MagicWand size={14} weight="fill" />}
           </button>
         </div>
+      </div>
+      <div className="field">
+        <label className="label" htmlFor={`suno-exclude-${stem.id}`}>
+          Exclude styles <span>styles to avoid (negative prompt)</span>
+        </label>
+        <input
+          id={`suno-exclude-${stem.id}`}
+          className="input"
+          value={excludeTags}
+          onChange={(event) => setExcludeTags(event.target.value)}
+          placeholder="e.g. heavy metal, autotune"
+          spellCheck={false}
+        />
       </div>
       <div className="field">
         <label className="label" htmlFor={`suno-weird-${stem.id}`}>
@@ -840,6 +889,7 @@ function RenderBoard({
   onRefVoiceChange,
   onSelectPersona,
   onSaveSunoFields,
+  onSaveStemText,
   onSuggestSunoStyle,
   onExtractStem,
   onImportSuno,
@@ -869,6 +919,7 @@ function RenderBoard({
     fields: {
       suno_title: string;
       suno_tags: string;
+      suno_negative_tags: string;
       suno_weirdness: number | null;
       suno_style_weight: number | null;
       suno_audio_weight: number | null;
@@ -876,6 +927,7 @@ function RenderBoard({
       suno_vocal_gender: string | null;
     },
   ) => void;
+  onSaveStemText: (stem: Stem, text: string) => void;
   onSuggestSunoStyle: (stem: Stem) => Promise<void>;
   onExtractStem: (stem: Stem, method: "demucs" | "suno") => Promise<void>;
   onImportSuno: (stem: Stem, clipId: string) => void;
@@ -898,6 +950,7 @@ function RenderBoard({
     return Boolean(project.script.characters[stem.speaker]?.ref_file);
   };
   const ready = project.stems.filter((stem) => voiceReady(stem)).length;
+  const [newMode, setNewMode] = useState<Record<string, boolean>>({});
 
   return (
     <div>
@@ -939,7 +992,7 @@ function RenderBoard({
             onClick={() => onRenderAll(project.stems, false)}
             title="Render every stem that has no takes yet, one after another"
           >
-            {batch.state === "running" ? "Rendering…" : "Render all"}
+            {batch.state === "running" ? "Generating…" : "Generate all"}
           </button>
           <button type="button" className="button button-ghost button-sm" onClick={onRefresh}>
             Refresh
@@ -974,16 +1027,20 @@ function RenderBoard({
                   const job = jobs[stem.id];
                   const realignJob = jobs[`${stem.id}:realign`];
                   const extractJob = jobs[`${stem.id}:extract`];
+                  const rendering =
+                    job?.status === "queued" || job?.status === "running";
                   const importJob = jobs[`${stem.id}:import`];
-                  const busy =
+                  const renderBusy =
                     job?.status === "queued" ||
                     job?.status === "running" ||
-                    realignJob?.status === "queued" ||
-                    realignJob?.status === "running" ||
                     extractJob?.status === "queued" ||
                     extractJob?.status === "running" ||
                     importJob?.status === "queued" ||
                     importJob?.status === "running";
+                  const aligning =
+                    realignJob?.status === "queued" ||
+                    realignJob?.status === "running";
+                  const busy = renderBusy || aligning;
                   const failedJob =
                     job?.status === "failed"
                       ? job
@@ -993,9 +1050,7 @@ function RenderBoard({
                   const alignment = project.alignments[stem.id];
                   const take = stem.takes.find((item) => item.selected) ?? stem.takes[0];
                   const isolatedTake =
-                    (take && take.vocal_isolated ? take : null) ??
-                    stem.takes.find((item) => item.vocal_isolated) ??
-                    null;
+                    take && take.vocal_isolated ? take : null;
                   const originalTake = isolatedTake
                     ? stem.takes.find(
                         (item) =>
@@ -1031,7 +1086,11 @@ function RenderBoard({
                           }`}
                         >
                           {busy
-                            ? job?.status
+                            ? rendering
+                              ? job?.status
+                              : aligning
+                                ? "aligning"
+                                : job?.status
                             : take
                               ? `${stem.takes.length} take${stem.takes.length === 1 ? "" : "s"}`
                               : "not rendered"}
@@ -1041,7 +1100,10 @@ function RenderBoard({
                       {busy ? (
                         <div className="render-progress">
                           <div className="render-progress-head">
-                            <span>{job?.message || job?.status}</span>
+                            <span>
+                              {job?.message ||
+                                (aligning ? "Aligning…" : job?.status)}
+                            </span>
                             <strong>{Math.round((job?.progress ?? 0) * 100)}%</strong>
                           </div>
                           <div className="coverage-bar">
@@ -1053,7 +1115,24 @@ function RenderBoard({
                         </div>
                       ) : null}
 
-                      <p className="stem-text">{stem.text.replace(/([.?!])\s+/g, "$1\n")}</p>
+                      <textarea
+                        className="stem-text-input"
+                        defaultValue={
+                          selectedEngine === "suno"
+                            ? stem.text.replace(/([.?!])\s+/g, "$1\n")
+                            : stem.text
+                        }
+                        rows={Math.max(
+                          2,
+                          (selectedEngine === "suno"
+                            ? stem.text.replace(/([.?!])\s+/g, "$1\n")
+                            : stem.text
+                          ).split(/\n/).length,
+                        )}
+                        disabled={renderBusy || (!newMode[stem.id] && stem.takes.length > 0)}
+                        aria-label={`Source text for ${stem.speaker}`}
+                        onBlur={(event) => void onSaveStemText(stem, event.target.value)}
+                      />
                       <div className="engine-row">
                         <span className="badge">{engineLabel(selectedEngine)}</span>
                         {showRefVoice ? (
@@ -1064,7 +1143,7 @@ function RenderBoard({
                               onChange={(event) =>
                                 onRefVoiceChange(stem, event.target.value)
                               }
-                              disabled={busy}
+                              disabled={renderBusy}
                               title="Which of the speaker's designed voices to render with"
                             >
                               <option value="">Default voice</option>
@@ -1087,7 +1166,8 @@ function RenderBoard({
                       </div>
 
                       {selectedEngine === "suno" &&
-                      project.script.characters[stem.speaker] ? (
+                      project.script.characters[stem.speaker] &&
+                      (newMode[stem.id] || stem.takes.length === 0) ? (
                         <SunoStemFields
                           stem={stem}
                           character={project.script.characters[stem.speaker]}
@@ -1097,23 +1177,27 @@ function RenderBoard({
                         />
                       ) : null}
 
-                      {selectedEngine === "suno" ? (
+                      {selectedEngine === "suno" &&
+                      (newMode[stem.id] || stem.takes.length === 0) ? (
                         <SunoImportRow
                           stem={stem}
-                          disabled={busy}
+                          disabled={renderBusy}
                           onImport={onImportSuno}
                         />
                       ) : null}
 
-                      {stem.takes.length > 1 ? (
-                        <div className="take-list">
-                          {stem.takes.map((take, index) => (
+                      <div className="take-list">
+                        {stem.takes.map((take, index) => (
+                          <div key={take.id} style={{ display: "inline-flex", alignItems: "center" }}>
                             <button
                               type="button"
-                              key={take.id}
-                              className={`take-pill${take.selected ? " active" : ""}`}
-                              onClick={() => onSelectTake(stem, take.id)}
-                              disabled={busy}
+                              className={`take-pill${!newMode[stem.id] && take.selected ? " active" : ""}`}
+                              onClick={() => {
+                                setNewMode((prev) => ({ ...prev, [stem.id]: false }));
+                                void onSelectTake(stem, take.id);
+                              }}
+                              disabled={renderBusy}
+                              style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
                             >
                               T{index + 1} · {take.engine}
                               {take.vocal_isolated ? " vocal" : ""} ·{" "}
@@ -1121,9 +1205,41 @@ function RenderBoard({
                               {take.clip_id ? ` · clip ${take.clip_id.slice(-4)}` : ""}
                               {take.f0_hz ? ` · ${Math.round(take.f0_hz)} Hz` : ""}
                             </button>
-                          ))}
-                        </div>
-                      ) : null}
+                            <button
+                              type="button"
+                              className={`take-pill${!newMode[stem.id] && take.selected ? " active" : ""}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void api
+                                  .deleteTake(project.id, stem.id, take.id)
+                                  .then(() => {
+                                    onRefresh();
+                                  })
+                                  .catch((err: Error) =>
+                                    onShowError("Remove take failed", err.message),
+                                  );
+                              }}
+                              disabled={renderBusy}
+                              title="Remove take"
+                              aria-label="Remove take"
+                              style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, padding: "0 6px", borderLeft: "1px solid rgba(255,255,255,0.15)", alignSelf: "stretch", height: "auto" }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          key="__new__"
+                          className={`take-pill${newMode[stem.id] ? " active" : ""}`}
+                          onClick={() =>
+                            setNewMode((prev) => ({ ...prev, [stem.id]: true }))
+                          }
+                          disabled={renderBusy}
+                        >
+                          New
+                        </button>
+                      </div>
 
                       {alignment ? (
                         <div className="render-align">
@@ -1169,7 +1285,7 @@ function RenderBoard({
                                   [stem.id]: event.target.value as "demucs" | "suno",
                                 }))
                               }
-                              disabled={busy}
+                              disabled={renderBusy}
                               title="Stem extraction method"
                             >
                               <option value="demucs">Demucs (local)</option>
@@ -1187,7 +1303,7 @@ function RenderBoard({
                                   : "demucs",
                               )
                             }
-                            disabled={busy}
+                            disabled={renderBusy}
                             title="Extract vocals and instrumental from this take"
                           >
                             {extractJob?.status === "queued" || extractJob?.status === "running" ? (
@@ -1209,17 +1325,6 @@ function RenderBoard({
                         >
                           <div>
                             <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                              Original (before extraction)
-                            </span>
-                            <audio
-                              controls
-                              preload="metadata"
-                              src={api.fileUrl(project.id, originalTake.file)}
-                              style={{ width: "100%" }}
-                            />
-                          </div>
-                          <div>
-                            <span style={{ fontSize: 12, color: "var(--muted)" }}>
                               Extracted voice
                             </span>
                             <audio
@@ -1230,8 +1335,9 @@ function RenderBoard({
                             />
                           </div>
                         </div>
-                      ) : take ? (
+                      ) : !newMode[stem.id] && take ? (
                         <audio
+                          key={take.id}
                           controls
                           preload="metadata"
                           src={api.fileUrl(project.id, take.file)}
@@ -1239,28 +1345,36 @@ function RenderBoard({
                         />
                       ) : null}
 
-                      <div className="render-actions">
-                        {readyForStem ? (
-                          <span className="badge">
-                            {selectedEngine === "suno"
-                              ? "preset voice"
-                              : selectedEngine === "chatterbox"
-                                ? "optional sample"
-                                : "ref ready"}
-                          </span>
-                        ) : (
-                          <span className="render-missing">no reference voice</span>
-                        )}
-                        <button
-                          type="button"
-                          className="button button-primary button-sm"
-                          onClick={() => onRender(stem)}
-                          disabled={!readyForStem || busy}
-                        >
-                          {busy ? <span className="spinner" /> : <Waveform size={14} weight="bold" />}
-                          {busy ? "Rendering…" : take ? "Re-render" : "Render"}
-                        </button>
-                      </div>
+                      {(newMode[stem.id] || stem.takes.length === 0) ? (
+                        <div className="render-actions">
+                          {readyForStem ? (
+                            <span className="badge">
+                              {selectedEngine === "suno"
+                                ? "preset voice"
+                                : selectedEngine === "chatterbox"
+                                  ? "optional sample"
+                                  : "ref ready"}
+                            </span>
+                          ) : (
+                            <span className="render-missing">no reference voice</span>
+                          )}
+                          <button
+                            type="button"
+                            className="button button-primary button-sm"
+                            onClick={() => onRender(stem)}
+                            disabled={!readyForStem || renderBusy}
+                          >
+                            {busy ? <span className="spinner" /> : <Waveform size={14} weight="bold" />}
+                            {busy
+                              ? rendering
+                                ? "Generating…"
+                                : aligning
+                                  ? "Aligning…"
+                                  : "Generating…"
+                              : "Generate"}
+                          </button>
+                        </div>
+                      ) : null}
                     </article>
                   );
                 })}
@@ -2168,6 +2282,7 @@ export function ProjectPage() {
       fields: {
         suno_title: string;
         suno_tags: string;
+        suno_negative_tags: string;
         suno_weirdness: number | null;
         suno_style_weight: number | null;
         suno_audio_weight: number | null;
@@ -2182,6 +2297,22 @@ export function ProjectPage() {
         setProject(updated);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Could not save Suno settings");
+      }
+    },
+    [project],
+  );
+
+  const saveStemText = useCallback(
+    async (stem: Stem, text: string) => {
+      if (!project) return;
+      const next = text.trim();
+      if (!next || next === stem.text) return;
+      setError("");
+      try {
+        const updated = await api.updateStem(project.id, stem.id, { text: next });
+        setProject(updated);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not save stem text");
       }
     },
     [project],
@@ -2739,6 +2870,7 @@ export function ProjectPage() {
             onRefVoiceChange={(stem, refVoiceId) => void changeRefVoice(stem, refVoiceId)}
             onSelectPersona={(speaker, persona) => void selectPersona(speaker, persona)}
             onSaveSunoFields={(stem, fields) => void saveSunoFields(stem, fields)}
+            onSaveStemText={(stem, text) => void saveStemText(stem, text)}
             onSuggestSunoStyle={suggestSunoStyle}
             onRefresh={() => void refreshProject()}
           />

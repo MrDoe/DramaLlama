@@ -1,11 +1,14 @@
 import type { Project } from "../types";
 
 export interface Cut {
+  id?: string;
   line_id: string;
   /** Which stem take this cut window lives in (None = selected take). */
   take_id?: string | null;
   start_s: number;
   end_s: number;
+  /** Freeform global timeline start. */
+  position_s?: number;
 }
 
 /** Mixer tail, mirrors `TAIL_S` in `src/drama_studio/mixer.py`. */
@@ -56,26 +59,46 @@ export function computeTimeline(
 
   for (const scene of project.script.scenes) {
     for (const line of scene.lines) {
-      if (prevScene !== null && line.scene !== prevScene) t += gap;
+      if (prevScene !== null && line.scene !== prevScene) {
+        // scene gap only in legacy mode; in freeform positions are explicit
+        if (![...cutByLine.values()].some((e) => e.cut.position_s != null)) {
+          t += gap;
+        }
+      }
       const entry = cutByLine.get(line.id);
       const localStart =
         entry && Number.isFinite(entry.cut.start_s) ? Math.max(0, entry.cut.start_s) : 0;
       const localEnd =
         entry && Number.isFinite(entry.cut.end_s) ? Math.max(0, entry.cut.end_s) : 0;
       const duration = entry && localEnd > localStart ? localEnd - localStart : 0;
+      const freeform =
+        entry != null && entry.cut.position_s != null;
+      const start = freeform
+        ? Math.max(0, entry!.cut.position_s as number)
+        : t;
       slots.set(line.id, {
         lineId: line.id,
         stemId: entry?.stemId ?? null,
         takeId: entry?.cut.take_id ?? null,
-        start: t,
-        end: t + duration,
+        start,
+        end: start + duration,
         localStart,
         localEnd,
       });
-      t += duration + pause;
+      if (freeform) {
+        t = Math.max(t, start + duration + pause);
+      } else {
+        t += duration + pause;
+      }
       prevScene = line.scene;
     }
   }
 
-  return { slots, total: t + TAIL_S };
+  // Total: max end + tail, but at least legacy tail.
+  let maxEnd = 0;
+  for (const slot of slots.values()) {
+    if (slot.end > maxEnd) maxEnd = slot.end;
+  }
+  const total = Math.max(maxEnd, t) + TAIL_S;
+  return { slots, total };
 }

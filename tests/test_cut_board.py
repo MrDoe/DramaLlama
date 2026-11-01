@@ -103,16 +103,15 @@ def test_alignment_rejects_unknown_line_and_duplicates(tmp_path):
         },
     )
     assert bad_owner.status_code == 400
-    dup = client.patch(
+    bad_range = client.patch(
         url,
         json={
             "cuts": [
-                {"line_id": line_a, "take_id": "take-a", "start_s": 0.0, "end_s": 0.2},
-                {"line_id": line_a, "take_id": "take-a", "start_s": 0.2, "end_s": 0.4},
+                {"line_id": line_a, "take_id": "take-a", "start_s": 0.0, "end_s": 99.0}
             ]
         },
     )
-    assert dup.status_code == 400
+    assert bad_range.status_code == 400
 
 
 def test_render_rejects_per_stem_engine(tmp_path):

@@ -131,11 +131,14 @@ class StemUpdate(BaseModel):
     engine: str | None = None
     cfg_scale: float | None = None
     seed: int | None = None
+    # Editable source text (TTS input) for this stem.
+    text: str | None = None
     # Manual lyric sheet edit (empty string clears back to the build default).
     suno_lyrics: str | None = None
     # Per-stem Suno title/tags (empty string clears back to engine defaults).
     suno_title: str | None = None
     suno_tags: str | None = None
+    suno_negative_tags: str | None = None
     # Per-stem Suno params (empty/None clears back to defaults).
     suno_weirdness: float | None = Field(default=None, ge=0, le=100)
     suno_style_weight: float | None = Field(default=None, ge=0, le=100)
@@ -187,11 +190,15 @@ class TakeSelect(BaseModel):
 
 
 class CutUpdate(BaseModel):
+    # Segment id (optional; backend generates if missing).
+    id: str | None = None
     line_id: str
     # Which take this cut window belongs to. None = the selected take.
     take_id: str | None = None
     start_s: float = Field(ge=0)
     end_s: float = Field(gt=0)
+    # Freeform global timeline start. None => seed from cut durations.
+    position_s: float | None = None
 
 
 class AlignmentPatch(BaseModel):
@@ -924,15 +931,12 @@ def create_app(
         from .cuts import safe_filename, validate_cut
         from .models import AlignedLine, AlignmentResult
 
-        # Ownership + duplicate validation before touching any audio.
+        from .cuts import segment_filename
+
+        # Ownership validation before touching any audio. Multiple cuts per
+        # line (segments) are allowed; segment ids must be distinct.
         seen_ids: set[str] = set()
         for cut in body.cuts:
-            if cut.line_id in seen_ids:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"duplicate cut for {cut.line_id}",
-                )
-            seen_ids.add(cut.line_id)
             if cut.line_id not in stem.line_ids:
                 raise HTTPException(
                     status_code=400,
@@ -988,28 +992,38 @@ def create_app(
 
         out_dir = directory / "lines"
         out_dir.mkdir(parents=True, exist_ok=True)
+        # Rebuild the alignment's segment list from the submitted cuts so
+        # deleted segments don't linger.
+        new_lines: list[AlignedLine] = []
         for cut, take, sr, segment in staged:
-            write_mono(out_dir / f"{safe_filename(cut.line_id)}.wav", segment, sr)
-
-            entry = by_id.get(cut.line_id)
-            if entry is None:
-                entry = AlignedLine(
+            seg_id = (cut.id or "").strip() or f"{cut.line_id}"
+            # Ensure uniqueness within this batch.
+            existing_ids = {e.id for e in new_lines}
+            if seg_id in existing_ids:
+                i = 2
+                while f"{seg_id}__{i}" in existing_ids:
+                    i += 1
+                seg_id = f"{seg_id}__{i}"
+            fname = safe_filename(seg_id)
+            write_mono(out_dir / f"{fname}.wav", segment, sr)
+            pos = cut.position_s
+            if pos is None:
+                # Seed from cut durations cumulatively is done by caller;
+                # default 0 here.
+                pos = 0.0
+            new_lines.append(
+                AlignedLine(
+                    id=seg_id,
                     line_id=cut.line_id,
                     take_id=take.id,
                     start_s=round(cut.start_s, 3),
                     end_s=round(cut.end_s, 3),
+                    position_s=round(float(pos), 3),
                     confidence=1.0,
                     fallback=False,
                 )
-                alignment.lines.append(entry)
-                by_id[cut.line_id] = entry
-            else:
-                entry.take_id = take.id
-                entry.start_s = round(cut.start_s, 3)
-                entry.end_s = round(cut.end_s, 3)
-                entry.confidence = 1.0
-                entry.fallback = False
-
+            )
+        alignment.lines = new_lines
         alignment.aligner = "manual"
         project.alignments[stem_id] = alignment
         project.mix_stale = True
@@ -1119,27 +1133,30 @@ def create_app(
             alignment = project.alignments.get(stem_id)
             if alignment is None:
                 alignment = AlignmentResult(stem_id=stem_id, lines=[], aligner="manual")
-            by_id = {line.line_id: line for line in alignment.lines}
+            new_lines: list[AlignedLine] = []
             for cut, take, sr, segment in staged:
-                write_mono(out_dir / f"{safe_filename(cut.line_id)}.wav", segment, sr)
-                entry = by_id.get(cut.line_id)
-                if entry is None:
-                    entry = AlignedLine(
+                seg_id = (cut.id or "").strip() or f"{cut.line_id}"
+                existing_ids = {e.id for e in new_lines}
+                if seg_id in existing_ids:
+                    i = 2
+                    while f"{seg_id}__{i}" in existing_ids:
+                        i += 1
+                    seg_id = f"{seg_id}__{i}"
+                write_mono(out_dir / f"{safe_filename(seg_id)}.wav", segment, sr)
+                pos = cut.position_s if cut.position_s is not None else 0.0
+                new_lines.append(
+                    AlignedLine(
+                        id=seg_id,
                         line_id=cut.line_id,
                         take_id=take.id,
                         start_s=round(cut.start_s, 3),
                         end_s=round(cut.end_s, 3),
+                        position_s=round(float(pos), 3),
                         confidence=1.0,
                         fallback=False,
                     )
-                    alignment.lines.append(entry)
-                    by_id[cut.line_id] = entry
-                else:
-                    entry.take_id = take.id
-                    entry.start_s = round(cut.start_s, 3)
-                    entry.end_s = round(cut.end_s, 3)
-                    entry.confidence = 1.0
-                    entry.fallback = False
+                )
+            alignment.lines = new_lines
             alignment.aligner = "manual"
             project.alignments[stem_id] = alignment
             alignments[stem_id] = alignment
@@ -1267,12 +1284,24 @@ def create_app(
             stem.cfg_scale = body.cfg_scale
         if body.seed is not None:
             stem.seed = body.seed
+        if body.text is not None:
+            new_text = body.text.strip()
+            if not new_text:
+                raise HTTPException(status_code=400, detail="stem text must not be blank")
+            if new_text != stem.text:
+                stem.text = new_text
+                # Source text changed: invalidate rendered takes and cuts.
+                stem.takes = []
+                project.alignments.pop(stem.id, None)
+                project.mix_stale = True
         if body.suno_lyrics is not None:
             stem.suno_lyrics = body.suno_lyrics.strip() or None
         if body.suno_title is not None:
             stem.suno_title = body.suno_title.strip() or None
         if body.suno_tags is not None:
             stem.suno_tags = body.suno_tags.strip() or None
+        if body.suno_negative_tags is not None:
+            stem.suno_negative_tags = body.suno_negative_tags.strip() or None
         if body.suno_weirdness is not None:
             stem.suno_weirdness = body.suno_weirdness
         if body.suno_style_weight is not None:
@@ -1294,6 +1323,32 @@ def create_app(
         project = store.save(project)
         return project.model_dump(mode="json")
 
+    @app.delete("/api/projects/{project_id}/stems/{stem_id}/takes/{take_id}")
+    def delete_take(project_id: str, stem_id: str, take_id: str) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        stem = next((item for item in project.stems if item.id == stem_id), None)
+        if stem is None:
+            raise HTTPException(status_code=404, detail="stem not found")
+        take = next((item for item in stem.takes if item.id == take_id), None)
+        if take is None:
+            raise HTTPException(status_code=404, detail="take not found")
+        was_selected = take.selected
+        stem.takes = [item for item in stem.takes if item.id != take_id]
+        if was_selected and stem.takes:
+            stem.takes[0].selected = True
+        # Also drop alignment if it references this take
+        alignment = project.alignments.get(stem_id)
+        if alignment is not None:
+            alignment.lines = [
+                line for line in alignment.lines if line.take_id != take_id
+            ]
+            if not alignment.lines:
+                project.alignments.pop(stem_id, None)
+            else:
+                project.alignments[stem_id] = alignment
+        project = store.save(project)
+        return project.model_dump(mode="json")
+
     @app.patch("/api/projects/{project_id}/stems/{stem_id}/take")
     def select_take(project_id: str, stem_id: str, body: TakeSelect) -> dict[str, Any]:
         project = project_or_404(project_id)
@@ -1311,14 +1366,9 @@ def create_app(
         for take in stem.takes:
             take.selected = take.id == body.take_id
 
-        # Realigning replaces the whole cut sheet, so only do it when that
-        # cannot discard per-clip take choices or manual trims.
-        safe_realign = not (alignment and alignment.lines) or (
-            previous is not None
-            and alignment is not None
-            and alignment.aligner != "manual"
-            and all(line.take_id == previous.id for line in alignment.lines)
-        )
+        # Don't re-align when switching takes: only align once per take and
+        # store it. Realign only when there is no alignment yet for this stem.
+        safe_realign = alignment is None or not alignment.lines
         project = store.save(project)
         job = (
             queue.enqueue(
@@ -1370,7 +1420,7 @@ def create_app(
             raise HTTPException(status_code=502, detail=str(exc))
 
     @app.get("/api/suno/library")
-    def suno_library(limit: int = Query(default=50, ge=1, le=50)) -> dict[str, Any]:
+    def suno_library(limit: int = Query(default=500, ge=1, le=500)) -> dict[str, Any]:
         """Newest own Suno library clips for the import-from-Suno picker."""
         try:
             return SunoBridge().list_library(limit)

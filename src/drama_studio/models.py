@@ -236,6 +236,7 @@ class Stem(BaseModel):
     # None means the engine default (dialogue <stem_id> / audio drama radio play).
     suno_title: str | None = None
     suno_tags: str | None = None
+    suno_negative_tags: str | None = None
     # Per-stem Suno generation params (0-100 sliders, model, vocal gender).
     # None means the engine/character default.
     suno_weirdness: float | None = Field(default=None, ge=0, le=100)
@@ -277,6 +278,7 @@ class StemRenderRequest(BaseModel):
     # Per-stem song title / style tags. None falls back to the engine default.
     suno_title: str | None = None
     suno_tags: str | None = None
+    suno_negative_tags: str | None = None
     # Per-stem generation params (None = engine/character default).
     suno_weirdness: float | None = None
     suno_style_weight: float | None = None
@@ -299,12 +301,19 @@ class StemRenderResult(BaseModel):
 
 
 class AlignedLine(BaseModel):
+    # Unique segment id (also the line-clip filename base). Empty/None is
+    # normalised to a derived id on load/save so legacy files keep working.
+    id: str = ""
     line_id: str
     # Which stem take this cut window lives in. None means "the stem's
     # selected take" for projects saved before multi-track cuts existed.
     take_id: str | None = None
+    # Local cut window inside the take.
     start_s: float
     end_s: float
+    # Freeform global timeline start. None => derive from script order
+    # (legacy); normalised to a concrete value on load.
+    position_s: float | None = None
     confidence: float | None = None
     fallback: bool = False
 

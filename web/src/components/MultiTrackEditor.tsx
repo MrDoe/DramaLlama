@@ -94,10 +94,12 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
       const al = project.alignments[stem.id];
       m[stem.id] = al
         ? al.lines.map((l) => ({
+            id: l.id,
             line_id: l.line_id,
             take_id: l.take_id ?? null,
             start_s: l.start_s,
             end_s: l.end_s,
+            position_s: l.position_s ?? undefined,
           }))
         : stem.line_ids.map((id) => ({
             line_id: id,
@@ -117,6 +119,13 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [selected, setSelected] = useState<{ stemId: string; lineId: string } | null>(null);
+  const [selection, setSelection] = useState<{
+    stemId: string;
+    lineId: string;
+    segId: string;
+    start: number;
+    end: number;
+  } | null>(null);
   const [muted, setMuted] = useState<Set<string>>(new Set());
   const [solo, setSolo] = useState<Set<string>>(new Set());
   const [volumes, setVolumes] = useState<Record<string, number>>({});
@@ -129,6 +138,14 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
   const headRefs = useRef(new Map<string, HTMLDivElement>());
   const loadedUrl = useRef<Record<string, string>>({});
   const dragRef = useRef<DragState | null>(null);
+  const selectionRef = useRef<{
+    stemId: string;
+    lineId: string;
+    segId: string;
+    anchorGlobal: number;
+    clipStart: number;
+    clipEnd: number;
+  } | null>(null);
   const auditionRef = useRef<{ stemId: string; lineId: string; endGlobal: number } | null>(null);
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -643,6 +660,21 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
           ctx.strokeStyle = "rgba(251, 191, 36, 0.9)";
           ctx.strokeRect(x0 + 0.5, 0.5, wpx, h - 1);
         }
+        // In-clip selection highlight.
+        if (
+          selection &&
+          selection.stemId === stemId &&
+          selection.lineId === cut.line_id
+        ) {
+          const sx0 = toX(Math.max(slot.start, selection.start));
+          const sx1 = toX(Math.min(slot.end, selection.end));
+          if (sx1 > sx0) {
+            ctx.fillStyle = "rgba(251, 191, 36, 0.35)";
+            ctx.fillRect(sx0, 0, sx1 - sx0, h);
+            ctx.strokeStyle = "rgba(251, 191, 36, 0.9)";
+            ctx.strokeRect(sx0 + 0.5, 0.5, sx1 - sx0 - 1, h - 1);
+          }
+        }
         const takeNo = stem
           ? stem.takes.findIndex((item) => item.id === take.id) + 1
           : 0;
@@ -678,6 +710,7 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
       loaded,
       pending,
       selected,
+      selection,
       slots,
       trackH,
       lineNo,
@@ -836,20 +869,32 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
     const cut = idx >= 0 ? cuts[idx] : null;
     const stem = stemById.get(stemId) ?? null;
     const dur = takeDurationOf(takeByIdFor(stem, cut?.take_id));
-    if (region && cut && dur > 0) {
-      // Body drag: slip the cut window inside the take; the line keeps its
-      // source-script slot on the shared timeline.
-      const slot = slots.get(region);
-      if (!slot) return;
-      dragRef.current = {
+    const slot = region ? slots.get(region) : null;
+    if (region && cut && dur > 0 && slot) {
+      if (e.altKey) {
+        // Alt-drag: slip the cut window inside the take (old behavior).
+        dragRef.current = {
+          stemId,
+          idx,
+          mode: "move",
+          anchorGlobal: slot.start,
+          grabLocal: cut.start_s + (globalT - slot.start),
+          origStart: cut.start_s,
+          origEnd: cut.end_s,
+        };
+        setSelected({ stemId, lineId: region });
+        return;
+      }
+      // Plain LMB drag: select a sub-range inside the clip.
+      selectionRef.current = {
         stemId,
-        idx,
-        mode: "move",
-        anchorGlobal: slot.start,
-        grabLocal: cut.start_s + (globalT - slot.start),
-        origStart: cut.start_s,
-        origEnd: cut.end_s,
+        lineId: region,
+        segId: cut.id ?? cut.line_id,
+        anchorGlobal: globalT,
+        clipStart: slot.start,
+        clipEnd: slot.end,
       };
+      setSelection({ stemId, lineId: region, segId: cut.id ?? cut.line_id, start: globalT, end: globalT });
       setSelected({ stemId, lineId: region });
       return;
     }
@@ -860,6 +905,15 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
 
   const onTrackMouseMove = (e: React.MouseEvent, stemId: string) => {
     const canvas = e.currentTarget as HTMLCanvasElement;
+    const sel = selectionRef.current;
+    if (sel && sel.stemId === stemId) {
+      const g = clamp(sel.clipStart, sel.clipEnd, toGlobal(canvas, e.clientX));
+      const s = Math.min(sel.anchorGlobal, g);
+      const en = Math.max(sel.anchorGlobal, g);
+      setSelection({ stemId, lineId: sel.lineId, segId: sel.segId, start: s, end: en });
+      canvas.style.cursor = "text";
+      return;
+    }
     const drag = dragRef.current;
     if (!drag || drag.stemId !== stemId) {
       if (!drag) {
@@ -883,19 +937,15 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
     const dur = takeDurationOf(takeByIdFor(stem, cut.take_id));
     if (dur <= 0) return;
     if (drag.mode === "trim-start") {
-      const prevEnd = drag.idx > 0 ? cuts[drag.idx - 1].end_s : 0;
-      cut.start_s = round2(clamp(prevEnd, cut.end_s - 0.05, local));
+      cut.start_s = round2(clamp(0, cut.end_s - 0.05, local));
       canvas.style.cursor = "ew-resize";
     } else if (drag.mode === "trim-end") {
-      const nextStart = drag.idx < cuts.length - 1 ? cuts[drag.idx + 1].start_s : dur;
-      cut.end_s = round2(clamp(cut.start_s + 0.05, nextStart, local));
+      cut.end_s = round2(clamp(cut.start_s + 0.05, dur, local));
       canvas.style.cursor = "ew-resize";
     } else {
-      const prevEnd = drag.idx > 0 ? cuts[drag.idx - 1].end_s : 0;
-      const nextStart = drag.idx < cuts.length - 1 ? cuts[drag.idx + 1].start_s : dur;
       const len = drag.origEnd - drag.origStart;
-      const shiftMin = Math.max(-drag.origStart, prevEnd - drag.origStart);
-      const shiftMax = Math.min(dur - drag.origEnd, nextStart - drag.origEnd);
+      const shiftMin = -drag.origStart;
+      const shiftMax = dur - drag.origEnd;
       const shift = clamp(shiftMin, shiftMax, local - drag.grabLocal);
       cut.start_s = round2(drag.origStart + shift);
       cut.end_s = round2(drag.origStart + shift + len);
@@ -905,6 +955,13 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
   };
 
   const onTrackMouseUp = () => {
+    if (selectionRef.current) {
+      const cur = selection;
+      if (!cur || Math.abs(cur.end - cur.start) < 0.05) {
+        setSelection(null);
+      }
+      selectionRef.current = null;
+    }
     dragRef.current = null;
   };
 
@@ -914,9 +971,75 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
   };
 
   const onCardKeyDown = (e: React.KeyboardEvent) => {
-    if (e.code !== "Space" && e.key !== " ") return;
     const target = e.target as HTMLElement | null;
     if (target?.closest("input, select, textarea, button, a, [contenteditable='true']")) return;
+    if (e.key === "Backspace" && selection) {
+      e.preventDefault();
+      // Delete selected sub-range: split clip into two adjacent segments.
+      const { stemId, lineId, segId, start, end } = selection;
+      const cuts = (pending[stemId] ?? []).map((c) => ({ ...c }));
+      const idx = cuts.findIndex((c) => (c.id ?? c.line_id) === segId && c.line_id === lineId);
+      if (idx < 0) {
+        setSelection(null);
+        return;
+      }
+      const cut = cuts[idx];
+      const slot = slots.get(lineId);
+      if (!slot || slot.end <= slot.start) {
+        setSelection(null);
+        return;
+      }
+      const dur = slot.end - slot.start;
+      const len = cut.end_s - cut.start_s;
+      if (len <= 0 || dur <= 0) {
+        setSelection(null);
+        return;
+      }
+      // Map global selection to local take times.
+      const localSelStart = cut.start_s + ((start - slot.start) / dur) * len;
+      const localSelEnd = cut.start_s + ((end - slot.start) / dur) * len;
+      const ls = Math.max(cut.start_s, Math.min(cut.end_s, localSelStart));
+      const le = Math.max(cut.start_s, Math.min(cut.end_s, localSelEnd));
+      if (le - ls < 0.01) {
+        setSelection(null);
+        return;
+      }
+      const newCuts: Cut[] = [];
+      // segment before selection
+      if (ls - cut.start_s >= 0.05) {
+        newCuts.push({
+          ...cut,
+          id: cut.id,
+          start_s: round2(cut.start_s),
+          end_s: round2(ls),
+          position_s: cut.position_s,
+        });
+      }
+      // segment after selection: position adjacent to previous (no gap)
+      if (cut.end_s - le >= 0.05) {
+        const seg: Cut = {
+          ...cut,
+          id: `${cut.id ?? cut.line_id}__${Date.now()}`,
+          line_id: cut.line_id,
+          take_id: cut.take_id,
+          start_s: round2(le),
+          end_s: round2(cut.end_s),
+          position_s:
+            (cut.position_s ?? slot.start) + (ls - cut.start_s),
+        };
+        newCuts.push(seg);
+      }
+      // Replace the original segment with the new ones.
+      const replaced = [
+        ...cuts.slice(0, idx),
+        ...newCuts,
+        ...cuts.slice(idx + 1),
+      ];
+      commitCuts(stemId, replaced);
+      setSelection(null);
+      return;
+    }
+    if (e.code !== "Space" && e.key !== " ") return;
     e.preventDefault();
     void togglePlay();
   };
