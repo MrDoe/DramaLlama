@@ -1073,7 +1073,7 @@ def run_wizard(argv: list[str] | None = None) -> int:
         args.allow_docker_install = True
     try:
         app = QApplication.instance() or QApplication(sys.argv[:1])
-    except Exception as exc:  # noqa: BLE001 - surface any Qt platform failure
+    except Exception as exc:  # surface any Qt platform failure
         print(
             "Could not initialise the Qt platform plugin: " + str(exc) + "\n"
             "On Debian/Ubuntu install the missing XCB helpers with:\n"
