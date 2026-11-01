@@ -53,13 +53,27 @@ Engines are chosen per project, so there is no per-stem switching, and every cut
 ### Install a release
 
 Drama Llama ships a native, per-user installer that needs no administrator
-rights and no Python, Node or ffmpeg on the machine. Download the asset for
-your platform from the releases page, verify its `.sha256`, and run it:
+rights and no Python, Node or ffmpeg on the machine. Pick the asset for your
+platform from the [releases page](https://github.com/MrDoe/DramaLlama/releases),
+verify its `.sha256`, and run it:
 
 | Platform | Asset |
 |---|---|
 | Windows 10/11 x64 | `DramaLlama-Setup-<version>.exe` |
 | Linux x86_64 | `DramaLlama-<version>-x86_64.AppImage` (plus a `.tar.gz` fallback) |
+
+```bash
+# Linux
+chmod +x DramaLlama-<version>-x86_64.AppImage
+sha256sum -c DramaLlama-<version>-x86_64.AppImage.sha256
+./DramaLlama-<version>-x86_64.AppImage
+```
+
+```powershell
+# Windows (PowerShell)
+Get-FileHash .\DramaLlama-Setup-<version>.exe -Algorithm SHA256
+.\DramaLlama-Setup-<version>.exe
+```
 
 The wizard detects the hardware, lets you pick optional engines (Breeze
 English, Breeze German, Chatterbox), and downloads only what you select. A
