@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -28,7 +29,9 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
     QWizard,
     QWizardPage,
 )
@@ -331,7 +334,28 @@ class ComponentsPage(QWizardPage):
         super().__init__()
         self.wizard_ref = wizard
         self.setTitle("Components")
-        layout = QVBoxLayout(self)
+        # The option rows are taller than the wizard's page area at small
+        # window sizes and large fonts. Without the scroll area Qt would
+        # squeeze the group boxes below their minimum height, drawing the
+        # checkboxes on top of the description labels.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # The wizard paints its page white via its style, which the scroll
+        # area's Base-coloured viewport would cover. Make it transparent so
+        # the page background (whatever the theme uses) shows through.
+        viewport = scroll.viewport()
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        viewport.setStyleSheet("background: transparent;")
+        content = QWidget()
+        content.setAutoFillBackground(False)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(9, 9, 9, 9)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
         layout.addLayout(
             _heading(
                 "Choose the optional voice engines",
@@ -346,7 +370,6 @@ class ComponentsPage(QWizardPage):
             "alignment, ffmpeg and the Suno bridge."
         )
         core_label.setWordWrap(True)
-        core_label.setMinimumHeight(60)
         core_layout.addWidget(core_label)
         layout.addWidget(self.core_box)
 
@@ -390,7 +413,6 @@ class ComponentsPage(QWizardPage):
         inner = QVBoxLayout(box)
         label = QLabel(description)
         label.setWordWrap(True)
-        label.setMinimumHeight(72)
         inner.addWidget(label)
         checkbox = QCheckBox("Install this component")
         inner.addWidget(checkbox)

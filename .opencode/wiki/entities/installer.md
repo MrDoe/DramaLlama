@@ -165,6 +165,19 @@ passed all four jobs.
   `test_install_whisper_downloads_missing_files` cover the no-download and
   download paths offline. When touching this module, always exercise the
   all-files-present path: it is the one a re-install hits.
+- **Components page must scroll, not squeeze.** A `QWizardPage` gets only
+  ~505 px of height at the wizard's 760×600 minimum, while the Components
+  content (heading + core box + three option boxes) wants ~650 px. Qt does
+  not clip a `QBoxLayout` that is squeezed below its minimum: it lays the
+  children out sequentially past the container, so the
+  `Install this component` checkboxes were drawn on top of the description
+  labels. The page now wraps its content in a frameless `QScrollArea`
+  (`setWidgetResizable(True)`, transparent viewport so the wizard's white page
+  background shows through) and the labels no longer set a fixed
+  `setMinimumHeight`. Verify layout changes with an offscreen render
+  (`QT_QPA_PLATFORM=offscreen`, `Wizard.setCurrentId(PAGE_COMPONENTS)`) and
+  compare checkbox/label rectangles; a large-font run (point size +4) must
+  show a scrollbar, not collisions.
 - **Installs resume in place.** `<prefix>/install-state.json` records each
   component's `status`/`message`. Re-running `python -m installer --headless
   --cpu` reloads that state and replays the steps, skipping any file whose

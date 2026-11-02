@@ -321,3 +321,13 @@ Installers workflow rebuilt both targets from the fix commit. All four jobs
 passed and the `release` job clobbered the six release assets (AppImage,
 Linux tarball, Windows setup plus checksums). The tag now matches
 `master`; [[entities/installer]] carries the underlying gotcha.
+
+## [2026-11-02] fix | Components page checkbox/description overlap
+
+The Components page needed ~650 px inside a ~505 px wizard page, so Qt
+overflowed the QGroupBox layouts and drew each "Install this component"
+checkbox over the description label (the labels' fixed
+`setMinimumHeight(60/72)` made it worse). Removed those fixed heights and
+wrapped the page in a frameless, transparent QScrollArea; verified offscreen
+at 760×600, 900×700 and with a +4 pt font (scrollbar appears, no collisions).
+Recorded in [[entities/installer]].
