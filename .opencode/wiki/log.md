@@ -331,3 +331,10 @@ checkbox over the description label (the labels' fixed
 wrapped the page in a frameless, transparent QScrollArea; verified offscreen
 at 760×600, 900×700 and with a +4 pt font (scrollbar appears, no collisions).
 Recorded in [[entities/installer]].
+
+## [2026-11-02] release | v0.3.0 assets updated with the Components fix
+
+Moved `v0.3.0` to `f769d14` (Components page scroll area) and force-pushed;
+run 41410088383 rebuilt all targets with all four jobs green. Verified the
+published Linux tarball: checksum OK, `_internal/payload/installer/gui/app.py`
+contains the QScrollArea wiring and no `setMinimumHeight` calls.
