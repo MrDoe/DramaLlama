@@ -302,3 +302,14 @@ Published https://github.com/MrDoe/DramaLlama/releases/tag/v0.3.0 with the
 Linux AppImage, Linux tarball, Windows installer, and SHA-256 checksums.
 Fixed the AppImage build (desktop file + icon at AppDir root) and re-ran the
 workflow after moving the tag.
+
+## [2026-11-02] fix | Installer 0.3.0 crash at the Whisper step
+
+Diagnosed the reported `AttributeError: 'list' object has no attribute
+'items'` from a CPU install at step [4/8]: `installer/core/whisper.py`
+converted the pinned file map to a list for the download loop, then iterated
+it as a dict in the final completeness check — after the 3 GB snapshot had
+already downloaded and verified. Fixed both loops to iterate the same
+`(name, item)` pairs; added offline regression tests for the complete-cache
+and download paths. Confirmed against the real cache (`downloaded=False`,
+3.2 s). Added the gotcha + resume notes to [[entities/installer]].

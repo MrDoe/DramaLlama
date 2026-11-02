@@ -11,7 +11,7 @@ sourceRefs:
   - scripts/build_installer.py
   - .github/workflows/installer.yml
   - INSTALL.md
-lastReviewed: 2026-11-01
+lastReviewed: 2026-11-02
 ---
 
 # Installer
@@ -151,6 +151,30 @@ build initially failed because `appimagetool` requires a `.desktop` file and
 icon at the AppDir root; `build-appimage.sh` now writes both there (and keeps
 copies under `usr/share/...`). Moving the tag re-ran the workflow, which
 passed all four jobs.
+## Gotchas
+
+- **Whisper step: download first, verify second.** `install_whisper()` walks
+  the pinned file map once to download missing files and then re-walks it to
+  prove the cache is complete. In v0.3.0 the map was converted to a list for
+  the download loop (`files = list(meta["files"].items())`) but the
+  completeness check still called `files.items()`, so **every** install died
+  at step 4 with `AttributeError: 'list' object has no attribute 'items'` —
+  even when the 3 GB cache was already complete, because the crash is after
+  the downloads. Both loops now iterate the same `(name, item)` pair list;
+  `test_install_whisper_verifies_existing_files` and
+  `test_install_whisper_downloads_missing_files` cover the no-download and
+  download paths offline. When touching this module, always exercise the
+  all-files-present path: it is the one a re-install hits.
+- **Installs resume in place.** `<prefix>/install-state.json` records each
+  component's `status`/`message`. Re-running `python -m installer --headless
+  --cpu` reloads that state and replays the steps, skipping any file whose
+  size/SHA-256 already verifies — so a failure late in a step does not mean
+  re-downloading earlier payloads. (`--repair` is accepted by the CLI but
+  currently not read by `run_install`; the replay is unconditional.)
+  `payload_root()` resolves to the repo checkout in dev, so a repaired install
+  also re-stages the fixed `installer/` tree into `<prefix>/app`; a packaged
+  AppImage/PyInstaller build only picks up the fix after a rebuild.
+
 ## Tests
 
 `tests/test_installer.py` and `tests/test_windows_paths.py` cover the core
