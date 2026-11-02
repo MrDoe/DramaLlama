@@ -70,7 +70,7 @@ def install_whisper(
 
     missing = [
         name
-        for name, item in files.items()
+        for name, item in files
         if not verify_file(
             snapshot / name,
             size=int(item.get("size", 0)) or None,

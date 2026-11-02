@@ -249,6 +249,69 @@ def test_whisper_cache_matches_the_vendored_aligner(tmp_path: Path) -> None:
     assert snapshot.name == pins["whisper"]["revision"]
 
 
+def _whisper_pins(files: dict[str, bytes]) -> dict:
+    return {
+        "whisper": {
+            "repo": "Systran/faster-whisper-large-v3",
+            "revision": "deadbeefcafe",
+            "cache_name": "models--Systran--faster-whisper-large-v3",
+            "size": sum(len(payload) for payload in files.values()),
+            "files": {name: {"size": len(payload)} for name, payload in files.items()},
+        }
+    }
+
+
+def test_install_whisper_verifies_existing_files(tmp_path: Path, monkeypatch) -> None:
+    """Re-verifying a complete cache must not crash (regression: files is a list)."""
+    from installer.core import whisper
+
+    payloads = {"config.json": b'{"model": "large-v3"}', "vocabulary.json": b"[]"}
+    pins = _whisper_pins(payloads)
+    home = tmp_path / "home"
+    snapshot = whisper.whisper_snapshot(pins, home)
+    snapshot.mkdir(parents=True)
+    for name, payload in payloads.items():
+        (snapshot / name).write_bytes(payload)
+
+    def no_download(*args, **kwargs):
+        raise AssertionError("existing files must not be downloaded again")
+
+    monkeypatch.setattr(whisper, "download", no_download)
+    path, downloaded = whisper.install_whisper(
+        InstallPaths(prefix=tmp_path / "prefix"), pins, Progress(), home=home
+    )
+
+    assert path == snapshot
+    assert downloaded is False
+    refs = whisper_cache_root(home) / pins["whisper"]["cache_name"] / "refs" / "main"
+    assert refs.read_text(encoding="utf-8").strip() == pins["whisper"]["revision"]
+
+
+def test_install_whisper_downloads_missing_files(tmp_path: Path, monkeypatch) -> None:
+    from installer.core import whisper
+
+    payloads = {"config.json": b'{"model": "large-v3"}'}
+    pins = _whisper_pins(payloads)
+    home = tmp_path / "home"
+    requests: list[str] = []
+
+    def fake_download(url, target, **kwargs):
+        requests.append(url)
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        Path(target).write_bytes(payloads[Path(target).name])
+
+    monkeypatch.setattr(whisper, "download", fake_download)
+    path, downloaded = whisper.install_whisper(
+        InstallPaths(prefix=tmp_path / "prefix"), pins, Progress(), home=home
+    )
+
+    assert downloaded is True
+    assert path == whisper.whisper_snapshot(pins, home)
+    assert len(requests) == 1
+    assert requests[0].endswith("/config.json?download=true")
+    assert (path / "config.json").read_bytes() == payloads["config.json"]
+
+
 def test_resolve_prefix_follows_location_pointer(tmp_path: Path, monkeypatch) -> None:
     base = tmp_path / "default"
     custom = tmp_path / "custom"
