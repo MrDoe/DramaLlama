@@ -338,3 +338,14 @@ Moved `v0.3.0` to `f769d14` (Components page scroll area) and force-pushed;
 run 41410088383 rebuilt all targets with all four jobs green. Verified the
 published Linux tarball: checksum OK, `_internal/payload/installer/gui/app.py`
 contains the QScrollArea wiring and no `setMinimumHeight` calls.
+
+## [2026-11-02] test | Released AppImage installed CPU-only
+
+Downloaded `DramaLlama-0.3.0-x86_64.AppImage` from the release, verified its
+SHA-256, and ran a headless CPU install into `/tmp/opencode/dl-test`: all
+8 steps passed, `Verification passed`, `completed: true`, `device: cpu`,
+torch `2.15.0+cpu` with `cuda False`, 4.0 GB on disk (Whisper reused the
+shared `~/.cache/huggingface` snapshot). Drove the packaged wizard under
+Xvfb to the Components page: the scroll area is present, the four option
+boxes render, and the checkbox no longer collides with the description.
+The scratch install was left in place for inspection.
