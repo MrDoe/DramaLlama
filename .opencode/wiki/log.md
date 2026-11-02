@@ -313,3 +313,11 @@ already downloaded and verified. Fixed both loops to iterate the same
 `(name, item)` pairs; added offline regression tests for the complete-cache
 and download paths. Confirmed against the real cache (`downloaded=False`,
 3.2 s). Added the gotcha + resume notes to [[entities/installer]].
+
+## [2026-11-02] release | v0.3.0 re-published with the installer fix
+
+Moved the annotated `v0.3.0` tag to `04e50be` and force-pushed it so the
+Installers workflow rebuilt both targets from the fix commit. All four jobs
+passed and the `release` job clobbered the six release assets (AppImage,
+Linux tarball, Windows setup plus checksums). The tag now matches
+`master`; [[entities/installer]] carries the underlying gotcha.
