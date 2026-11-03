@@ -5,14 +5,23 @@ import {
   FloppyDisk,
   MagnifyingGlassMinus,
   MagnifyingGlassPlus,
+  MusicNotes,
   Pause,
   Play,
   Scissors,
+  SpeakerHigh,
+  Trash,
 } from "@phosphor-icons/react";
 import { api } from "../api";
+import {
+  computeCueSpans,
+  cueLaneOf,
+  type CueLane,
+  type CueSpan,
+} from "../audio/cues";
 import { SyncEngine, type ScheduleSegment } from "../audio/syncEngine";
 import { computeTimeline, type Cut } from "../audio/timeline";
-import type { Project, Stem, Take } from "../types";
+import type { Cue, Project, Stem, Take } from "../types";
 import { formatDuration, speakerStyle } from "../utils";
 
 interface Props {
@@ -33,6 +42,8 @@ interface Props {
       { line_id: string; take_id?: string | null; start_s: number; end_s: number }[]
     >,
   ) => void | Promise<void>;
+  onSaveCues?: (cues: Cue[]) => void | Promise<void>;
+  onDeleteCue?: (cue: Cue) => void | Promise<void>;
   onRefresh: () => void;
 }
 
@@ -46,7 +57,40 @@ const COLORS = [
 /** Minimum waveform height; grows to match the track card on the left. */
 const TRACK_H = 120;
 const RULER_H = 26;
+const CUE_LANE_H = 64;
 const EDGE_PX = 10;
+
+const CUE_LANES: { id: CueLane; label: string; hint: string }[] = [
+  { id: "music", label: "Music", hint: "music cues" },
+  { id: "sfx", label: "SFX", hint: "beds and one-shots" },
+];
+
+const cueLaneKey = (lane: CueLane) => `cue:${lane}`;
+const cueBufferKey = (sfxId: string) => `sfx:${sfxId}`;
+
+function cueSegmentOf(
+  span: CueSpan,
+  sourceDuration: number,
+): ScheduleSegment | null {
+  if (sourceDuration <= 0) return null;
+  const head = Math.max(0, span.start - span.anchor);
+  const length = span.end - span.start;
+  if (length <= 0.005) return null;
+  const localEnd = span.loops
+    ? head + length
+    : Math.min(head + length, sourceDuration);
+  if (localEnd - head <= 0.005) return null;
+  return {
+    stemId: cueLaneKey(span.lane),
+    takeId: cueBufferKey(span.cue.sfx_id),
+    localStart: head,
+    localEnd,
+    start: span.start,
+    end: span.end,
+    gain: Math.pow(10, span.cue.gain_db / 20),
+    loop: span.loops,
+  };
+}
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
 const clamp = (lo: number, hi: number, v: number) => Math.max(lo, Math.min(hi, v));
@@ -63,7 +107,22 @@ interface DragState {
   origEnd: number;
 }
 
-export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: Props) {
+interface CueDragState {
+  cueId: string;
+  /** Global time under the cursor when the drag began. */
+  grabGlobal: number;
+  /** Cue offset before the drag. */
+  origOffset: number;
+}
+
+export function MultiTrackEditor({
+  project,
+  onSaveCuts,
+  onSaveAll,
+  onSaveCues,
+  onDeleteCue,
+  onRefresh,
+}: Props) {
   const allLines = useMemo(
     () => project.script.scenes.flatMap((s) => s.lines),
     [project],
@@ -112,6 +171,12 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
   }, [project]);
 
   const [pending, setPending] = useState<Record<string, Cut[]>>(savedCuts);
+  const [cues, setCues] = useState<Cue[]>(project.cues);
+  const [cueDirty, setCueDirty] = useState<Record<string, boolean>>({});
+  const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
+  const [cueAudio, setCueAudio] = useState<
+    Record<string, { duration: number; peaks: number[]; missing?: boolean }>
+  >({});
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
   const [loaded, setLoaded] = useState<Record<string, { duration: number; peaks: number[] }>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -131,13 +196,17 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
   const [volumes, setVolumes] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [savingAll, setSavingAll] = useState(false);
+  const [savingCues, setSavingCues] = useState(false);
+  const [confirmDeleteCueId, setConfirmDeleteCueId] = useState<string | null>(null);
   const [trackH, setTrackH] = useState(TRACK_H);
 
   const timelineRef = useRef<HTMLDivElement>(null);
   const canvasRefs = useRef(new Map<string, HTMLCanvasElement>());
   const headRefs = useRef(new Map<string, HTMLDivElement>());
   const loadedUrl = useRef<Record<string, string>>({});
+  const cueLoaded = useRef<Record<string, boolean>>({});
   const dragRef = useRef<DragState | null>(null);
+  const cueDragRef = useRef<CueDragState | null>(null);
   const selectionRef = useRef<{
     stemId: string;
     lineId: string;
@@ -193,13 +262,15 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
 
   // Warn on unload while edits are unsaved.
   useEffect(() => {
-    if (Object.values(dirty).every((value) => !value)) return;
+    const cutsDirty = Object.values(dirty).some(Boolean);
+    const cuesDirty = Object.values(cueDirty).some(Boolean);
+    if (!cutsDirty && !cuesDirty) return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [dirty]);
+  }, [dirty, cueDirty]);
 
   const takeDurationOf = useCallback(
     (take: Take | null) =>
@@ -218,6 +289,23 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
       return next;
     });
   }, [project, savedCuts, dirty]);
+
+  // Sync non-dirty cues from the server project; dirty rows keep the local
+  // edit until Save all (drag / inspector changes are staged).
+  useEffect(() => {
+    setCues((prev) => {
+      const localById = new Map(prev.map((cue) => [cue.id, cue]));
+      const remoteIds = new Set(project.cues.map((cue) => cue.id));
+      const merged = project.cues.map((cue) =>
+        cueDirty[cue.id] ? (localById.get(cue.id) ?? cue) : cue,
+      );
+      // Keep a dirty local cue the server has not seen yet (defensive).
+      for (const cue of prev) {
+        if (cueDirty[cue.id] && !remoteIds.has(cue.id)) merged.push(cue);
+      }
+      return merged;
+    });
+  }, [project.cues, cueDirty]);
 
   // Source-script layout: every line sits at its mixer-compatible slot.
   const timeline = useMemo(() => computeTimeline(project, pending), [project, pending]);
@@ -245,9 +333,38 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
     return segments;
   }, [project, pending, slots, takeByIdFor]);
 
+  const cueDurations = useMemo(() => {
+    const durations: Record<string, number> = {};
+    for (const [sfxId, info] of Object.entries(cueAudio)) {
+      durations[sfxId] = info.duration;
+    }
+    return durations;
+  }, [cueAudio]);
+
+  const cueSpans = useMemo(
+    () => computeCueSpans(project, cues, slots, total, cueDurations),
+    [project, cues, slots, total, cueDurations],
+  );
+
+  const cueSegments = useMemo<ScheduleSegment[]>(() => {
+    const segments: ScheduleSegment[] = [];
+    for (const span of cueSpans) {
+      const info = cueAudio[span.cue.sfx_id];
+      if (!info || info.missing) continue;
+      const segment = cueSegmentOf(span, info.duration);
+      if (segment) segments.push(segment);
+    }
+    return segments;
+  }, [cueSpans, cueAudio]);
+
+  const allSchedule = useMemo(
+    () => [...schedule, ...cueSegments],
+    [schedule, cueSegments],
+  );
+
   const audibleEnd = useMemo(
-    () => schedule.reduce((max, seg) => Math.max(max, seg.end), 0),
-    [schedule],
+    () => allSchedule.reduce((max, seg) => Math.max(max, seg.end), 0),
+    [allSchedule],
   );
 
   // Only decode takes the board actually draws: each stem's selected take
@@ -274,12 +391,21 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
     return needed;
   }, [project, pending, takeByIdFor]);
 
+  const neededCueSfx = useMemo(
+    () => Array.from(new Set(cues.map((cue) => cue.sfx_id))),
+    [cues],
+  );
+
   // Load + decode each needed take once per file.
   useEffect(() => {
     let cancelled = false;
-    // Evict decoded takes the board no longer draws (LRU in the engine caps
-    // memory; prune drops ids that left the needed set entirely).
-    engine.prune(neededTakes.map(({ take }) => take.id));
+    // Evict decoded buffers the board no longer draws (LRU in the engine caps
+    // memory; prune drops ids that left the needed set entirely). Cue sources
+    // share the same cache under `sfx:<id>`.
+    engine.prune([
+      ...neededTakes.map(({ take }) => take.id),
+      ...neededCueSfx.map(cueBufferKey),
+    ]);
     (async () => {
       for (const { stem, take } of neededTakes) {
         if (!take.file) continue;
@@ -303,7 +429,42 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
     return () => {
       cancelled = true;
     };
-  }, [engine, neededTakes, project.id]);
+  }, [engine, neededTakes, neededCueSfx, project.id]);
+
+  // Decode cue sources once; the waveform and cue length come from the buffer.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const sfxId of neededCueSfx) {
+        if (cueLoaded.current[sfxId] && engine.hasTrack(cueBufferKey(sfxId))) continue;
+        const cue = cues.find((item) => item.sfx_id === sfxId);
+        const laneKey = cueLaneKey(cueLaneOf(cue?.kind ?? "one_shot"));
+        try {
+          const info = await engine.loadTrack(
+            laneKey,
+            cueBufferKey(sfxId),
+            api.sfxAudioUrl(sfxId),
+          );
+          if (cancelled) return;
+          cueLoaded.current[sfxId] = true;
+          setCueAudio((prev) => ({
+            ...prev,
+            [sfxId]: { duration: info.duration, peaks: info.peaks },
+          }));
+        } catch {
+          if (cancelled) return;
+          cueLoaded.current[sfxId] = true;
+          setCueAudio((prev) => ({
+            ...prev,
+            [sfxId]: { duration: 0, peaks: [], missing: true },
+          }));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [engine, neededCueSfx, cues]);
 
   // Evenly split stems that have a take but no alignment yet.
   useEffect(() => {
@@ -386,13 +547,13 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
       const c = clamp(0, total, t);
       auditionRef.current = null;
       if (engine.playing) {
-        engine.seek(c, schedule);
+        engine.seek(c, allSchedule);
       } else {
         engine.setFrozen(c);
         setPlayhead(c);
       }
     },
-    [engine, total, schedule],
+    [engine, total, allSchedule],
   );
 
   const togglePlay = useCallback(async () => {
@@ -405,11 +566,11 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
       await engine.resume();
       const t =
         playheadRef.current >= Math.max(0, audibleEnd - 0.05) ? 0 : playheadRef.current;
-      engine.play(t, schedule);
+      engine.play(t, allSchedule);
       setPlaying(engine.playing);
       if (!engine.playing) setPlayhead(t);
     }
-  }, [engine, audibleEnd, schedule]);
+  }, [engine, audibleEnd, allSchedule]);
 
   // rAF loop: mirror transport clock, stop at end/audition boundary, follow view.
   useEffect(() => {
@@ -550,13 +711,20 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
   const drawOne = useCallback(
     (
       canvas: HTMLCanvasElement,
-      kind: { ruler: true } | { ruler: false; stemId: string; trackIdx: number },
+      kind:
+        | { ruler: true }
+        | { ruler: false; stemId: string; trackIdx: number }
+        | { ruler: false; cueLane: CueLane },
     ) => {
       const root = timelineRef.current;
       if (!root) return;
       const dpr = window.devicePixelRatio || 1;
       const w = Math.max(50, root.clientWidth - 196);
-      const h = kind.ruler ? RULER_H : trackH;
+      const h = kind.ruler
+        ? RULER_H
+        : "cueLane" in kind
+          ? CUE_LANE_H
+          : trackH;
       canvas.width = w * dpr;
       canvas.height = h * dpr;
       canvas.style.width = `${w}px`;
@@ -572,6 +740,16 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
       const end = v?.end ?? total;
       const span = Math.max(0.001, end - start);
       const toX = (t: number) => ((t - start) / span) * w;
+      const drawPlayhead = () => {
+        const px = toX(playheadRef.current);
+        if (px < 0 || px > w) return;
+        ctx.strokeStyle = "#fb7185";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(px) + 0.5, 0);
+        ctx.lineTo(Math.round(px) + 0.5, h);
+        ctx.stroke();
+      };
 
       // adaptive ticks
       const targetTicks = 8;
@@ -590,15 +768,118 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
       }
 
       if (kind.ruler) {
-        const px = toX(playheadRef.current);
-        if (px >= 0 && px <= w) {
-          ctx.strokeStyle = "#fb7185";
+        drawPlayhead();
+        return;
+      }
+
+      if ("cueLane" in kind) {
+        // Cue lanes: anchored clips, dragged horizontally to change offset.
+        const laneSpans = cueSpans.filter((item) => item.lane === kind.cueLane);
+        const mid = h / 2;
+        if (laneSpans.length === 0) {
+          ctx.fillStyle = "rgba(255,255,255,0.35)";
+          ctx.font = "12px sans-serif";
+          ctx.fillText(
+            kind.cueLane === "music"
+              ? "No music cues — add them in Sound."
+              : "No SFX cues — add beds or one-shots in Sound.",
+            Math.max(8, toX(start) + 8),
+            mid + 4,
+          );
+        }
+        for (const item of laneSpans) {
+          if (item.end < start || item.start > end) continue;
+          const info = cueAudio[item.cue.sfx_id];
+          const missing = Boolean(info?.missing);
+          const isSel = selectedCueId === item.cue.id;
+          const x0 = toX(item.start);
+          const x1 = toX(item.end);
+          const wpx = Math.max(2, x1 - x0);
+          ctx.fillStyle = missing
+            ? "rgba(248, 113, 113, 0.16)"
+            : item.lane === "music"
+              ? "rgba(168, 85, 247, 0.24)"
+              : "rgba(34, 211, 238, 0.16)";
+          ctx.fillRect(x0, 0, wpx, h);
+
+          if (info && info.peaks.length > 0 && item.sourceDuration > 0) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(x0, 0, wpx, h);
+            ctx.clip();
+            ctx.strokeStyle = isSel
+              ? "rgba(254, 243, 199, 0.9)"
+              : "rgba(226, 232, 240, 0.55)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            const source = item.sourceDuration;
+            const peaks = info.peaks;
+            const drawRep = (repStart: number, repOffset: number, repEnd: number) => {
+              const visStart = Math.max(repStart + repOffset, item.start, start);
+              const visEnd = Math.min(repEnd, item.end, end);
+              if (visEnd <= visStart) return;
+              const ls = visStart - repStart;
+              const le = visEnd - repStart;
+              const i0 = Math.max(0, Math.floor((ls / source) * peaks.length));
+              const i1 = Math.min(peaks.length, Math.ceil((le / source) * peaks.length));
+              for (let i = i0; i < i1; i++) {
+                const localT = ((i + 0.5) / peaks.length) * source;
+                const x = toX(repStart + localT);
+                if (x < x0 || x > x1) continue;
+                const amp = peaks[i] * (h * 0.34);
+                ctx.moveTo(x, mid - amp);
+                ctx.lineTo(x, mid + amp);
+              }
+            };
+            if (item.loops) {
+              const reps = Math.min(
+                2000,
+                Math.ceil((item.end - item.start) / source) + 1,
+              );
+              for (let k = 0; k < reps; k++) {
+                const repStart = item.start + k * source;
+                drawRep(repStart, 0, repStart + source);
+              }
+            } else {
+              drawRep(item.start, Math.max(0, item.start - item.anchor), item.end);
+            }
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          ctx.strokeStyle = missing
+            ? "rgba(248, 113, 113, 0.9)"
+            : isSel
+              ? "#fbbf24"
+              : "rgba(255,255,255,0.75)";
           ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.moveTo(Math.round(px) + 0.5, 0);
-          ctx.lineTo(Math.round(px) + 0.5, h);
+          ctx.moveTo(Math.round(x0) + 0.5, 0);
+          ctx.lineTo(Math.round(x0) + 0.5, h);
+          ctx.moveTo(Math.round(x1) + 0.5, 0);
+          ctx.lineTo(Math.round(x1) + 0.5, h);
           ctx.stroke();
+          if (isSel) {
+            ctx.strokeStyle = "rgba(251, 191, 36, 0.9)";
+            ctx.strokeRect(x0 + 0.5, 0.5, wpx, h - 1);
+          }
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x0, 0, wpx, h);
+          ctx.clip();
+          const label = `${item.cue.name}${item.loops ? " ↻" : ""}`;
+          ctx.font = isSel ? "600 12px sans-serif" : "12px sans-serif";
+          const tw = ctx.measureText(label).width;
+          const lx = Math.max(x0 + 4, 4);
+          const ly = 15;
+          ctx.fillStyle = isSel ? "rgba(251,191,36,0.9)" : "rgba(0,0,0,0.65)";
+          ctx.fillRect(lx - 3, ly - 12, tw + 6, 16);
+          ctx.fillStyle = missing ? "#fecaca" : isSel ? "#000" : "#fff";
+          ctx.fillText(missing ? `${label} · missing` : label, lx, ly);
+          ctx.restore();
         }
+        drawPlayhead();
         return;
       }
 
@@ -694,16 +975,7 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
         ctx.fillText(label, lx, ly);
       });
 
-      // playhead: 1px rose line
-      const px = toX(playheadRef.current);
-      if (px >= 0 && px <= w) {
-        ctx.strokeStyle = "#fb7185";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(Math.round(px) + 0.5, 0);
-        ctx.lineTo(Math.round(px) + 0.5, h);
-        ctx.stroke();
-      }
+      drawPlayhead();
     },
     [
       total,
@@ -717,26 +989,28 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
       stemById,
       takeByIdFor,
       takeDurationOf,
+      cueAudio,
+      cueSpans,
+      selectedCueId,
     ],
   );
 
   useEffect(() => {
-    const ruler = canvasRefs.current.get("__ruler__");
-    if (ruler) drawOne(ruler, { ruler: true });
-    tracks.forEach(({ stem }, i) => {
-      const c = canvasRefs.current.get(stem.id);
-      if (c) drawOne(c, { ruler: false, stemId: stem.id, trackIdx: i });
-    });
-    const onResize = () => {
-      const r = canvasRefs.current.get("__ruler__");
-      if (r) drawOne(r, { ruler: true });
+    const drawAll = () => {
+      const ruler = canvasRefs.current.get("__ruler__");
+      if (ruler) drawOne(ruler, { ruler: true });
       tracks.forEach(({ stem }, i) => {
         const c = canvasRefs.current.get(stem.id);
         if (c) drawOne(c, { ruler: false, stemId: stem.id, trackIdx: i });
       });
+      for (const lane of CUE_LANES) {
+        const c = canvasRefs.current.get(`__cue_${lane.id}__`);
+        if (c) drawOne(c, { ruler: false, cueLane: lane.id });
+      }
     };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    drawAll();
+    window.addEventListener("resize", drawAll);
+    return () => window.removeEventListener("resize", drawAll);
   }, [drawOne, tracks, view, playhead]);
 
   // ---- interaction -------------------------------------------------------
@@ -797,6 +1071,72 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
     [],
   );
 
+  const findCueSpan = useCallback(
+    (lane: CueLane, globalT: number) => {
+      const laneSpans = cueSpans.filter((item) => item.lane === lane);
+      for (let i = laneSpans.length - 1; i >= 0; i--) {
+        const item = laneSpans[i];
+        if (globalT >= item.start && globalT <= item.end) return item;
+      }
+      return null;
+    },
+    [cueSpans],
+  );
+
+  const updateCueLocal = useCallback(
+    (cueId: string, patch: Partial<Omit<Cue, "id">>) => {
+      setCues((prev) =>
+        prev.map((cue) => (cue.id === cueId ? { ...cue, ...patch } : cue)),
+      );
+      setCueDirty((prev) => ({ ...prev, [cueId]: true }));
+    },
+    [],
+  );
+
+  const onCueMouseDown = (e: React.MouseEvent, lane: CueLane) => {
+    if (e.button !== 0) return;
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const globalT = toGlobal(canvas, e.clientX);
+    const item = findCueSpan(lane, globalT);
+    if (item) {
+      setSelectedCueId(item.cue.id);
+      setConfirmDeleteCueId((prev) => (prev === item.cue.id ? prev : null));
+      setSelected(null);
+      setSelection(null);
+      selectionRef.current = null;
+      cueDragRef.current = {
+        cueId: item.cue.id,
+        grabGlobal: globalT,
+        origOffset: item.cue.offset_s,
+      };
+      canvas.style.cursor = "grabbing";
+      return;
+    }
+    if (total > 0) seek(clamp(0, total, globalT));
+    setSelectedCueId(null);
+    setConfirmDeleteCueId(null);
+  };
+
+  const onCueMouseMove = (e: React.MouseEvent, lane: CueLane) => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const drag = cueDragRef.current;
+    if (drag) {
+      const delta = toGlobal(canvas, e.clientX) - drag.grabGlobal;
+      const raw = drag.origOffset + delta;
+      // Shift snaps to quarter-seconds for musical placement.
+      const next = e.shiftKey ? Math.round(raw * 4) / 4 : round2(raw);
+      updateCueLocal(drag.cueId, { offset_s: next });
+      canvas.style.cursor = "grabbing";
+      return;
+    }
+    const item = findCueSpan(lane, toGlobal(canvas, e.clientX));
+    canvas.style.cursor = item ? "grab" : "default";
+  };
+
+  const onCueMouseUp = () => {
+    cueDragRef.current = null;
+  };
+
   /** Move one region to another take, scaling its window by the duration ratio. */
   const switchCutTake = useCallback(
     (stem: Stem, cut: Cut, takeId: string) => {
@@ -841,6 +1181,8 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
 
   const onTrackMouseDown = (e: React.MouseEvent, stemId: string) => {
     if (e.button !== 0) return;
+    setSelectedCueId(null);
+    setConfirmDeleteCueId(null);
     const canvas = e.currentTarget as HTMLCanvasElement;
     const globalT = toGlobal(canvas, e.clientX);
     const edge = findEdge(stemId, canvas, e.clientX);
@@ -1079,36 +1421,67 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
     [invalidByStem, saving, onSaveCuts, pending],
   );
 
-  const dirtyCount = tracks.filter((t) => dirty[t.stem.id] && !invalidByStem[t.stem.id]).length;
+  const dirtyCueIds = useMemo(
+    () => Object.keys(cueDirty).filter((id) => cueDirty[id]),
+    [cueDirty],
+  );
+  const dirtyCount =
+    tracks.filter((t) => dirty[t.stem.id] && !invalidByStem[t.stem.id]).length +
+    dirtyCueIds.length;
 
   const saveAll = useCallback(async () => {
-    if (savingAll) return;
+    if (savingAll || savingCues) return;
     setSavingAll(true);
     try {
       const dirtyStems = tracks.filter(
         (t) => dirty[t.stem.id] && !invalidByStem[t.stem.id],
       );
-      if (dirtyStems.length === 0) return;
-      if (onSaveAll) {
-        // Single batch: one mix rebuild instead of one per stem.
-        const payload: Record<string, Cut[]> = {};
-        for (const t of dirtyStems) payload[t.stem.id] = pending[t.stem.id] ?? [];
-        await onSaveAll(payload);
-        setDirty((p) => {
-          const next = { ...p };
-          for (const t of dirtyStems) next[t.stem.id] = false;
-          return next;
-        });
-      } else {
-        for (const t of dirtyStems) {
-          await onSaveCuts(t.stem, pending[t.stem.id] ?? []);
-          setDirty((p) => ({ ...p, [t.stem.id]: false }));
+      const dirtyCueList = cues.filter((cue) => cueDirty[cue.id]);
+      if (dirtyStems.length === 0 && dirtyCueList.length === 0) return;
+      if (dirtyStems.length > 0) {
+        if (onSaveAll) {
+          // Single batch: one mix rebuild instead of one per stem.
+          const payload: Record<string, Cut[]> = {};
+          for (const t of dirtyStems) payload[t.stem.id] = pending[t.stem.id] ?? [];
+          await onSaveAll(payload);
+          setDirty((p) => {
+            const next = { ...p };
+            for (const t of dirtyStems) next[t.stem.id] = false;
+            return next;
+          });
+        } else {
+          for (const t of dirtyStems) {
+            await onSaveCuts(t.stem, pending[t.stem.id] ?? []);
+            setDirty((p) => ({ ...p, [t.stem.id]: false }));
+          }
+        }
+      }
+      if (dirtyCueList.length > 0) {
+        setSavingCues(true);
+        try {
+          if (onSaveCues) {
+            await onSaveCues(dirtyCueList);
+          } else {
+            for (const cue of dirtyCueList) {
+              const { id, ...patch } = cue;
+              void id;
+              await api.updateCue(project.id, cue.id, patch);
+            }
+            await onRefresh();
+          }
+          setCueDirty((p) => {
+            const next = { ...p };
+            for (const cue of dirtyCueList) next[cue.id] = false;
+            return next;
+          });
+        } finally {
+          setSavingCues(false);
         }
       }
     } finally {
       setSavingAll(false);
     }
-  }, [savingAll, tracks, dirty, invalidByStem, onSaveCuts, onSaveAll, pending]);
+  }, [savingAll, savingCues, tracks, dirty, invalidByStem, onSaveCuts, onSaveAll, onSaveCues, onRefresh, pending, cues, cueDirty, project.id]);
 
   const updateCut = (stemId: string, index: number, field: "start_s" | "end_s", value: number) => {
     const cuts = (pending[stemId] ?? []).map((c) => ({ ...c }));
@@ -1157,6 +1530,52 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
     [engine, pending, slots, stemById, takeByIdFor],
   );
 
+  const auditionCue = useCallback(
+    async (cueId: string) => {
+      const cue = cues.find((item) => item.id === cueId);
+      if (!cue) return;
+      const span = cueSpans.find((item) => item.cue.id === cueId);
+      if (!span) return;
+      const info = cueAudio[cue.sfx_id];
+      if (!info || info.missing || info.duration <= 0) return;
+      const segment = cueSegmentOf(span, info.duration);
+      if (!segment) return;
+      await engine.resume();
+      auditionRef.current = null;
+      engine.play(span.start, [segment], { onlyStemId: cueLaneKey(span.lane) });
+      setPlaying(engine.playing);
+      setPlayhead(span.start);
+    },
+    [cues, cueSpans, cueAudio, engine],
+  );
+
+  const deleteSelectedCue = useCallback(async () => {
+    if (!selectedCueId) return;
+    const cue = cues.find((item) => item.id === selectedCueId);
+    if (!cue) {
+      setSelectedCueId(null);
+      return;
+    }
+    if (confirmDeleteCueId !== cue.id) {
+      setConfirmDeleteCueId(cue.id);
+      return;
+    }
+    setConfirmDeleteCueId(null);
+    if (onDeleteCue) {
+      await onDeleteCue(cue);
+    } else {
+      await api.deleteCue(project.id, cue.id);
+      await onRefresh();
+    }
+    setCues((prev) => prev.filter((item) => item.id !== cue.id));
+    setCueDirty((prev) => {
+      const next = { ...prev };
+      delete next[cue.id];
+      return next;
+    });
+    setSelectedCueId(null);
+  }, [selectedCueId, cues, confirmDeleteCueId, onDeleteCue, project.id, onRefresh]);
+
   const toggleMute = (stemId: string) =>
     setMuted((p) => {
       const n = new Set(p);
@@ -1191,6 +1610,9 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
     selected != null &&
     auditionRef.current.stemId === selected.stemId &&
     auditionRef.current.lineId === selected.lineId;
+  const selCue = selectedCueId != null ? cues.find((cue) => cue.id === selectedCueId) ?? null : null;
+  const selCueSpan = selCue != null ? cueSpans.find((item) => item.cue.id === selCue.id) ?? null : null;
+  const selCueMissing = selCue != null ? Boolean(cueAudio[selCue.sfx_id]?.missing) : false;
 
   let lastScene: number | null = null;
 
@@ -1212,14 +1634,20 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
           <button type="button" className="button button-ghost button-sm" onClick={onRefresh}>
             Refresh
           </button>
+          {project.mix_stale ? <span className="render-warn">mix stale</span> : null}
           <button
             type="button"
             className="button button-primary button-sm"
-            disabled={savingAll || dirtyCount === 0}
+            disabled={savingAll || savingCues || dirtyCount === 0}
             onClick={() => void saveAll()}
+            title={
+              dirtyCueIds.length > 0
+                ? `Save ${dirtyCueIds.length} cue edit${dirtyCueIds.length === 1 ? "" : "s"} plus cuts`
+                : "Save all dirty cuts"
+            }
           >
-            {savingAll ? <span className="spinner" /> : <FloppyDisk size={14} />}
-            {savingAll ? "Saving…" : `Save all (${dirtyCount})`}
+            {savingAll || savingCues ? <span className="spinner" /> : <FloppyDisk size={14} />}
+            {savingAll || savingCues ? "Saving…" : `Save all (${dirtyCount})`}
           </button>
         </div>
       </section>
@@ -1423,6 +1851,35 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
               </React.Fragment>
             );
           })}
+
+          {CUE_LANES.map((lane) => {
+            const laneSpans = cueSpans.filter((item) => item.lane === lane.id);
+            const dirtyInLane = laneSpans.some((item) => cueDirty[item.cue.id]);
+            return (
+              <div className="mt-row" key={`cue-${lane.id}`}>
+                <div className="mt-track-head">
+                  {lane.id === "music" ? <MusicNotes size={14} /> : <SpeakerHigh size={14} />}
+                  <span className="mt-track-sub">
+                    {lane.label} · {laneSpans.length} cue{laneSpans.length === 1 ? "" : "s"}
+                    {dirtyInLane ? " · unsaved" : ""}
+                  </span>
+                  <span className="panel-sub">{lane.hint}</span>
+                </div>
+                <canvas
+                  data-seek={`cue-${lane.id}`}
+                  className="mt-canvas"
+                  ref={(el) => {
+                    if (el) canvasRefs.current.set(`__cue_${lane.id}__`, el);
+                    else canvasRefs.current.delete(`__cue_${lane.id}__`);
+                  }}
+                  onMouseDown={(e) => onCueMouseDown(e, lane.id)}
+                  onMouseMove={(e) => onCueMouseMove(e, lane.id)}
+                  onMouseUp={onCueMouseUp}
+                  onMouseLeave={onCueMouseUp}
+                />
+              </div>
+            );
+          })}
         </div>
 
         {/* selected-region editor (keyboard-accessible alternative to drag) */}
@@ -1499,10 +1956,113 @@ export function MultiTrackEditor({ project, onSaveCuts, onSaveAll, onRefresh }: 
               ) : null}
             </div>
           </div>
+        ) : selCue ? (
+          <div className="mt-selection">
+            <div className="mt-selection-head">
+              {selCue.kind === "music" ? <MusicNotes size={14} /> : <SpeakerHigh size={14} />}
+              <strong>{selCue.name}</strong>
+              <span className="mt-selection-text" title={selCue.sfx_id}>
+                {selCue.sfx_id}
+                {selCueSpan ? ` · ${selCueSpan.start.toFixed(1)}–${selCueSpan.end.toFixed(1)}s` : ""}
+                {cueDirty[selCue.id] ? " · unsaved" : ""}
+              </span>
+            </div>
+            <div className="mt-selection-controls">
+              <label>
+                <span>anchor</span>
+                <select
+                  value={selCue.anchor_line_id}
+                  onChange={(e) => updateCueLocal(selCue.id, { anchor_line_id: e.target.value })}
+                  title="Which script line this cue is anchored to"
+                >
+                  {allLines.map((line) => (
+                    <option key={line.id} value={line.id}>
+                      {line.id} · {line.speaker}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>offset</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={Number(selCue.offset_s.toFixed(2))}
+                  onChange={(e) =>
+                    updateCueLocal(selCue.id, { offset_s: Number(e.target.value) || 0 })
+                  }
+                  title="Seconds after the anchor line starts (drag the clip or edit here)"
+                />
+              </label>
+              <label>
+                <span>gain</span>
+                <input
+                  type="range"
+                  min={-48}
+                  max={6}
+                  step={1}
+                  value={Math.round(selCue.gain_db)}
+                  onChange={(e) => updateCueLocal(selCue.id, { gain_db: Number(e.target.value) })}
+                  title={`${selCue.gain_db} dB`}
+                  aria-label={`${selCue.name} gain`}
+                />
+                <span>{Math.round(selCue.gain_db)} dB</span>
+              </label>
+              <label>
+                <span>kind</span>
+                <select
+                  value={selCue.kind}
+                  onChange={(e) =>
+                    updateCueLocal(selCue.id, { kind: e.target.value as Cue["kind"] })
+                  }
+                  title="bed/music run to the scene end, one-shots play once"
+                >
+                  <option value="one_shot">one-shot</option>
+                  <option value="bed">bed</option>
+                  <option value="music">music</option>
+                </select>
+              </label>
+              <label title="Repeat the source until the scene ends">
+                <span>loop</span>
+                <input
+                  type="checkbox"
+                  checked={selCue.loop}
+                  onChange={(e) => updateCueLocal(selCue.id, { loop: e.target.checked })}
+                />
+              </label>
+              <label title="Duck under dialogue">
+                <span>duck</span>
+                <input
+                  type="checkbox"
+                  checked={selCue.duck}
+                  onChange={(e) => updateCueLocal(selCue.id, { duck: e.target.checked })}
+                />
+              </label>
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => void auditionCue(selCue.id)}
+                title="Play this cue alone"
+              >
+                Play
+              </button>
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => void deleteSelectedCue()}
+                title={confirmDeleteCueId === selCue.id ? "Click again to confirm" : "Delete this cue"}
+              >
+                <Trash size={14} />
+                {confirmDeleteCueId === selCue.id ? "Confirm" : "Delete"}
+              </button>
+              {selCueMissing ? <span className="render-warn">SFX file missing.</span> : null}
+            </div>
+          </div>
         ) : (
           <p className="panel-sub mt-hint">
             Regions follow the script order. Click one to select it, drag its body to slip the
-            audio inside the region, or edit start/end below. Click empty space to seek.
+            audio inside the region, or edit start/end below. Click a music/SFX clip to edit its
+            anchor, offset and gain. Click empty space to seek.
           </p>
         )}
       </div>

@@ -24,6 +24,10 @@ export interface ScheduleSegment {
   /** Global timeline slot. */
   start: number;
   end: number;
+  /** Linear per-clip gain (cue gain_db converted to amplitude). */
+  gain?: number;
+  /** Repeat the buffer until `localEnd` (music and bed cues). */
+  loop?: boolean;
 }
 
 const PEAK_COUNT = 8000;
@@ -55,8 +59,8 @@ export class SyncEngine {
   private frozen = 0;
   private _playing = false;
   private onlyStem: string | null = null;
-  /** Cap decoded takes; the board can reference many generations. */
-  private maxTracks = 12;
+  /** Cap decoded buffers; the board can reference many generations + cues. */
+  private maxTracks = 24;
 
   muted = new Set<string>();
   solo = new Set<string>();
@@ -123,6 +127,18 @@ export class SyncEngine {
     }
   }
 
+  /** One GainNode per audible row (stem or cue lane), created on demand. */
+  private ensureGain(stemId: string): GainNode {
+    const ctx = this.ensureCtx();
+    let gain = this.gains.get(stemId);
+    if (!gain) {
+      gain = ctx.createGain();
+      gain.connect(this.master!);
+      this.gains.set(stemId, gain);
+    }
+    return gain;
+  }
+
   async loadTrack(
     stemId: string,
     takeId: string,
@@ -146,11 +162,7 @@ export class SyncEngine {
     this.evictIfNeeded();
     this.buffers.set(takeId, buf);
     this.lastUsed.set(takeId, Date.now());
-    if (!this.gains.has(stemId)) {
-      const g = ctx.createGain();
-      g.connect(this.master!);
-      this.gains.set(stemId, g);
-    }
+    this.ensureGain(stemId);
     this.applyGains();
     return {
       stemId,
@@ -194,13 +206,13 @@ export class SyncEngine {
 
     for (const seg of segments) {
       if (this.onlyStem && seg.stemId !== this.onlyStem) continue;
-      const gain = this.gains.get(seg.stemId);
-      if (!gain || gain.gain.value <= 0) continue;
+      const gain = this.ensureGain(seg.stemId);
+      if (gain.gain.value <= 0) continue;
       const buf = this.buffers.get(seg.takeId);
       if (!buf) continue;
       this.lastUsed.set(seg.takeId, Date.now());
 
-      const localEnd = Math.min(seg.localEnd, buf.duration);
+      const localEnd = seg.loop ? seg.localEnd : Math.min(seg.localEnd, buf.duration);
       const localFrom = Math.max(0, seg.localStart) + Math.max(0, fromGlobal - seg.start);
       const remaining = localEnd - localFrom;
       if (remaining <= 0.005) continue;
@@ -208,8 +220,22 @@ export class SyncEngine {
       const when = t0 + Math.max(0, seg.start - fromGlobal);
       const src = ctx.createBufferSource();
       src.buffer = buf;
-      src.connect(gain);
-      src.start(when, localFrom, remaining);
+      let out: AudioNode = gain;
+      if (seg.gain != null && seg.gain !== 1) {
+        const clipGain = ctx.createGain();
+        clipGain.gain.value = Math.max(0, seg.gain);
+        clipGain.connect(gain);
+        out = clipGain;
+      }
+      src.connect(out);
+      if (seg.loop && buf.duration > 0) {
+        src.loop = true;
+        src.loopStart = 0;
+        src.loopEnd = buf.duration;
+      }
+      const offset =
+        seg.loop && buf.duration > 0 ? localFrom % buf.duration : localFrom;
+      src.start(when, offset, remaining);
       this.sources.push(src);
       started++;
     }

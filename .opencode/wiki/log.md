@@ -349,3 +349,28 @@ shared `~/.cache/huggingface` snapshot). Drove the packaged wizard under
 Xvfb to the Components page: the scroll area is present, the four option
 boxes render, and the checkbox no longer collides with the description.
 The scratch install was left in place for inspection.
+
+## [2026-11-02] fix | Installer default folder no longer follows a temp pointer
+
+`resolve_prefix()` used to trust `<default>/location.txt` unconditionally. A
+scratch CPU install at `/tmp/opencode/dl-test` (left from the released-AppImage
+test) had written that pointer, so `--dry-run` and the wizard pre-filled
+`/tmp/opencode/dl-test` instead of `~/.local/share/drama-llama`. The resolver
+now ignores pointers whose target is missing/not an install or lives under the
+OS temp root; an explicit `--prefix` still wins. Removed the stale pointer, added
+three regression tests, and confirmed `--dry-run --cpu` resolves the per-user
+prefix. Recorded in [[entities/installer]].
+
+## [2026-11-03] build | Cut board cue lanes + unchanged-SFX PATCH rule
+
+Finished the in-progress cue lanes: Music/SFX rows render on the shared
+timeline (`computeCueSpans` mirrors the mixer), drag stages `offset_s`,
+inspector edits anchor/offset/gain/kind/loop/duck with audition and two-click
+delete, and Save all persists cue edits with cuts (toolbar counts both, mix
+stale badge shown). `ProjectPage` wires `saveCues`/`deleteCue`. Backend:
+`CueUpdate.kind/filter` are Literals, and `update_cue` only re-validates
+`sfx_id` when it changed — full-body saves no longer 404 when the file is not
+indexed here (regression test `test_cue_patch_keeps_missing_sfx_id`). Verified
+live in Firefox on `was-wir-begraben-haben-7a3f9c` (lanes, inspector, save
+roundtrip, delete-arm, audition no-crash; project values restored). 244 tests
+green, web build green. See [[concepts/cut-cues-lanes]].

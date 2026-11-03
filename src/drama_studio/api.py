@@ -185,6 +185,22 @@ class CueCreate(BaseModel):
     filter: str = "none"
 
 
+class CueUpdate(BaseModel):
+    """Partial cue edit; unset fields keep their stored value."""
+
+    kind: Literal["bed", "one_shot", "music"] | None = None
+    sfx_id: str | None = None
+    name: str | None = None
+    anchor_line_id: str | None = None
+    offset_s: float | None = None
+    gain_db: float | None = None
+    fade_in_s: float | None = None
+    fade_out_s: float | None = None
+    loop: bool | None = None
+    duck: bool | None = None
+    filter: Literal["none", "telephone", "radio"] | None = None
+
+
 class TakeSelect(BaseModel):
     take_id: str
 
@@ -1589,6 +1605,35 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         project.cues.append(cue)
+        project.mix_stale = True
+        project = store.save(project)
+        return project.model_dump(mode="json")
+
+    @app.patch("/api/projects/{project_id}/cues/{cue_id}")
+    def update_cue(
+        project_id: str, cue_id: str, body: CueUpdate
+    ) -> dict[str, Any]:
+        """Edit a cue from the Cut board (offset drag, gain, kind, …)."""
+        project = project_or_404(project_id)
+        cue = next((item for item in project.cues if item.id == cue_id), None)
+        if cue is None:
+            raise HTTPException(status_code=404, detail="cue not found")
+        updates = body.model_dump(exclude_unset=True)
+        if "anchor_line_id" in updates:
+            line_ids = {line.id for line in project.script.iter_lines()}
+            if updates["anchor_line_id"] not in line_ids:
+                raise HTTPException(status_code=400, detail="anchor line not found")
+        if "sfx_id" in updates and updates["sfx_id"] != cue.sfx_id:
+            if sfx.get(updates["sfx_id"]) is None:
+                raise HTTPException(status_code=404, detail="sfx not found")
+        try:
+            updated = Cue(**{**cue.model_dump(), **updates})
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        project.cues = [
+            updated if item.id == cue_id else item for item in project.cues
+        ]
+        project.mix_stale = True
         project = store.save(project)
         return project.model_dump(mode="json")
 
@@ -1599,6 +1644,7 @@ def create_app(
         project.cues = [cue for cue in project.cues if cue.id != cue_id]
         if len(project.cues) == before:
             raise HTTPException(status_code=404, detail="cue not found")
+        project.mix_stale = True
         store.save(project)
 
     @app.patch("/api/projects/{project_id}/characters/{speaker}")

@@ -316,12 +316,43 @@ def test_resolve_prefix_follows_location_pointer(tmp_path: Path, monkeypatch) ->
     base = tmp_path / "default"
     custom = tmp_path / "custom"
     custom.mkdir()
+    (custom / "install-state.json").write_text("{}", encoding="utf-8")
+    # tmp_path itself lives under the OS temp root, so move the temp root
+    # aside to exercise a persistent custom install.
+    monkeypatch.setattr(
+        "installer.core.paths.tempfile.gettempdir", lambda: str(tmp_path / "tmp")
+    )
     monkeypatch.setattr("installer.core.paths.default_prefix", lambda **_: base)
     assert resolve_prefix() == base
     base.mkdir()
     (base / "location.txt").write_text(str(custom), encoding="utf-8")
     assert resolve_prefix() == custom
     assert resolve_prefix(tmp_path / "explicit") == tmp_path / "explicit"
+
+
+def test_resolve_prefix_ignores_stale_location_pointer(tmp_path: Path, monkeypatch) -> None:
+    base = tmp_path / "default"
+    base.mkdir()
+    (base / "location.txt").write_text(str(tmp_path / "deleted"), encoding="utf-8")
+    monkeypatch.setattr(
+        "installer.core.paths.tempfile.gettempdir", lambda: str(tmp_path / "tmp")
+    )
+    monkeypatch.setattr("installer.core.paths.default_prefix", lambda **_: base)
+    assert resolve_prefix() == base
+
+
+def test_resolve_prefix_ignores_temp_location_pointer(tmp_path: Path, monkeypatch) -> None:
+    base = tmp_path / "default"
+    base.mkdir()
+    scratch = tmp_path / "scratch-install"
+    scratch.mkdir()
+    (scratch / "install-state.json").write_text("{}", encoding="utf-8")
+    (base / "location.txt").write_text(str(scratch), encoding="utf-8")
+    monkeypatch.setattr("installer.core.paths.default_prefix", lambda **_: base)
+    monkeypatch.setattr(
+        "installer.core.paths.tempfile.gettempdir", lambda: str(tmp_path)
+    )
+    assert resolve_prefix() == base
 
 
 # --------------------------------------------------------------------------- archives

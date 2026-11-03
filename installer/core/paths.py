@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,12 +35,40 @@ def default_prefix(
     return base / "drama-llama"
 
 
+def _looks_like_install(path: Path) -> bool:
+    """Whether ``path`` still contains a Drama Llama installation."""
+    return (path / "install-state.json").is_file() or (path / "app" / "pyproject.toml").is_file()
+
+
+def _is_temp_path(path: Path) -> bool:
+    """Whether ``path`` lives under the OS temporary directory.
+
+    Scratch and CI installs belong there and disappear with the next reboot,
+    so they must never become the default install folder offered by the
+    wizard.
+    """
+    try:
+        resolved = path.resolve()
+        temp_root = Path(tempfile.gettempdir()).resolve()
+    except OSError:
+        return False
+    try:
+        resolved.relative_to(temp_root)
+    except ValueError:
+        return False
+    return True
+
+
 def resolve_prefix(explicit: str | Path | None = None) -> Path:
     """Resolve the install prefix, following a custom-location pointer.
 
     Inno Setup's uninstaller only knows the default prefix. When the wizard
     installs elsewhere it writes ``<default>/location.txt`` so an uninstall
     launched without ``--prefix`` still finds the real tree.
+
+    A pointer is ignored when its target no longer looks like an install or
+    lives under the OS temp directory; otherwise a deleted or scratch install
+    would keep hijacking the default folder.
     """
     if explicit:
         return Path(explicit).expanduser()
@@ -49,7 +78,11 @@ def resolve_prefix(explicit: str | Path | None = None) -> Path:
         recorded = pointer.read_text(encoding="utf-8").strip()
     except OSError:
         recorded = ""
-    return Path(recorded).expanduser() if recorded else base
+    if recorded:
+        candidate = Path(recorded).expanduser()
+        if _looks_like_install(candidate) and not _is_temp_path(candidate):
+            return candidate
+    return base
 
 
 @dataclass(frozen=True)

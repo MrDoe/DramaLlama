@@ -1,5 +1,6 @@
 import type {
   AlignmentResult,
+  Cue,
   EngineInfo,
   EngineName,
   Job,
@@ -218,6 +219,15 @@ export const api = {
     }),
   deleteCue: (projectId: string, cueId: string) =>
     request<void>(`/projects/${projectId}/cues/${cueId}`, { method: "DELETE" }),
+  updateCue: (
+    projectId: string,
+    cueId: string,
+    patch: Partial<Omit<Cue, "id">>,
+  ) =>
+    request<Project>(`/projects/${projectId}/cues/${cueId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
   selectTake: (projectId: string, stemId: string, takeId: string) =>
     request<{ project: Project; job: Job | null }>(
       `/projects/${projectId}/stems/${stemId}/take`,

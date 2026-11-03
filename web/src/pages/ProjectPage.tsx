@@ -26,6 +26,7 @@ import { api, waitForJob } from "../api";
 import { MultiTrackEditor } from "../components/MultiTrackEditor";
 import type {
   Character,
+  Cue,
   EngineInfo,
   EngineName,
   Job,
@@ -2392,6 +2393,36 @@ export function ProjectPage() {
     [project],
   );
 
+  const saveCues = useCallback(
+    async (cueList: Cue[]) => {
+      if (!project) return;
+      try {
+        for (const cue of cueList) {
+          const { id, ...patch } = cue;
+          void id;
+          await api.updateCue(project.id, cue.id, patch);
+        }
+        await refreshProject();
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not save cues");
+      }
+    },
+    [project, refreshProject],
+  );
+
+  const deleteCue = useCallback(
+    async (cue: Cue) => {
+      if (!project) return;
+      try {
+        await api.deleteCue(project.id, cue.id);
+        await refreshProject();
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not delete cue");
+      }
+    },
+    [project, refreshProject],
+  );
+
   const designVoice = useCallback(
     async (speaker: string, opts?: { name?: string; seed?: number }) => {
       if (!project) return;
@@ -2851,6 +2882,8 @@ export function ProjectPage() {
           project={project}
           onSaveCuts={(stem, cuts) => void saveCuts(stem, cuts)}
           onSaveAll={(stems) => void saveAllCuts(stems)}
+          onSaveCues={(cueList) => void saveCues(cueList)}
+          onDeleteCue={(cue) => void deleteCue(cue)}
           onRefresh={() => void refreshProject()}
         />
       ) : activeStep === "stems" ? (

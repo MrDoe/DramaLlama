@@ -98,3 +98,102 @@ def test_cue_create_and_delete(tmp_path):
     deleted = client.delete(f"/api/projects/{project['id']}/cues/{cue_id}")
     assert deleted.status_code == 204
     assert client.get(f"/api/projects/{project['id']}").json()["cues"] == []
+
+
+def test_cue_patch_moves_clip_and_marks_mix_stale(tmp_path):
+    _, client, _ = make_client(tmp_path)
+    project = client.post(
+        "/api/projects", json={"title": "Test", "language": "en", "script_text": SCRIPT}
+    ).json()
+    lines = project["script"]["scenes"][0]["lines"]
+    sfx_item = client.get("/api/sfx").json()[0]
+    created = client.post(
+        f"/api/projects/{project['id']}/cues",
+        json={
+            "kind": "one_shot",
+            "sfx_id": sfx_item["id"],
+            "name": sfx_item["name"],
+            "anchor_line_id": lines[0]["id"],
+        },
+    ).json()
+    cue_id = created["cues"][0]["id"]
+
+    patched = client.patch(
+        f"/api/projects/{project['id']}/cues/{cue_id}",
+        json={
+            "kind": "music",
+            "anchor_line_id": lines[1]["id"],
+            "offset_s": -1.25,
+            "gain_db": -22,
+            "loop": True,
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    body = patched.json()
+    cue = body["cues"][0]
+    assert cue["kind"] == "music"
+    assert cue["anchor_line_id"] == lines[1]["id"]
+    assert cue["offset_s"] == -1.25
+    assert cue["gain_db"] == -22
+    assert cue["loop"] is True
+    assert cue["name"] == sfx_item["name"]
+    assert body["mix_stale"] is True
+
+    bad_anchor = client.patch(
+        f"/api/projects/{project['id']}/cues/{cue_id}",
+        json={"anchor_line_id": "nope"},
+    )
+    assert bad_anchor.status_code == 400
+
+    missing = client.patch(
+        f"/api/projects/{project['id']}/cues/no-such-cue", json={"gain_db": -6}
+    )
+    assert missing.status_code == 404
+
+
+def test_cue_patch_keeps_missing_sfx_id(tmp_path):
+    """A cue edit must survive when its SFX is no longer indexed.
+
+    Regression: the Cut board saves full cue bodies. Re-validating an
+    unchanged ``sfx_id`` against the live library 404d every save on
+    machines without that file (e.g. demo SFX missing from ~/Sounds).
+    Only a *changed* sfx_id is validated.
+    """
+    _, client, sfx_root = make_client(tmp_path)
+    project = client.post(
+        "/api/projects", json={"title": "Test", "language": "en", "script_text": SCRIPT}
+    ).json()
+    lines = project["script"]["scenes"][0]["lines"]
+    sfx_item = client.get("/api/sfx").json()[0]
+    cue_id = client.post(
+        f"/api/projects/{project['id']}/cues",
+        json={
+            "kind": "bed",
+            "sfx_id": sfx_item["id"],
+            "name": sfx_item["name"],
+            "anchor_line_id": lines[0]["id"],
+        },
+    ).json()["cues"][0]["id"]
+
+    # Drop the file from the library; the stored cue still references it.
+    from pathlib import Path as _Path
+
+    _Path(sfx_item["path"]).unlink()
+    client.post("/api/sfx/scan")
+    assert client.get(f"/api/sfx/{sfx_item['id']}/audio").status_code == 404
+
+    # Full-body save with the unchanged sfx_id must succeed.
+    full = client.get(f"/api/projects/{project['id']}").json()["cues"][0]
+    kept = client.patch(f"/api/projects/{project['id']}/cues/{cue_id}", json=full)
+    assert kept.status_code == 200, kept.text
+    assert kept.json()["cues"][0]["offset_s"] == full["offset_s"]
+
+    # Changing to a genuinely unknown sfx still 404s.
+    assert (
+        client.patch(
+            f"/api/projects/{project['id']}/cues/{cue_id}",
+            json={"sfx_id": "does-not-exist"},
+        ).status_code
+        == 404
+    )
+

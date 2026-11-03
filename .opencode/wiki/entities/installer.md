@@ -153,6 +153,17 @@ copies under `usr/share/...`). Moving the tag re-ran the workflow, which
 passed all four jobs.
 ## Gotchas
 
+- **Default prefix must not follow scratch pointers.** `resolve_prefix()` reads
+  `<default>/location.txt` so an uninstall launched without `--prefix` finds a
+  custom install. A CPU test install at `/tmp/opencode/dl-test` wrote that
+  pointer, after which every wizard start and `--dry-run` defaulted to the
+  temp folder instead of `~/.local/share/drama-llama`. The resolver now only
+  follows a pointer when the target still contains `install-state.json` (or
+  `app/pyproject.toml`) and is not under `tempfile.gettempdir()`; an explicit
+  `--prefix` always wins. Covered by
+  `test_resolve_prefix_follows_location_pointer`,
+  `test_resolve_prefix_ignores_stale_location_pointer`, and
+  `test_resolve_prefix_ignores_temp_location_pointer`.
 - **Whisper step: download first, verify second.** `install_whisper()` walks
   the pinned file map once to download missing files and then re-walks it to
   prove the cache is complete. In v0.3.0 the map was converted to a list for

@@ -8,6 +8,7 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[entities/drama-llama-mascot]] — llogo.png avatar assets, palette, rename boundaries.
 - [[concepts/script-to-stem-pipeline]] — paste → parse → stem → align.
 - [[concepts/cut-board-multitrack]] — shared Cut timeline, script-order clips, WebAudio transport.
+- [[concepts/cut-cues-lanes]] — Music/SFX cue lanes, inspector, save-all, unchanged-SFX rule.
 - [[concepts/take-aware-cuts]] — per-clip take selection, render append/dedupe, remap rules.
 - [[concepts/gpu-serialization]] — why Breeze, Chatterbox, Ollama and Whisper are scheduled carefully.
 - [[concepts/engine-selection]] — project default only, no per-stem override.
