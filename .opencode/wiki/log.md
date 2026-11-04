@@ -431,3 +431,11 @@ warning-suppressed; minimal installs without the `tts` extra leave pitch
 unchanged instead of failing the mix. Added a frequency regression test:
 220 Hz +700 ¢ → 329.5 Hz with unchanged length. Updated
 [[concepts/cut-region-effects]].
+
+## [2026-11-04] release | v0.3.2 published
+
+Tag `v0.3.2` (release commit bcf9a84) shipped the Cut board work: movable
+sections, align-to-script ordering, per-region effects, save-race fix and
+the pitch-shift fix. CI run 41921637900 green (installer tests, AppImage,
+Windows Setup, release upload); the GitHub release has all six assets and
+the AppImage checksum re-verified locally. v0.3.1 is the previous release.
