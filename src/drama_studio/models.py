@@ -314,6 +314,15 @@ class AlignedLine(BaseModel):
     # Freeform global timeline start. None => derive from script order
     # (legacy); normalised to a concrete value on load.
     position_s: float | None = None
+    # Per-region effects (Cut board). All default to neutral so old projects
+    # keep rendering exactly as before.
+    gain_db: float = 0.0  # -48..+12 dB
+    fade_in_s: float = 0.0  # seconds, linear ramp up from 0
+    fade_out_s: float = 0.0  # seconds, linear ramp down to 0
+    speed: float = 1.0  # 0.5..2.0 playback rate (resampled, informal)
+    pitch_cents: int = 0  # -1200..+1200, phase-vocoder-ish via resample pair
+    reverb_mix: float = 0.0  # 0..1 wet amount (convolver with noise IR)
+    dereverb: bool = False  # STFT spectral-subtraction dereverb via audio.apply_region_effects
     confidence: float | None = None
     fallback: bool = False
 

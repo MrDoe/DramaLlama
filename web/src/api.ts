@@ -243,6 +243,13 @@ export const api = {
       start_s: number;
       end_s: number;
       position_s?: number;
+      gain_db?: number;
+      fade_in_s?: number;
+      fade_out_s?: number;
+      speed?: number;
+      pitch_cents?: number;
+      reverb_mix?: number;
+      dereverb?: boolean;
     }[],
     rebuildMix = true,
   ) =>
@@ -257,7 +264,7 @@ export const api = {
     projectId: string,
     stems: Record<
       string,
-      { id?: string; line_id: string; take_id?: string | null; start_s: number; end_s: number; position_s?: number }[]
+      { id?: string; line_id: string; take_id?: string | null; start_s: number; end_s: number; position_s?: number; gain_db?: number; fade_in_s?: number; fade_out_s?: number; speed?: number; pitch_cents?: number; reverb_mix?: number; dereverb?: boolean }[]
     >,
     rebuildMix = true,
   ) =>
@@ -268,6 +275,10 @@ export const api = {
         body: JSON.stringify({ stems, rebuild_mix: rebuildMix }),
       },
     ),
+  alignToScript: (projectId: string) =>
+    request<{ project: Project }>(`/projects/${projectId}/alignments/align-script`, {
+      method: "POST",
+    }),
   sunoStatus: () =>
     request<{
       ok: boolean;

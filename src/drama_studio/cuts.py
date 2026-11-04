@@ -118,10 +118,13 @@ def remap_removed_cuts(
 def normalize_alignment(
     alignment: AlignmentResult | None, takes: list[Take]
 ) -> AlignmentResult | None:
-    """Fill legacy take_id=None / id / position_s with sensible values.
+    """Fill legacy take_id=None / id without inventing timeline positions.
 
-    Makes old projects readable without mutating audio: pure in-memory fixup
-    applied on load. Callers persist via store.save when they mutate further.
+    Position is global (script order: Viktoria 1, Andreas 1, Grandmother 1,
+    Viktoria 2, ...) so a per-stem cursor would stack every stem at 0 and
+    overlap. Leave ``position_s`` as None here — mixer/frontend derive
+    script order for None. Use :func:`layout_script_order` to materialize
+    script order into explicit positions.
     """
     if alignment is None:
         return alignment
@@ -130,30 +133,27 @@ def normalize_alignment(
         fallback = takes[0]
     if fallback is None:
         return alignment
-    PAUSE = 0.5
-    cursor = 0.0
     for entry in alignment.lines:
         if entry.take_id is None:
             entry.take_id = fallback.id
         if not entry.id:
             entry.id = entry.line_id
-        if entry.position_s is None:
-            entry.position_s = round(cursor, 3)
-        dur = max(0.0, (entry.end_s or 0) - (entry.start_s or 0))
-        cursor += dur + PAUSE
     return alignment
 
 
 def seed_positions(alignment: AlignmentResult, pause_s: float = 0.5) -> None:
-    """Set position_s cumulatively from cut durations (legacy seed)."""
-    cursor = 0.0
+    """Ensure segment ids; positions stay None for script-order derivation.
+
+    Older code seeded a per-stem cursor from 0, which stacked every stem at
+    0 (Viktoria 1, Andreas 1 and Grandmother 1 all overlapping) instead of
+    interleaving in script order. New code leaves ``position_s`` untouched —
+    mixer/frontend derive script order for None. Call
+    :func:`layout_script_order` on the project to write explicit script-order
+    positions.
+    """
     for entry in alignment.lines:
         if entry.id is None or not entry.id:
             entry.id = entry.line_id
-        if entry.position_s is None:
-            entry.position_s = round(cursor, 3)
-        dur = max(0.0, (entry.end_s or 0) - (entry.start_s or 0))
-        cursor = entry.position_s + dur + pause_s
 
 
 def pick_selected_take(takes: list[Take], selected_take_id: str | None) -> Take | None:
@@ -168,3 +168,52 @@ def pick_selected_take(takes: list[Take], selected_take_id: str | None) -> Take 
     if flagged is not None:
         return flagged
     return takes[0]
+
+
+def layout_script_order(
+    project,
+    *,
+    overwrite_positions: bool = False,
+) -> None:
+    """Materialize script-order positions into every alignment.
+
+    Walk ``project.script.iter_lines()`` (Viktoria 1, Andreas 1, Grandmother
+    1, Viktoria 2, ...), advance a global cursor by each cut's duration plus
+    ``settings.pause_ms`` (plus ``scene_gap_ms`` on a scene change), and
+    write ``position_s`` on the matching aligned line. With
+    ``overwrite_positions=False`` (default) user-moved sections (explicit
+    positions) are kept — use True for "Align to script" which re-sorts
+    everything. Lines without a cut contribute no duration (gap only when
+    the scene changes). Unknown line ids are ignored.
+    """
+    pause = project.settings.pause_ms / 1000.0
+    scene_gap = project.settings.scene_gap_ms / 1000.0
+
+    # Index segments by line id; multiple segments per line share the first
+    # one's slot (matching mixer.py line_starts) and stack in order.
+    by_line: dict[str, list[tuple[AlignedLine, "object"]]] = {}
+    for alignment in project.alignments.values():
+        for seg in alignment.lines:
+            by_line.setdefault(seg.line_id, []).append((seg, alignment))
+
+    cursor = 0.0
+    prev_scene: int | None = None
+    for line in project.script.iter_lines():
+        if prev_scene is not None and line.scene != prev_scene:
+            cursor += scene_gap
+        segments = by_line.get(line.id, [])
+        line_cursor = cursor
+        for seg, _alignment in segments:
+            if overwrite_positions or seg.position_s is None:
+                seg.position_s = round(line_cursor, 3)
+            dur = max(0.0, (seg.end_s or 0) - (seg.start_s or 0))
+            line_cursor += dur
+        cursor = line_cursor
+        if segments:
+            cursor += pause
+        prev_scene = line.scene
+    # Ensure every segment has an id (legacy "" from old saves).
+    for alignment in project.alignments.values():
+        for seg in alignment.lines:
+            if not seg.id:
+                seg.id = seg.line_id

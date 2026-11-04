@@ -1,13 +1,18 @@
 ---
-title: Cut board cue lanes
-tags: [cut, cues, sfx, music, multitrack, webaudio]
+title: Cut board cue lanes & region effects
+tags: [cut, cues, sfx, music, multitrack, webaudio, effects, fade, speed, pitch, reverb, dereverb]
 sourceRefs:
   - web/src/audio/cues.ts
   - web/src/audio/syncEngine.ts
+  - web/src/audio/timeline.ts
   - web/src/components/MultiTrackEditor.tsx
   - web/src/pages/ProjectPage.tsx
   - src/drama_studio/api.py
-lastReviewed: 2026-11-03
+  - src/drama_studio/audio.py
+  - src/drama_studio/mixer.py
+  - src/drama_studio/models.py
+  - src/drama_studio/cuts.py
+lastReviewed: 2026-11-04
 ---
 
 # Cut board cue lanes
@@ -26,6 +31,21 @@ start + `offset_s`; one-shots run for their source length; beds/music run to
 the end of the anchored scene (loop repeats the source, non-loop stops at the
 shorter of source rest and scene rest). Everything clips to the dialogue
 timeline. Unknown/missing sources use a 1.5 s placeholder width.
+
+## Per-region effects (Suno Studio-style)
+
+Every cut region carries seven effects, neutral by default so old saves render
+unchanged (gain, fade in/out, speed, pitch, reverb, dereverb). Full field
+table, DSP chain order, preview-vs-mix and persistence details live in
+[[concepts/cut-region-effects]].
+
+## Script-order alignment
+
+`cuts.layout_script_order()` walks the script interleaving speakers
+(Viktoria 1, Andreas 1, Grandmother 1, Viktoria 2, …) with `pause_ms` /
+scene gaps, writing `position_s`. `POST …/alignments/align-script` exposes
+it; mixer falls back to it when `position_s` is `None`. LMB body-drag moves a
+selected section (`position_s`); edge drag trims; `Alt`+drag slips the window.
 
 ## Playback
 
@@ -49,6 +69,9 @@ per-cue audition plays one span with `onlyStemId` on its lane.
   file is not indexed on this machine (demo SFX missing from `~/Sounds`).
   Covered by `test_cue_patch_keeps_missing_sfx_id`.
 - Delete is two-click (arm → confirm) and refreshes the project.
+- `ProjectPage`'s save handlers now return their promises (no `void`
+  wrapper), so the toolbar keeps showing `Saving…` and dirty flags until the
+  PATCH and mix rebuild finish. Failures keep the edits dirty for a retry.
 
 ## Verification notes
 

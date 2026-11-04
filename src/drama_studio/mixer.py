@@ -90,10 +90,35 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
     lines = project.script.iter_lines()
     line_by_id = {line.id: line for line in lines}
 
+    # Legacy alignments store position_s=None for "script order". Older
+    # builds seeded a per-stem cursor from 0 so every stem's first line sat
+    # at 0 (overlap). Derive the correct global script-order cursor here:
+    # Viktoria 1, Andreas 1, Grandmother 1, Viktoria 2, etc.
+    _script_positions: dict[str, float] = {}
+    if project.alignments and any(
+        seg.position_s is None
+        for alignment in project.alignments.values()
+        for seg in alignment.lines
+    ):
+        from .cuts import layout_script_order
+
+        # Work on a copy to avoid mutating the stored project mid-mix.
+        import copy
+
+        _project_copy = copy.deepcopy(project)
+        layout_script_order(_project_copy, overwrite_positions=False)
+        for alignment in _project_copy.alignments.values():
+            for seg in alignment.lines:
+                if seg.position_s is not None:
+                    _script_positions.setdefault(seg.line_id, seg.position_s)
+
     line_starts: dict[str, float] = {}
     scene_end: dict[int, float] = {}
     # Freeform: placement comes from alignment segments when available.
-    segments: list[tuple[str, str, Path, float]] = []  # (seg_id, line_id, path, position)
+    # Each entry: (seg_id, line_id, path, position, effects-dict).
+    # Effects carry per-region fade/volume/speed/pitch/reverb/dereverb.
+    from .audio import apply_region_effects
+    segments: list[tuple[str, str, Path, float, dict | None]] = []
     if project.alignments:
         for alignment in project.alignments.values():
             for seg in alignment.lines:
@@ -104,8 +129,21 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
                     alt = project_dir / "lines" / f"{seg.line_id}.wav"
                     if alt.exists():
                         clip_path = alt
-                pos = seg.position_s if seg.position_s is not None else 0.0
-                segments.append((seg_id, seg.line_id, clip_path, float(pos)))
+                pos = seg.position_s
+                if pos is None:
+                    pos = _script_positions.get(seg.line_id)
+                if pos is None:
+                    pos = 0.0
+                fx = {
+                    "gain_db": float(seg.gain_db or 0.0),
+                    "fade_in_s": float(seg.fade_in_s or 0.0),
+                    "fade_out_s": float(seg.fade_out_s or 0.0),
+                    "speed": float(seg.speed or 1.0),
+                    "pitch_cents": int(seg.pitch_cents or 0),
+                    "reverb_mix": float(seg.reverb_mix or 0.0),
+                    "dereverb": bool(seg.dereverb),
+                }
+                segments.append((seg_id, seg.line_id, clip_path, float(pos), fx))
     else:
         # Legacy: script order + cut durations.
         timeline = 0.0
@@ -120,35 +158,49 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
             else:
                 duration = 0.0
                 warnings.append(f"missing line clip for {line.id} ({line.speaker})")
-            segments.append((line.id, line.id, clip_path, timeline))
+            segments.append((line.id, line.id, clip_path, timeline, None))
             timeline += duration + pause
             previous_scene = line.scene
 
     # line_starts: first segment position per line; scene_end: max end per scene.
-    for seg_id, line_id, clip_path, pos in segments:
-        if line_id not in line_starts or pos < line_starts[line_id]:
-            line_starts[line_id] = pos
+    # Stagger same-line segments left-to-right so sub-clips don't overlap
+    # (legacy aligned lines for one line share a position).
+    _seen_lines: dict[str, float] = {}
+    placed: list[tuple[str, str, Path, float, dict | None]] = []
+    for seg_id, line_id, clip_path, pos, fx in segments:
         line = line_by_id.get(line_id)
-        scene = line.scene if line else None
+        rate = max(0.1, float((fx or {}).get("speed", 1.0) or 1.0))
         dur = 0.0
         if clip_path.exists():
             try:
                 info = sf.info(str(clip_path))
-                dur = float(info.frames) / float(info.samplerate)
+                dur = (float(info.frames) / float(info.samplerate)) / rate
             except Exception:
                 dur = 0.0
         else:
             warnings.append(f"missing line clip for {line_id} ({line.speaker if line else ''})")
+        # For segments beyond the first for this line, shift by the running
+        # cursor of previous segments (they belong adjacent, not overlapped).
+        seg_pos = pos
+        if line_id in _seen_lines:
+            seg_pos = max(pos, _seen_lines[line_id])
+        _seen_lines[line_id] = seg_pos + dur
+        placed.append((seg_id, line_id, clip_path, seg_pos, fx))
+        if line_id not in line_starts or seg_pos < line_starts[line_id]:
+            line_starts[line_id] = seg_pos
+        scene = line.scene if line else None
         if scene is not None:
-            scene_end[scene] = max(scene_end.get(scene, 0.0), pos + dur)
+            scene_end[scene] = max(scene_end.get(scene, 0.0), seg_pos + dur)
+    segments = placed
 
     max_end = 0.0
-    for seg_id, line_id, clip_path, pos in segments:
+    for seg_id, line_id, clip_path, pos, fx in segments:
+        rate = max(0.1, float((fx or {}).get("speed", 1.0) or 1.0))
         dur = 0.0
         if clip_path.exists():
             try:
                 info = sf.info(str(clip_path))
-                dur = float(info.frames) / float(info.samplerate)
+                dur = (float(info.frames) / float(info.samplerate)) / rate
             except Exception:
                 dur = 0.0
         max_end = max(max_end, pos + dur)
@@ -159,10 +211,24 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
 
     # Place every segment clip at its (freeform) position.
     seen_paths: set[Path] = set()
-    for seg_id, line_id, clip_path, pos in segments:
+    for seg_id, line_id, clip_path, pos, fx in segments:
         if not clip_path.exists():
             continue
         clip = _load_audio(clip_path)
+        if fx:
+            try:
+                clip = apply_region_effects(
+                    clip, SR,
+                    gain_db=float(fx.get("gain_db", 0.0)),
+                    fade_in_s=float(fx.get("fade_in_s", 0.0)),
+                    fade_out_s=float(fx.get("fade_out_s", 0.0)),
+                    speed=float(fx.get("speed", 1.0)),
+                    pitch_cents=int(fx.get("pitch_cents", 0)),
+                    reverb_mix=float(fx.get("reverb_mix", 0.0)),
+                    dereverb=bool(fx.get("dereverb", False)),
+                )
+            except Exception as exc:
+                warnings.append(f"region effects failed for {line_id}: {exc}")
         _place(dialogue, clip, pos)
     dialogue = _highpass(dialogue, 80.0)
 
@@ -265,7 +331,7 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
         mp3=mp3_path,
         duration_s=round(total_s, 2),
         loudness_target=f"{target} LUFS",
-        line_count=len({lid for (_sid, lid, cp, _p) in segments if cp.exists()}),
+        line_count=len({lid for (_sid, lid, cp, _p, _fx) in segments if cp.exists()}),
         cue_count=cue_count,
         warnings=warnings,
     )

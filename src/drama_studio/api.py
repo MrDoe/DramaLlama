@@ -215,6 +215,14 @@ class CutUpdate(BaseModel):
     end_s: float = Field(gt=0)
     # Freeform global timeline start. None => seed from cut durations.
     position_s: float | None = None
+    # Per-region effects (neutral defaults keep old saves unchanged).
+    gain_db: float = Field(default=0.0, ge=-48, le=12)
+    fade_in_s: float = Field(default=0.0, ge=0, le=10)
+    fade_out_s: float = Field(default=0.0, ge=0, le=10)
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    pitch_cents: int = Field(default=0, ge=-1200, le=1200)
+    reverb_mix: float = Field(default=0.0, ge=0, le=1)
+    dereverb: bool = False
 
 
 class AlignmentPatch(BaseModel):
@@ -1022,11 +1030,6 @@ def create_app(
                 seg_id = f"{seg_id}__{i}"
             fname = safe_filename(seg_id)
             write_mono(out_dir / f"{fname}.wav", segment, sr)
-            pos = cut.position_s
-            if pos is None:
-                # Seed from cut durations cumulatively is done by caller;
-                # default 0 here.
-                pos = 0.0
             new_lines.append(
                 AlignedLine(
                     id=seg_id,
@@ -1034,7 +1037,20 @@ def create_app(
                     take_id=take.id,
                     start_s=round(cut.start_s, 3),
                     end_s=round(cut.end_s, 3),
-                    position_s=round(float(pos), 3),
+                    # None = derive from script order after the whole
+                    # alignment is known (see layout_script_order below).
+                    position_s=(
+                        round(float(cut.position_s), 3)
+                        if cut.position_s is not None
+                        else None
+                    ),
+                    gain_db=float(cut.gain_db),
+                    fade_in_s=float(cut.fade_in_s),
+                    fade_out_s=float(cut.fade_out_s),
+                    speed=float(cut.speed),
+                    pitch_cents=int(cut.pitch_cents),
+                    reverb_mix=float(cut.reverb_mix),
+                    dereverb=bool(cut.dereverb),
                     confidence=1.0,
                     fallback=False,
                 )
@@ -1042,6 +1058,11 @@ def create_app(
         alignment.lines = new_lines
         alignment.aligner = "manual"
         project.alignments[stem_id] = alignment
+        # Legacy/UI payloads may omit position_s; fill those from the global
+        # script order instead of stacking every stem at 0.
+        from .cuts import layout_script_order
+
+        layout_script_order(project, overwrite_positions=False)
         project.mix_stale = True
         project = store.save(project)
 
@@ -1159,7 +1180,6 @@ def create_app(
                         i += 1
                     seg_id = f"{seg_id}__{i}"
                 write_mono(out_dir / f"{safe_filename(seg_id)}.wav", segment, sr)
-                pos = cut.position_s if cut.position_s is not None else 0.0
                 new_lines.append(
                     AlignedLine(
                         id=seg_id,
@@ -1167,7 +1187,20 @@ def create_app(
                         take_id=take.id,
                         start_s=round(cut.start_s, 3),
                         end_s=round(cut.end_s, 3),
-                        position_s=round(float(pos), 3),
+                        # None = derive from script order after every stem
+                        # in this batch has been assigned.
+                        position_s=(
+                            round(float(cut.position_s), 3)
+                            if cut.position_s is not None
+                            else None
+                        ),
+                        gain_db=float(cut.gain_db),
+                        fade_in_s=float(cut.fade_in_s),
+                        fade_out_s=float(cut.fade_out_s),
+                        speed=float(cut.speed),
+                        pitch_cents=int(cut.pitch_cents),
+                        reverb_mix=float(cut.reverb_mix),
+                        dereverb=bool(cut.dereverb),
                         confidence=1.0,
                         fallback=False,
                     )
@@ -1176,6 +1209,10 @@ def create_app(
             alignment.aligner = "manual"
             project.alignments[stem_id] = alignment
             alignments[stem_id] = alignment
+        # Fill omitted positions from global script order (never stack at 0).
+        from .cuts import layout_script_order
+
+        layout_script_order(project, overwrite_positions=False)
         project.mix_stale = True
         project = store.save(project)
 
@@ -1195,6 +1232,24 @@ def create_app(
                 for stem_id, alignment in alignments.items()
             },
         }
+
+    @app.post("/api/projects/{project_id}/alignments/align-script")
+    def align_project_to_script(project_id: str) -> dict[str, Any]:
+        """Re-sort every cut according to its appearance in the main script.
+
+        Walks the script (Viktoria 1, Andreas 1, Grandmother 1, Viktoria 2,
+        ...) advancing a global cursor by cut length + pause (+ scene gap on
+        scene change) and writes ``position_s`` on each segment. This is the
+        repair for legacy per-stem-seeded overlaps and the Cut board's
+        "Align to script" action. Marks the mix stale.
+        """
+        from .cuts import layout_script_order
+
+        project = project_or_404(project_id)
+        layout_script_order(project, overwrite_positions=True)
+        project.mix_stale = True
+        project = store.save(project)
+        return {"project": project.model_dump(mode="json")}
 
     @app.post("/api/projects/{project_id}/characters/{speaker}/reference", status_code=202)
     def design_character_reference(

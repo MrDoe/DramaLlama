@@ -199,6 +199,13 @@ export interface AlignedLine {
   start_s: number;
   end_s: number;
   position_s?: number | null;
+  gain_db?: number;
+  fade_in_s?: number;
+  fade_out_s?: number;
+  speed?: number;
+  pitch_cents?: number;
+  reverb_mix?: number;
+  dereverb?: boolean;
   confidence?: number | null;
   fallback: boolean;
 }

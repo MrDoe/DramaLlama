@@ -28,6 +28,14 @@ export interface ScheduleSegment {
   gain?: number;
   /** Repeat the buffer until `localEnd` (music and bed cues). */
   loop?: boolean;
+  /** Per-region effects (Cut board). Preview mirrors the mix chain. */
+  gainDb?: number;
+  fadeInS?: number;
+  fadeOutS?: number;
+  speed?: number;
+  pitchCents?: number;
+  reverbMix?: number;
+  dereverb?: boolean;
 }
 
 const PEAK_COUNT = 8000;
@@ -62,6 +70,10 @@ export class SyncEngine {
   /** Cap decoded buffers; the board can reference many generations + cues. */
   private maxTracks = 24;
 
+  private convolver: ConvolverNode | null = null;
+
+  private wetGain: GainNode | null = null;
+
   muted = new Set<string>();
   solo = new Set<string>();
   volumes = new Map<string, number>();
@@ -77,6 +89,24 @@ export class SyncEngine {
       this.master.connect(this.ctx.destination);
     }
     return this.ctx;
+  }
+
+  private reverbIR(): AudioBuffer | null {
+    const ctx = this.ctx;
+    if (!ctx) return null;
+    const sr = ctx.sampleRate;
+    const len = Math.floor(sr * 0.35);
+    const buf = ctx.createBuffer(1, len, sr);
+    const ch = buf.getChannelData(0);
+    let seed = 7;
+    const rnd = () => {
+      seed = (seed * 16807) % 2147483647;
+      return (seed / 2147483647) * 2 - 1;
+    };
+    for (let i = 0; i < len; i++) {
+      ch[i] = rnd() * Math.exp(-6 * (i / len)) * 0.6;
+    }
+    return buf;
   }
 
   async resume(): Promise<void> {
@@ -204,6 +234,16 @@ export class SyncEngine {
     const t0 = ctx.currentTime + 0.03;
     let started = 0;
 
+    // Shared reverb bus (built on demand when any segment wants wet).
+    if (!this.convolver && segments.some((s) => (s.reverbMix ?? 0) > 0)) {
+      this.convolver = ctx.createConvolver();
+      this.convolver.buffer = this.reverbIR();
+      this.wetGain = ctx.createGain();
+      this.wetGain.gain.value = 1.0;
+      this.convolver.connect(this.wetGain);
+      this.wetGain.connect(this.master!);
+    }
+
     for (const seg of segments) {
       if (this.onlyStem && seg.stemId !== this.onlyStem) continue;
       const gain = this.ensureGain(seg.stemId);
@@ -212,22 +252,70 @@ export class SyncEngine {
       if (!buf) continue;
       this.lastUsed.set(seg.takeId, Date.now());
 
+      // Slot length in global seconds stays end-start; with rate!=1 the
+      // drawn slot should already reflect duration/rate (timeline does that).
       const localEnd = seg.loop ? seg.localEnd : Math.min(seg.localEnd, buf.duration);
-      const localFrom = Math.max(0, seg.localStart) + Math.max(0, fromGlobal - seg.start);
-      const remaining = localEnd - localFrom;
-      if (remaining <= 0.005) continue;
+      const globalSpan = Math.max(0.001, seg.end - seg.start);
+      const localSpan = Math.max(0.001, localEnd - Math.max(0, seg.localStart));
+      const timelineRate = localSpan / globalSpan; // ≈ speed when slot rebuilt
+      const srcRate = seg.speed && seg.speed !== 1 ? seg.speed : timelineRate;
+      const localFrom = Math.max(0, seg.localStart) + Math.max(0, fromGlobal - seg.start) * srcRate;
+      const remainingLocal = localEnd - localFrom;
+      if (remainingLocal <= 0.005) continue;
+      const remainingGlobal = remainingLocal / srcRate;
+      if (remainingGlobal <= 0.005) continue;
 
       const when = t0 + Math.max(0, seg.start - fromGlobal);
       const src = ctx.createBufferSource();
       src.buffer = buf;
-      let out: AudioNode = gain;
-      if (seg.gain != null && seg.gain !== 1) {
-        const clipGain = ctx.createGain();
-        clipGain.gain.value = Math.max(0, seg.gain);
-        clipGain.connect(gain);
-        out = clipGain;
+      src.playbackRate.value = srcRate;
+
+      // Pitch (±cents) can't be true-converted without an offline render;
+      // playbackRate already shifts pitch with speed (fast = chipmunk).
+      // For pitch-only, apply a modest playbackRate tweak and accept the
+      // duration change (mix render does the flat resample pair).
+      const pitch = seg.pitchCents ?? 0;
+      if (pitch && !seg.speed) {
+        const factor = Math.pow(2, pitch / 1200);
+        src.playbackRate.value = factor;
+        // Keep slot length credible by nudging the end later is out of scope.
       }
-      src.connect(out);
+
+      // Chain: clip gain (dB) → fades (linear ramps) → track gain → reverb.
+      const clipGain = ctx.createGain();
+      const fadeGain = ctx.createGain();
+      const linGain = seg.gain != null ? Math.max(0, seg.gain) : 1;
+      const dbGain = 10 ** ((seg.gainDb ?? 0) / 20);
+      clipGain.gain.value = Math.max(0, linGain * dbGain);
+      fadeGain.gain.value = 1.0;
+      const fi = Math.max(0, seg.fadeInS ?? 0);
+      const fo = Math.max(0, seg.fadeOutS ?? 0);
+      const durGlobal = remainingGlobal;
+      const fadeInGlobal = Math.min(durGlobal, fi / srcRate);
+      const fadeOutGlobal = Math.min(durGlobal, fo / srcRate);
+      fadeGain.gain.setValueAtTime(0.0001, when);
+      if (fadeInGlobal > 0.001) {
+        fadeGain.gain.exponentialRampToValueAtTime(1.0, when + fadeInGlobal);
+      } else {
+        fadeGain.gain.setValueAtTime(1.0, when);
+      }
+      const outEnd = when + durGlobal;
+      if (fadeOutGlobal > 0.001) {
+        fadeGain.gain.setValueAtTime(1.0, Math.max(when, outEnd - fadeOutGlobal));
+        fadeGain.gain.exponentialRampToValueAtTime(0.0001, outEnd);
+      }
+      src.connect(clipGain);
+      clipGain.connect(fadeGain);
+      fadeGain.connect(gain);
+      const wet = Math.max(0, Math.min(1, seg.reverbMix ?? 0));
+      if (wet > 0 && this.convolver && this.wetGain) {
+        const send = ctx.createGain();
+        send.gain.value = wet;
+        fadeGain.connect(send);
+        send.connect(this.convolver);
+      }
+      // Dereverb has no live WebAudio equivalent — preview plays original
+      // (the mix render does the STFT dereverb). Mix render is source of truth.
       if (seg.loop && buf.duration > 0) {
         src.loop = true;
         src.loopStart = 0;
@@ -235,7 +323,7 @@ export class SyncEngine {
       }
       const offset =
         seg.loop && buf.duration > 0 ? localFrom % buf.duration : localFrom;
-      src.start(when, offset, remaining);
+      src.start(when, offset, remainingGlobal);
       this.sources.push(src);
       started++;
     }

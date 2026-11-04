@@ -374,3 +374,60 @@ indexed here (regression test `test_cue_patch_keeps_missing_sfx_id`). Verified
 live in Firefox on `was-wir-begraben-haben-7a3f9c` (lanes, inspector, save
 roundtrip, delete-arm, audition no-crash; project values restored). 244 tests
 green, web build green. See [[concepts/cut-cues-lanes]].
+
+## [2026-11-03] ingest | render-error-dialog concept
+
+Created the missing [[concepts/render-error-dialog]] page (referenced by
+[[concepts/suno-turnstile-captcha]] but never created). Documents the
+ErrorDialog modal, actionable last-error-line extraction, captcha hint,
+Re-check verification resuming a paused batch, and the Details modal.
+Added to index.md.
+
+## [2026-11-03] ingest | cut-region-effects concept
+
+Created [[concepts/cut-region-effects]] documenting the in-progress per-region
+DSP (gain/fade/speed/pitch/reverb/dereverb): field table, apply_region_effects
+order, preview-vs-mix, persistence. Marked in-progress for preview/inspector.
+Added to index.md.
+
+## [2026-11-04] update | Cut editor region effects wired
+
+Per-region fade/speed/pitch/reverb/dereverb + volume now render in the mixer via `audio.apply_region_effects` (speed shortens slot duration). Fixed 5-tuple unpacking in `build_mix` loops and deduped `CutUpdate` to a single effects block. Updated [[concepts/cut-cues-lanes]] and [[concepts/cut-region-effects]]. 247 pytest green, web build green; Firefox verify pending.
+
+## [2026-11-04] update | Cut-board wiki sanitized
+
+Updated [[concepts/cut-region-effects]] to reflect completion (backend DSP + model +
+API + mixer + SyncEngine preview + inspector; 247 pytest + web build green;
+Firefox verified). Trimmed the duplicated effects table in
+[[concepts/cut-cues-lanes]] to a summary + link. Refreshed
+[[concepts/cut-board-multitrack]] cross-refs and lastReviewed. No shutdown.
+
+## [2026-11-04] verify | Cut effects + drag/align live, save race fixed
+
+Firefox run on scratch project `wiki-cut-fx-test-1a2b3c`:
+- Align-to-script re-sorted all three stems into strictly increasing global
+  positions (0, 25.93, 39.65, …), removing the legacy per-stem overlap at 0.
+- LMB body drag moved `s1-02` 25.93 → 47.1 → 68.27 s; Save-all roundtrip
+  ~5.75 s ended with `mix_stale: false`.
+- Inspector set +6 dB, fades 0.3/0.4 s, speed 150 %, pitch −300 ¢, reverb 40 %,
+  dereverb on; all persisted and the mix rebuilt (~6.3 s). Inspector Play
+  toggled to Stop with no error.
+- Fixed a real save race: `ProjectPage` wrapped save handlers in `void`, so
+  dirty state cleared before the PATCH finished. Handlers now return promises,
+  rethrow after `setError`, and `MultiTrackEditor` keeps stems dirty on
+  failure. Documented in [[concepts/cut-region-effects]] and
+  [[concepts/cut-cues-lanes]].
+- Local gemma4 (`gemma-4-12b-uncensored` on llama.cpp :8080) correctly heard
+  added reverb and the quieter/faded clip in A/B excerpts; its speed A/B
+  answer was wrong, but duration 8.0 s → 4.44 s verifies numerically.
+Scratch project and temp audio removed; pytest + web build re-run before commit.
+
+## [2026-11-04] fix | Pitch was a no-op; now a phase-vocoder shift
+
+The "down-resample then up-resample" pitch pair inverted itself and left the
+frequency unchanged (verified: 220 Hz stayed 220 Hz at ±700 ¢). Replaced with
+`librosa.effects.pitch_shift` (duration-preserving), lazily imported and
+warning-suppressed; minimal installs without the `tts` extra leave pitch
+unchanged instead of failing the mix. Added a frequency regression test:
+220 Hz +700 ¢ → 329.5 Hz with unchanged length. Updated
+[[concepts/cut-region-effects]].

@@ -9,6 +9,13 @@ export interface Cut {
   end_s: number;
   /** Freeform global timeline start. */
   position_s?: number;
+  gain_db?: number;
+  fade_in_s?: number;
+  fade_out_s?: number;
+  speed?: number;
+  pitch_cents?: number;
+  reverb_mix?: number;
+  dereverb?: boolean;
 }
 
 /** Mixer tail, mirrors `TAIL_S` in `src/drama_studio/mixer.py`. */
@@ -34,11 +41,12 @@ export interface Timeline {
 /**
  * Lay every line at its source-script position on the shared timeline.
  *
- * Mirrors `mixer.py::build_mix`: script order, `pause_ms` between lines,
- * `scene_gap_ms` on scene change, clip duration = cut length, plus `TAIL_S`.
- * The mixer reads the durations from the cut line clips on disk; the editor
- * uses the same cut lengths before they are saved, so trimming updates the
- * layout exactly like the next mix rebuild will.
+ * Mirrors `mixer.py::build_mix` + `cuts.layout_script_order`: script order
+ * (Viktoria 1, Andreas 1, Grandmother 1, Viktoria 2, ...), `pause_ms` between
+ * lines, `scene_gap_ms` on scene change, clip duration = cut length, plus
+ * `TAIL_S`. Explicit `position_s` (user-moved sections) always wins — the
+ * legacy "any freeform position suppresses all scene gaps" global flag is
+ * gone, so moving one clip no longer drops every gap.
  */
 export function computeTimeline(
   project: Project,
@@ -47,6 +55,8 @@ export function computeTimeline(
   const cutByLine = new Map<string, { stemId: string; cut: Cut }>();
   for (const stem of project.stems) {
     for (const cut of cutsByStem[stem.id] ?? []) {
+      // Last segment wins for the line slot; segments stack below would
+      // overlap, so the editor draws only the primary segment per line.
       cutByLine.set(cut.line_id, { stemId: stem.id, cut });
     }
   }
@@ -60,17 +70,16 @@ export function computeTimeline(
   for (const scene of project.script.scenes) {
     for (const line of scene.lines) {
       if (prevScene !== null && line.scene !== prevScene) {
-        // scene gap only in legacy mode; in freeform positions are explicit
-        if (![...cutByLine.values()].some((e) => e.cut.position_s != null)) {
-          t += gap;
-        }
+        t += gap;
       }
       const entry = cutByLine.get(line.id);
       const localStart =
         entry && Number.isFinite(entry.cut.start_s) ? Math.max(0, entry.cut.start_s) : 0;
       const localEnd =
         entry && Number.isFinite(entry.cut.end_s) ? Math.max(0, entry.cut.end_s) : 0;
-      const duration = entry && localEnd > localStart ? localEnd - localStart : 0;
+      const rawDuration = entry && localEnd > localStart ? localEnd - localStart : 0;
+      const speed = entry?.cut.speed && entry.cut.speed > 0 ? entry.cut.speed : 1;
+      const duration = rawDuration / speed;
       const freeform =
         entry != null && entry.cut.position_s != null;
       const start = freeform
@@ -101,4 +110,18 @@ export function computeTimeline(
   }
   const total = Math.max(maxEnd, t) + TAIL_S;
   return { slots, total };
+}
+
+/**
+ * Speed-adjusted slot length for a cut (mirrors mixer resample pair:
+ * speed compresses duration, pitch keeps duration).
+ */
+export function effectDuration(rawDuration: number, cut: Partial<Cut>): number {
+  const speed = cut.speed && cut.speed > 0 ? cut.speed : 1;
+  return rawDuration / speed;
+}
+
+/** Timeline slot end after per-region speed (pitch preserves duration). */
+export function slotEndWithEffects(start: number, rawDuration: number, cut: Partial<Cut>): number {
+  return start + effectDuration(rawDuration, cut);
 }

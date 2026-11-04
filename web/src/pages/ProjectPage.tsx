@@ -2370,6 +2370,7 @@ export function ProjectPage() {
         setProject(result.project);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Could not save cuts");
+        throw reason;
       }
     },
     [project],
@@ -2388,6 +2389,7 @@ export function ProjectPage() {
         setProject(result.project);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Could not save cuts");
+        throw reason;
       }
     },
     [project],
@@ -2880,10 +2882,10 @@ export function ProjectPage() {
       ) : activeStep === "cut" ? (
         <MultiTrackEditor
           project={project}
-          onSaveCuts={(stem, cuts) => void saveCuts(stem, cuts)}
-          onSaveAll={(stems) => void saveAllCuts(stems)}
-          onSaveCues={(cueList) => void saveCues(cueList)}
-          onDeleteCue={(cue) => void deleteCue(cue)}
+          onSaveCuts={(stem, cuts) => saveCuts(stem, cuts)}
+          onSaveAll={(stems) => saveAllCuts(stems)}
+          onSaveCues={(cueList) => saveCues(cueList)}
+          onDeleteCue={(cue) => deleteCue(cue)}
           onRefresh={() => void refreshProject()}
         />
       ) : activeStep === "stems" ? (

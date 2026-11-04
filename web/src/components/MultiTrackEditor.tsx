@@ -26,22 +26,8 @@ import { formatDuration, speakerStyle } from "../utils";
 
 interface Props {
   project: Project;
-  onSaveCuts: (
-    stem: Stem,
-    cuts: {
-      line_id: string;
-      take_id?: string | null;
-      start_s: number;
-      end_s: number;
-    }[],
-    rebuildMix?: boolean,
-  ) => void | Promise<void>;
-  onSaveAll?: (
-    stems: Record<
-      string,
-      { line_id: string; take_id?: string | null; start_s: number; end_s: number }[]
-    >,
-  ) => void | Promise<void>;
+  onSaveCuts: (stem: Stem, cuts: Cut[], rebuildMix?: boolean) => void | Promise<void>;
+  onSaveAll?: (stems: Record<string, Cut[]>) => void | Promise<void>;
   onSaveCues?: (cues: Cue[]) => void | Promise<void>;
   onDeleteCue?: (cue: Cue) => void | Promise<void>;
   onRefresh: () => void;
@@ -98,13 +84,17 @@ const clamp = (lo: number, hi: number, v: number) => Math.max(lo, Math.min(hi, v
 interface DragState {
   stemId: string;
   idx: number;
-  mode: "trim-start" | "trim-end" | "move";
+  mode: "trim-start" | "trim-end" | "slip" | "move";
   /** Global slot start when the drag began (stable while trimming). */
   anchorGlobal: number;
   /** Local take time under the cursor when the drag began. */
   grabLocal: number;
+  /** Global time under the cursor when the drag began (for move). */
+  grabGlobal: number;
   origStart: number;
   origEnd: number;
+  /** Global position before the drag (for move). */
+  origPosition: number;
 }
 
 interface CueDragState {
@@ -159,6 +149,13 @@ export function MultiTrackEditor({
             start_s: l.start_s,
             end_s: l.end_s,
             position_s: l.position_s ?? undefined,
+            gain_db: l.gain_db ?? 0,
+            fade_in_s: l.fade_in_s ?? 0,
+            fade_out_s: l.fade_out_s ?? 0,
+            speed: l.speed ?? 1,
+            pitch_cents: l.pitch_cents ?? 0,
+            reverb_mix: l.reverb_mix ?? 0,
+            dereverb: l.dereverb ?? false,
           }))
         : stem.line_ids.map((id) => ({
             line_id: id,
@@ -169,6 +166,14 @@ export function MultiTrackEditor({
     }
     return m;
   }, [project]);
+
+  const updateCutEffect = (stemId: string, lineId: string, patch: Partial<Cut>) => {
+    const cuts = (pending[stemId] ?? []).map((c) => ({ ...c }));
+    const idx = cuts.findIndex((c) => c.line_id === lineId);
+    if (idx < 0) return;
+    cuts[idx] = { ...cuts[idx], ...patch };
+    commitCuts(stemId, cuts);
+  };
 
   const [pending, setPending] = useState<Record<string, Cut[]>>(savedCuts);
   const [cues, setCues] = useState<Cue[]>(project.cues);
@@ -327,6 +332,13 @@ export function MultiTrackEditor({
           localEnd: cut.end_s,
           start: slot.start,
           end: slot.end,
+          gainDb: cut.gain_db ?? 0,
+          fadeInS: cut.fade_in_s ?? 0,
+          fadeOutS: cut.fade_out_s ?? 0,
+          speed: cut.speed ?? 1,
+          pitchCents: cut.pitch_cents ?? 0,
+          reverbMix: cut.reverb_mix ?? 0,
+          dereverb: cut.dereverb ?? false,
         });
       }
     }
@@ -1197,8 +1209,10 @@ export function MultiTrackEditor({
         mode: edge.edge,
         anchorGlobal: slot.start,
         grabLocal: cut.start_s + (globalT - slot.start),
+        grabGlobal: globalT,
         origStart: cut.start_s,
         origEnd: cut.end_s,
+        origPosition: slot.start,
       };
       setSelected({ stemId, lineId: cut.line_id });
       return;
@@ -1213,30 +1227,35 @@ export function MultiTrackEditor({
     const dur = takeDurationOf(takeByIdFor(stem, cut?.take_id));
     const slot = region ? slots.get(region) : null;
     if (region && cut && dur > 0 && slot) {
-      if (e.altKey) {
-        // Alt-drag: slip the cut window inside the take (old behavior).
+      if (e.altKey || e.ctrlKey || e.metaKey) {
+        // Alt/Ctrl-drag: slip the cut window inside the take (DAW slip).
         dragRef.current = {
           stemId,
           idx,
-          mode: "move",
+          mode: "slip",
           anchorGlobal: slot.start,
           grabLocal: cut.start_s + (globalT - slot.start),
+          grabGlobal: globalT,
           origStart: cut.start_s,
           origEnd: cut.end_s,
+          origPosition: slot.start,
         };
         setSelected({ stemId, lineId: region });
         return;
       }
-      // Plain LMB drag: select a sub-range inside the clip.
-      selectionRef.current = {
+      // Plain LMB drag (Suno Studio style): move the section on the timeline
+      // (position_s). The local cut window stays intact.
+      dragRef.current = {
         stemId,
-        lineId: region,
-        segId: cut.id ?? cut.line_id,
-        anchorGlobal: globalT,
-        clipStart: slot.start,
-        clipEnd: slot.end,
+        idx,
+        mode: "move",
+        anchorGlobal: slot.start,
+        grabLocal: cut.start_s + (globalT - slot.start),
+        grabGlobal: globalT,
+        origStart: cut.start_s,
+        origEnd: cut.end_s,
+        origPosition: slot.start,
       };
-      setSelection({ stemId, lineId: region, segId: cut.id ?? cut.line_id, start: globalT, end: globalT });
       setSelected({ stemId, lineId: region });
       return;
     }
@@ -1247,15 +1266,6 @@ export function MultiTrackEditor({
 
   const onTrackMouseMove = (e: React.MouseEvent, stemId: string) => {
     const canvas = e.currentTarget as HTMLCanvasElement;
-    const sel = selectionRef.current;
-    if (sel && sel.stemId === stemId) {
-      const g = clamp(sel.clipStart, sel.clipEnd, toGlobal(canvas, e.clientX));
-      const s = Math.min(sel.anchorGlobal, g);
-      const en = Math.max(sel.anchorGlobal, g);
-      setSelection({ stemId, lineId: sel.lineId, segId: sel.segId, start: s, end: en });
-      canvas.style.cursor = "text";
-      return;
-    }
     const drag = dragRef.current;
     if (!drag || drag.stemId !== stemId) {
       if (!drag) {
@@ -1265,26 +1275,25 @@ export function MultiTrackEditor({
           return;
         }
         const region = findRegion(stemId, toGlobal(canvas, e.clientX));
-        const isSelBody =
-          region && selected?.stemId === stemId && selected.lineId === region;
-        canvas.style.cursor = isSelBody || region ? "move" : "default";
+        canvas.style.cursor = region ? "move" : "default";
       }
       return;
     }
-    const local = drag.origStart + (toGlobal(canvas, e.clientX) - drag.anchorGlobal);
+    const globalT = toGlobal(canvas, e.clientX);
     const cuts = (pending[stemId] ?? []).map((c) => ({ ...c }));
     const cut = cuts[drag.idx];
     if (!cut) return;
     const stem = stemById.get(stemId) ?? null;
     const dur = takeDurationOf(takeByIdFor(stem, cut.take_id));
     if (dur <= 0) return;
+    const local = drag.origStart + (globalT - drag.anchorGlobal);
     if (drag.mode === "trim-start") {
       cut.start_s = round2(clamp(0, cut.end_s - 0.05, local));
       canvas.style.cursor = "ew-resize";
     } else if (drag.mode === "trim-end") {
       cut.end_s = round2(clamp(cut.start_s + 0.05, dur, local));
       canvas.style.cursor = "ew-resize";
-    } else {
+    } else if (drag.mode === "slip") {
       const len = drag.origEnd - drag.origStart;
       const shiftMin = -drag.origStart;
       const shiftMax = dur - drag.origEnd;
@@ -1292,6 +1301,11 @@ export function MultiTrackEditor({
       cut.start_s = round2(drag.origStart + shift);
       cut.end_s = round2(drag.origStart + shift + len);
       canvas.style.cursor = "move";
+    } else {
+      // move: Suno-Studio-style position drag — slot start follows cursor.
+      const delta = globalT - drag.grabGlobal;
+      cut.position_s = round2(Math.max(0, drag.origPosition + delta));
+      canvas.style.cursor = "grabbing";
     }
     commitCuts(stemId, cuts);
   };
@@ -1414,6 +1428,8 @@ export function MultiTrackEditor({
       try {
         await onSaveCuts(stem, pending[stem.id] ?? []);
         setDirty((p) => ({ ...p, [stem.id]: false }));
+      } catch {
+        // The page surfaces the error; keep the stem dirty so the user can retry.
       } finally {
         setSaving((p) => ({ ...p, [stem.id]: false }));
       }
@@ -1478,6 +1494,8 @@ export function MultiTrackEditor({
           setSavingCues(false);
         }
       }
+    } catch {
+      // The page surfaces the error; dirty flags stay set for a retry.
     } finally {
       setSavingAll(false);
     }
@@ -1519,6 +1537,13 @@ export function MultiTrackEditor({
             localEnd: cut.end_s,
             start: slot.start,
             end: slot.end,
+            gainDb: cut.gain_db ?? 0,
+            fadeInS: cut.fade_in_s ?? 0,
+            fadeOutS: cut.fade_out_s ?? 0,
+            speed: cut.speed ?? 1,
+            pitchCents: cut.pitch_cents ?? 0,
+            reverbMix: cut.reverb_mix ?? 0,
+            dereverb: cut.dereverb ?? false,
           },
         ],
         { onlyStemId: stemId },
@@ -1614,6 +1639,24 @@ export function MultiTrackEditor({
   const selCueSpan = selCue != null ? cueSpans.find((item) => item.cue.id === selCue.id) ?? null : null;
   const selCueMissing = selCue != null ? Boolean(cueAudio[selCue.sfx_id]?.missing) : false;
 
+  const [alignState, setAlignState] = useState<"idle" | "running">("idle");
+  const [alignError, setAlignError] = useState<string | null>(null);
+  const alignToScript = useCallback(async () => {
+    if (alignState !== "idle") return;
+    setAlignState("running");
+    setAlignError(null);
+    try {
+      await api.alignToScript(project.id);
+      await onRefresh();
+    } catch (reason) {
+      setAlignError(
+        reason instanceof Error ? reason.message : "Could not align to script",
+      );
+    } finally {
+      setAlignState("idle");
+    }
+  }, [alignState, project.id, onRefresh]);
+
   let lastScene: number | null = null;
 
   return (
@@ -1625,12 +1668,26 @@ export function MultiTrackEditor({
             Cut board
           </h2>
           <p className="panel-sub">
-            Every line sits at its source-script position on the shared timeline — the same order
-            and spacing the mix uses. Drag edges to trim, drag a region body to slip the audio
-            inside it.
+            Cuts follow the script order (Viktoria 1, Andreas 1, Grandmother 1,
+            Viktoria 2 …) — drag a clip to move its section, edges to trim,
+            Alt/Ctrl-drag to slip the audio inside. Align to script re-sorts.
           </p>
         </div>
         <div className="panel-actions">
+          <button
+            type="button"
+            className="button button-ghost button-sm"
+            onClick={() => void alignToScript()}
+            disabled={savingAll || savingCues || dirtyCount > 0 || alignState === "running"}
+            title={
+              dirtyCount > 0
+                ? "Save or discard your edits first — aligning would overwrite moved sections"
+                : "Re-sort all cuts by their appearance in the main script (Viktoria 1, Andreas 1, Grandmother 1, Viktoria 2, ...)"
+            }
+          >
+            {alignState === "running" ? <span className="spinner" /> : null}
+            Align to script
+          </button>
           <button type="button" className="button button-ghost button-sm" onClick={onRefresh}>
             Refresh
           </button>
@@ -1651,6 +1708,12 @@ export function MultiTrackEditor({
           </button>
         </div>
       </section>
+
+      {alignError ? (
+        <div className="render-error" role="alert">
+          {alignError}
+        </div>
+      ) : null}
 
       {missingTakes.length > 0 ? (
         <div className="render-error" role="alert">
@@ -1944,6 +2007,84 @@ export function MultiTrackEditor({
                   }}
                 />
               </label>
+              <label title="Per-region volume (-48..+12 dB)">
+                <span>volume</span>
+                <input
+                  type="range"
+                  min={-48}
+                  max={12}
+                  step={1}
+                  value={Math.round(selCut.gain_db ?? 0)}
+                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { gain_db: Number(e.target.value) })}
+                />
+                <span>{Math.round(selCut.gain_db ?? 0)} dB</span>
+              </label>
+              <label title="Fade-in seconds">
+                <span>fade in</span>
+                <input
+                  type="number"
+                  step="0.05"
+                  min={0}
+                  max={10}
+                  value={Number((selCut.fade_in_s ?? 0).toFixed(2))}
+                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { fade_in_s: Number(e.target.value) || 0 })}
+                />
+              </label>
+              <label title="Fade-out seconds">
+                <span>fade out</span>
+                <input
+                  type="number"
+                  step="0.05"
+                  min={0}
+                  max={10}
+                  value={Number((selCut.fade_out_s ?? 0).toFixed(2))}
+                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { fade_out_s: Number(e.target.value) || 0 })}
+                />
+              </label>
+              <label title="Playback speed (0.5 slow – 2.0 fast)">
+                <span>speed</span>
+                <input
+                  type="range"
+                  min={50}
+                  max={200}
+                  step={5}
+                  value={Math.round((selCut.speed ?? 1) * 100)}
+                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { speed: Number(e.target.value) / 100 })}
+                />
+                <span>{((selCut.speed ?? 1) * 100).toFixed(0)}%</span>
+              </label>
+              <label title="Pitch shift (-1200..+1200 cents)">
+                <span>pitch</span>
+                <input
+                  type="range"
+                  min={-1200}
+                  max={1200}
+                  step={50}
+                  value={selCut.pitch_cents ?? 0}
+                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { pitch_cents: Number(e.target.value) })}
+                />
+                <span>{selCut.pitch_cents ?? 0}¢</span>
+              </label>
+              <label title="Reverb wet amount (0 dry – 1 full wet)">
+                <span>reverb</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round((selCut.reverb_mix ?? 0) * 100)}
+                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { reverb_mix: Number(e.target.value) / 100 })}
+                />
+                <span>{Math.round((selCut.reverb_mix ?? 0) * 100)}%</span>
+              </label>
+              <label title="Remove room reverb (spectral subtraction)">
+                <span>dereverb</span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(selCut.dereverb)}
+                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { dereverb: e.target.checked })}
+                />
+              </label>
               <button
                 type="button"
                 className="button button-ghost button-sm"
@@ -2060,9 +2201,9 @@ export function MultiTrackEditor({
           </div>
         ) : (
           <p className="panel-sub mt-hint">
-            Regions follow the script order. Click one to select it, drag its body to slip the
-            audio inside the region, or edit start/end below. Click a music/SFX clip to edit its
-            anchor, offset and gain. Click empty space to seek.
+            Cuts follow the script order. Click a clip to select it, drag its body to move
+            the section, edges to trim, Alt/Ctrl-drag to slip the audio inside. Click a
+            music/SFX clip to edit its anchor, offset and gain. Click empty space to seek.
           </p>
         )}
       </div>

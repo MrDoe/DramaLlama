@@ -7,7 +7,7 @@ sourceRefs:
   - web/src/audio/syncEngine.ts
   - src/drama_studio/mixer.py
   - src/drama_studio/api.py
-lastReviewed: 2026-10-31
+lastReviewed: 2026-11-04
 ---
 
 # Multitrack Cut board
@@ -73,5 +73,7 @@ rules.
 ## Related
 
 - [[concepts/take-aware-cuts]]
+- [[concepts/cut-region-effects]]
+- [[concepts/cut-cues-lanes]]
 - [[concepts/script-to-stem-pipeline]]
 - [[concepts/sfx-library-and-mix]]

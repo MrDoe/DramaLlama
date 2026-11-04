@@ -8,6 +8,7 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[entities/drama-llama-mascot]] — llogo.png avatar assets, palette, rename boundaries.
 - [[concepts/script-to-stem-pipeline]] — paste → parse → stem → align.
 - [[concepts/cut-board-multitrack]] — shared Cut timeline, script-order clips, WebAudio transport.
+- [[concepts/cut-region-effects]] — per-region fade/speed/pitch/reverb/dereverb DSP and inspector.
 - [[concepts/cut-cues-lanes]] — Music/SFX cue lanes, inspector, save-all, unchanged-SFX rule.
 - [[concepts/take-aware-cuts]] — per-clip take selection, render append/dedupe, remap rules.
 - [[concepts/gpu-serialization]] — why Breeze, Chatterbox, Ollama and Whisper are scheduled carefully.
@@ -15,6 +16,7 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[entities/cuts-module]] — shared `cuts.py` domain (freeze/remap/validate).
 - [[concepts/sfx-library-and-mix]] — local SFX index, cue model, mix chain.
 - [[concepts/suno-turnstile-captcha]] — why Suno renders stall on Cloudflare Turnstile, and the fix plan.
+- [[concepts/render-error-dialog]] — actionable failure text, captcha hint, Re-check verification, batch pause/resume.
 - [[concepts/batch-render-and-captcha-recovery]] — sequential "render all", pause-on-captcha, recovery dialog.
 - [[concepts/suno-account-switch]] — stale identity cache after a Suno login change, and the fix.
 - [[concepts/gpu-optional-install]] — CPU-only installs, CUDA wheel channels, opt-in engines, size envelope.
