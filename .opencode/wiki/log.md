@@ -439,3 +439,14 @@ sections, align-to-script ordering, per-region effects, save-race fix and
 the pitch-shift fix. CI run 41921637900 green (installer tests, AppImage,
 Windows Setup, release upload); the GitHub release has all six assets and
 the AppImage checksum re-verified locally. v0.3.1 is the previous release.
+
+## [2026-11-05] release | v0.3.3 published
+
+Tag `v0.3.3` (release commit 0653cc5) ships cutting marked sections out of
+clips on the Cut board: Shift-drag inside a clip marks a section,
+Backspace/Delete (or the Cut-out button) removes it and splits the clip
+into adjacent head/tail segments, closing the gap like the next mix rebuild.
+Timeline, schedule, drawing, selection and inspector are per-segment now
+(slots keyed by `cut.id ?? line_id`, `lineStarts` for cue anchors, matching
+the mixer stagger), and batch Save-all accepts several cuts per line.
+Verified: web build green, full backend suite 256 passed (2 new split tests).
