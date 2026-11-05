@@ -20,7 +20,7 @@ import {
   type CueSpan,
 } from "../audio/cues";
 import { SyncEngine, type ScheduleSegment } from "../audio/syncEngine";
-import { computeTimeline, type Cut } from "../audio/timeline";
+import { computeTimeline, segIdOf, type Cut } from "../audio/timeline";
 import type { Cue, Project, Stem, Take } from "../types";
 import { formatDuration, speakerStyle } from "../utils";
 
@@ -167,9 +167,9 @@ export function MultiTrackEditor({
     return m;
   }, [project]);
 
-  const updateCutEffect = (stemId: string, lineId: string, patch: Partial<Cut>) => {
+  const updateCutEffect = (stemId: string, segId: string, patch: Partial<Cut>) => {
     const cuts = (pending[stemId] ?? []).map((c) => ({ ...c }));
-    const idx = cuts.findIndex((c) => c.line_id === lineId);
+    const idx = cuts.findIndex((c) => segIdOf(c) === segId);
     if (idx < 0) return;
     cuts[idx] = { ...cuts[idx], ...patch };
     commitCuts(stemId, cuts);
@@ -188,7 +188,7 @@ export function MultiTrackEditor({
   const [view, setView] = useState<{ start: number; end: number } | null>(null);
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [selected, setSelected] = useState<{ stemId: string; lineId: string } | null>(null);
+  const [selected, setSelected] = useState<{ stemId: string; segId: string } | null>(null);
   const [selection, setSelection] = useState<{
     stemId: string;
     lineId: string;
@@ -312,16 +312,19 @@ export function MultiTrackEditor({
     });
   }, [project.cues, cueDirty]);
 
-  // Source-script layout: every line sits at its mixer-compatible slot.
+  // Source-script layout: every segment sits at its mixer-compatible slot.
+  // Multiple segments per line stagger left-to-right (split clips stay
+  // adjacent), matching mixer.py `_seen_lines`.
   const timeline = useMemo(() => computeTimeline(project, pending), [project, pending]);
   const slots = timeline.slots;
+  const lineStarts = timeline.lineStarts;
   const total = timeline.total;
 
   const schedule = useMemo<ScheduleSegment[]>(() => {
     const segments: ScheduleSegment[] = [];
     for (const stem of project.stems) {
       for (const cut of pending[stem.id] ?? []) {
-        const slot = slots.get(cut.line_id);
+        const slot = slots.get(segIdOf(cut));
         if (!slot || slot.end <= slot.start) continue;
         const take = takeByIdFor(stem, cut.take_id);
         if (!take) continue;
@@ -354,8 +357,8 @@ export function MultiTrackEditor({
   }, [cueAudio]);
 
   const cueSpans = useMemo(
-    () => computeCueSpans(project, cues, slots, total, cueDurations),
-    [project, cues, slots, total, cueDurations],
+    () => computeCueSpans(project, cues, slots, total, cueDurations, lineStarts),
+    [project, cues, slots, total, cueDurations, lineStarts],
   );
 
   const cueSegments = useMemo<ScheduleSegment[]>(() => {
@@ -625,7 +628,7 @@ export function MultiTrackEditor({
     const end = v?.end ?? total;
     const center = (() => {
       if (!selected) return (start + end) / 2;
-      const slot = slots.get(selected.lineId);
+      const slot = slots.get(selected.segId);
       if (!slot) return (start + end) / 2;
       return (slot.start + slot.end) / 2;
     })();
@@ -651,7 +654,7 @@ export function MultiTrackEditor({
 
   const zoomToSelection = useCallback(() => {
     if (!selected) return;
-    const slot = slots.get(selected.lineId);
+    const slot = slots.get(selected.segId);
     if (!slot) return;
     const pad = Math.max(0.5, (slot.end - slot.start) * 0.5);
     setView({
@@ -899,11 +902,12 @@ export function MultiTrackEditor({
       const stem = stemById.get(stemId) ?? null;
       const mid = h / 2;
 
-      // Regions live at their source-script slots; waveform inside each region
+      // Regions live at their segment slots; waveform inside each region
       // is the cut window of its own take, mapped 1:1 into that slot.
+      // Split clips (cutting a marked section out) draw as adjacent segments.
       const cuts = pending[stemId] ?? [];
       cuts.forEach((cut, idx) => {
-        const slot = slots.get(cut.line_id);
+        const slot = slots.get(segIdOf(cut));
         if (!slot || slot.end <= slot.start) return;
         if (slot.end < start || slot.start > end) return;
         const take = takeByIdFor(stem, cut.take_id);
@@ -914,7 +918,7 @@ export function MultiTrackEditor({
         const x0 = toX(slot.start);
         const x1 = toX(slot.end);
         const wpx = Math.max(1, x1 - x0);
-        const isSel = selected?.stemId === stemId && selected.lineId === cut.line_id;
+        const isSel = selected?.stemId === stemId && selected.segId === segIdOf(cut);
 
         ctx.fillStyle = COLORS[(trackIdx + idx) % COLORS.length];
         ctx.fillRect(x0, 0, wpx, h);
@@ -957,7 +961,7 @@ export function MultiTrackEditor({
         if (
           selection &&
           selection.stemId === stemId &&
-          selection.lineId === cut.line_id
+          selection.segId === segIdOf(cut)
         ) {
           const sx0 = toX(Math.max(slot.start, selection.start));
           const sx1 = toX(Math.min(slot.end, selection.end));
@@ -1050,7 +1054,7 @@ export function MultiTrackEditor({
       const cuts = pending[stemId] ?? [];
       const x = clientX - rect.left;
       for (let i = 0; i < cuts.length; i++) {
-        const slot = slots.get(cuts[i].line_id);
+        const slot = slots.get(segIdOf(cuts[i]));
         if (!slot || slot.end <= slot.start) continue;
         const xs = toX(slot.start);
         const xe = toX(slot.end);
@@ -1065,10 +1069,10 @@ export function MultiTrackEditor({
   const findRegion = useCallback(
     (stemId: string, globalT: number) => {
       const cuts = pending[stemId] ?? [];
-      for (const c of cuts) {
-        const slot = slots.get(c.line_id);
+      for (let i = 0; i < cuts.length; i++) {
+        const slot = slots.get(segIdOf(cuts[i]));
         if (!slot || slot.end <= slot.start) continue;
-        if (globalT >= slot.start && globalT <= slot.end) return c.line_id;
+        if (globalT >= slot.start && globalT <= slot.end) return i;
       }
       return null;
     },
@@ -1158,7 +1162,7 @@ export function MultiTrackEditor({
       const prevDur = takeDurationOf(prev);
       const nextDur = takeDurationOf(next) || next.duration_s;
       const cuts = (pending[stem.id] ?? []).map((item) => ({ ...item }));
-      const idx = cuts.findIndex((item) => item.line_id === cut.line_id);
+      const idx = cuts.findIndex((item) => segIdOf(item) === segIdOf(cut));
       if (idx < 0) return;
       const cur = cuts[idx];
       let start = cur.start_s;
@@ -1201,7 +1205,8 @@ export function MultiTrackEditor({
     if (edge) {
       const cuts = pending[stemId] ?? [];
       const cut = cuts[edge.idx];
-      const slot = slots.get(cut.line_id);
+      if (!cut) return;
+      const slot = slots.get(segIdOf(cut));
       if (!slot) return;
       dragRef.current = {
         stemId,
@@ -1214,19 +1219,34 @@ export function MultiTrackEditor({
         origEnd: cut.end_s,
         origPosition: slot.start,
       };
-      setSelected({ stemId, lineId: cut.line_id });
+      setSelected({ stemId, segId: segIdOf(cut) });
       return;
     }
-    const region = findRegion(stemId, globalT);
+    const regionIdx = findRegion(stemId, globalT);
     const cuts = pending[stemId] ?? [];
-    const idx = region
-      ? cuts.findIndex((c) => c.line_id === region)
-      : -1;
+    const idx = regionIdx ?? -1;
     const cut = idx >= 0 ? cuts[idx] : null;
     const stem = stemById.get(stemId) ?? null;
     const dur = takeDurationOf(takeByIdFor(stem, cut?.take_id));
-    const slot = region ? slots.get(region) : null;
-    if (region && cut && dur > 0 && slot) {
+    const slot = cut ? (slots.get(segIdOf(cut)) ?? null) : null;
+    if (cut && dur > 0 && slot && e.shiftKey) {
+      // Shift-drag inside a clip: mark a section to cut out.
+      // Replaces any previous mark; Backspace/Delete (or the button) cuts it.
+      const segId = segIdOf(cut);
+      const s = clamp(slot.start, slot.end, globalT);
+      selectionRef.current = {
+        stemId,
+        lineId: cut.line_id,
+        segId,
+        anchorGlobal: s,
+        clipStart: slot.start,
+        clipEnd: slot.end,
+      };
+      setSelection({ stemId, lineId: cut.line_id, segId, start: s, end: s });
+      setSelected({ stemId, segId });
+      return;
+    }
+    if (cut && dur > 0 && slot) {
       if (e.altKey || e.ctrlKey || e.metaKey) {
         // Alt/Ctrl-drag: slip the cut window inside the take (DAW slip).
         dragRef.current = {
@@ -1240,7 +1260,7 @@ export function MultiTrackEditor({
           origEnd: cut.end_s,
           origPosition: slot.start,
         };
-        setSelected({ stemId, lineId: region });
+        setSelected({ stemId, segId: segIdOf(cut) });
         return;
       }
       // Plain LMB drag (Suno Studio style): move the section on the timeline
@@ -1256,26 +1276,43 @@ export function MultiTrackEditor({
         origEnd: cut.end_s,
         origPosition: slot.start,
       };
-      setSelected({ stemId, lineId: region });
+      setSelected({ stemId, segId: segIdOf(cut) });
       return;
     }
     // Empty space: LMB seeks the shared playhead.
     if (total > 0) seek(clamp(0, total, globalT));
-    setSelected(region ? { stemId, lineId: region } : null);
+    setSelected(null);
   };
 
   const onTrackMouseMove = (e: React.MouseEvent, stemId: string) => {
     const canvas = e.currentTarget as HTMLCanvasElement;
+    const marking = selectionRef.current;
+    if (marking && marking.stemId === stemId && !dragRef.current) {
+      // Shift-drag marking: extend the marked section, clamped to the clip.
+      const globalT = toGlobal(canvas, e.clientX);
+      const t = clamp(marking.clipStart, marking.clipEnd, globalT);
+      const s = Math.min(marking.anchorGlobal, t);
+      const en = Math.max(marking.anchorGlobal, t);
+      setSelection({
+        stemId: marking.stemId,
+        lineId: marking.lineId,
+        segId: marking.segId,
+        start: round2(s),
+        end: round2(en),
+      });
+      canvas.style.cursor = "text";
+      return;
+    }
     const drag = dragRef.current;
     if (!drag || drag.stemId !== stemId) {
-      if (!drag) {
+      if (!drag && !marking) {
         const edge = findEdge(stemId, canvas, e.clientX);
         if (edge) {
           canvas.style.cursor = "ew-resize";
           return;
         }
         const region = findRegion(stemId, toGlobal(canvas, e.clientX));
-        canvas.style.cursor = region ? "move" : "default";
+        canvas.style.cursor = region != null ? "move" : "default";
       }
       return;
     }
@@ -1313,7 +1350,10 @@ export function MultiTrackEditor({
   const onTrackMouseUp = () => {
     if (selectionRef.current) {
       const cur = selection;
-      if (!cur || Math.abs(cur.end - cur.start) < 0.05) {
+      if (cur && Math.abs(cur.end - cur.start) >= 0.05) {
+        // Keep the mark so Backspace/Delete (or the button) can cut it out.
+        // The ref only tracks the in-progress drag.
+      } else {
         setSelection(null);
       }
       selectionRef.current = null;
@@ -1326,73 +1366,88 @@ export function MultiTrackEditor({
     seek(clamp(0, total, toGlobal(e.currentTarget as HTMLCanvasElement, e.clientX)));
   };
 
+  /** Cut the marked section out of its clip: the clip splits into the kept
+   * head and tail, placed adjacent so the timeline (and the next mix) closes
+   * the gap. Marking the whole clip removes the segment entirely. */
+  const cutOutSelection = useCallback(() => {
+    if (!selection) return false;
+    const { stemId, lineId, segId, start, end } = selection;
+    const cuts = (pending[stemId] ?? []).map((c) => ({ ...c }));
+    const idx = cuts.findIndex((c) => segIdOf(c) === segId && c.line_id === lineId);
+    if (idx < 0) {
+      setSelection(null);
+      return false;
+    }
+    const cut = cuts[idx];
+    const slot = slots.get(segId);
+    if (!slot || slot.end <= slot.start) {
+      setSelection(null);
+      return false;
+    }
+    const dur = slot.end - slot.start;
+    const len = cut.end_s - cut.start_s;
+    if (len <= 0 || dur <= 0) {
+      setSelection(null);
+      return false;
+    }
+    // Map the global mark to local take times.
+    const localSelStart = cut.start_s + ((start - slot.start) / dur) * len;
+    const localSelEnd = cut.start_s + ((end - slot.start) / dur) * len;
+    const ls = Math.max(cut.start_s, Math.min(cut.end_s, localSelStart));
+    const le = Math.max(cut.start_s, Math.min(cut.end_s, localSelEnd));
+    if (le - ls < 0.01) {
+      setSelection(null);
+      return false;
+    }
+    const speed = cut.speed && cut.speed > 0 ? cut.speed : 1;
+    const keptHeadLen = ls - cut.start_s;
+    const newCuts: Cut[] = [];
+    // Kept head (when the mark does not start at the clip edge).
+    if (keptHeadLen >= 0.05) {
+      newCuts.push({
+        ...cut,
+        id: cut.id,
+        start_s: round2(cut.start_s),
+        end_s: round2(ls),
+        position_s: cut.position_s,
+      });
+    }
+    // Kept tail (when the mark does not end at the clip edge): placed
+    // adjacent to the head so no silence gap is left behind.
+    if (cut.end_s - le >= 0.05) {
+      const seg: Cut = {
+        ...cut,
+        id: `${cut.id ?? cut.line_id}__${Date.now()}`,
+        line_id: cut.line_id,
+        take_id: cut.take_id,
+        start_s: round2(le),
+        end_s: round2(cut.end_s),
+        position_s: (cut.position_s ?? slot.start) + keptHeadLen / speed,
+      };
+      newCuts.push(seg);
+    }
+    // newCuts empty = the mark covered the whole clip: drop the segment.
+    const replaced = [...cuts.slice(0, idx), ...newCuts, ...cuts.slice(idx + 1)];
+    commitCuts(stemId, replaced);
+    setSelection(null);
+    const kept = newCuts[0];
+    if (kept) setSelected({ stemId, segId: segIdOf(kept) });
+    else setSelected(null);
+    return true;
+  }, [selection, pending, slots, commitCuts]);
+
   const onCardKeyDown = (e: React.KeyboardEvent) => {
     const target = e.target as HTMLElement | null;
     if (target?.closest("input, select, textarea, button, a, [contenteditable='true']")) return;
-    if (e.key === "Backspace" && selection) {
+    if ((e.key === "Backspace" || e.key === "Delete") && selection) {
       e.preventDefault();
-      // Delete selected sub-range: split clip into two adjacent segments.
-      const { stemId, lineId, segId, start, end } = selection;
-      const cuts = (pending[stemId] ?? []).map((c) => ({ ...c }));
-      const idx = cuts.findIndex((c) => (c.id ?? c.line_id) === segId && c.line_id === lineId);
-      if (idx < 0) {
-        setSelection(null);
-        return;
-      }
-      const cut = cuts[idx];
-      const slot = slots.get(lineId);
-      if (!slot || slot.end <= slot.start) {
-        setSelection(null);
-        return;
-      }
-      const dur = slot.end - slot.start;
-      const len = cut.end_s - cut.start_s;
-      if (len <= 0 || dur <= 0) {
-        setSelection(null);
-        return;
-      }
-      // Map global selection to local take times.
-      const localSelStart = cut.start_s + ((start - slot.start) / dur) * len;
-      const localSelEnd = cut.start_s + ((end - slot.start) / dur) * len;
-      const ls = Math.max(cut.start_s, Math.min(cut.end_s, localSelStart));
-      const le = Math.max(cut.start_s, Math.min(cut.end_s, localSelEnd));
-      if (le - ls < 0.01) {
-        setSelection(null);
-        return;
-      }
-      const newCuts: Cut[] = [];
-      // segment before selection
-      if (ls - cut.start_s >= 0.05) {
-        newCuts.push({
-          ...cut,
-          id: cut.id,
-          start_s: round2(cut.start_s),
-          end_s: round2(ls),
-          position_s: cut.position_s,
-        });
-      }
-      // segment after selection: position adjacent to previous (no gap)
-      if (cut.end_s - le >= 0.05) {
-        const seg: Cut = {
-          ...cut,
-          id: `${cut.id ?? cut.line_id}__${Date.now()}`,
-          line_id: cut.line_id,
-          take_id: cut.take_id,
-          start_s: round2(le),
-          end_s: round2(cut.end_s),
-          position_s:
-            (cut.position_s ?? slot.start) + (ls - cut.start_s),
-        };
-        newCuts.push(seg);
-      }
-      // Replace the original segment with the new ones.
-      const replaced = [
-        ...cuts.slice(0, idx),
-        ...newCuts,
-        ...cuts.slice(idx + 1),
-      ];
-      commitCuts(stemId, replaced);
+      cutOutSelection();
+      return;
+    }
+    if (e.key === "Escape" && selection) {
+      e.preventDefault();
       setSelection(null);
+      selectionRef.current = null;
       return;
     }
     if (e.code !== "Space" && e.key !== " ") return;
@@ -1511,11 +1566,11 @@ export function MultiTrackEditor({
   };
 
   const playRegion = useCallback(
-    async (stemId: string, lineId: string) => {
-      const cut = (pending[stemId] ?? []).find((c) => c.line_id === lineId);
+    async (stemId: string, segId: string) => {
+      const cut = (pending[stemId] ?? []).find((c) => segIdOf(c) === segId);
       if (!cut) return;
       const aud = auditionRef.current;
-      if (aud && aud.stemId === stemId && aud.lineId === lineId && engine.playing) {
+      if (aud && aud.stemId === stemId && aud.lineId === segId && engine.playing) {
         engine.pause();
         auditionRef.current = null;
         setPlaying(false);
@@ -1523,10 +1578,10 @@ export function MultiTrackEditor({
         return;
       }
       await engine.resume();
-      const slot = slots.get(cut.line_id);
+      const slot = slots.get(segId);
       const take = takeByIdFor(stemById.get(stemId), cut.take_id);
       if (!slot || slot.end <= slot.start || !take) return;
-      auditionRef.current = { stemId, lineId, endGlobal: slot.end };
+      auditionRef.current = { stemId, lineId: segId, endGlobal: slot.end };
       engine.play(
         slot.start,
         [
@@ -1624,17 +1679,17 @@ export function MultiTrackEditor({
   const viewLabel = `${viewStart.toFixed(1)}–${viewEnd.toFixed(1)}s of ${total.toFixed(1)}s`;
   const selCut =
     selected != null
-      ? (pending[selected.stemId] ?? []).find((c) => c.line_id === selected.lineId) ?? null
+      ? (pending[selected.stemId] ?? []).find((c) => segIdOf(c) === selected.segId) ?? null
       : null;
   const selStem = selected != null ? tracks.find((t) => t.stem.id === selected.stemId)?.stem ?? null : null;
-  const selLine = selected != null ? lineById.get(selected.lineId) : undefined;
+  const selLine = selCut != null ? lineById.get(selCut.line_id) : undefined;
   const selTake = selStem ? takeByIdFor(selStem, selCut?.take_id) : null;
   const auditioning =
     auditionRef.current != null &&
     playing &&
     selected != null &&
     auditionRef.current.stemId === selected.stemId &&
-    auditionRef.current.lineId === selected.lineId;
+    auditionRef.current.lineId === selected.segId;
   const selCue = selectedCueId != null ? cues.find((cue) => cue.id === selectedCueId) ?? null : null;
   const selCueSpan = selCue != null ? cueSpans.find((item) => item.cue.id === selCue.id) ?? null : null;
   const selCueMissing = selCue != null ? Boolean(cueAudio[selCue.sfx_id]?.missing) : false;
@@ -1670,7 +1725,8 @@ export function MultiTrackEditor({
           <p className="panel-sub">
             Cuts follow the script order (Viktoria 1, Andreas 1, Grandmother 1,
             Viktoria 2 …) — drag a clip to move its section, edges to trim,
-            Alt/Ctrl-drag to slip the audio inside. Align to script re-sorts.
+            Alt/Ctrl-drag to slip the audio inside. Shift-drag marks a section;
+            Backspace/Delete cuts it out. Align to script re-sorts.
           </p>
         </div>
         <div className="panel-actions">
@@ -1986,7 +2042,7 @@ export function MultiTrackEditor({
                   value={Number(selCut.start_s.toFixed(2))}
                   onChange={(e) => {
                     const idx = (pending[selStem.id] ?? []).findIndex(
-                      (c) => c.line_id === selCut.line_id,
+                      (c) => segIdOf(c) === segIdOf(selCut),
                     );
                     if (idx >= 0) updateCut(selStem.id, idx, "start_s", Number(e.target.value));
                   }}
@@ -2001,7 +2057,7 @@ export function MultiTrackEditor({
                   value={Number(selCut.end_s.toFixed(2))}
                   onChange={(e) => {
                     const idx = (pending[selStem.id] ?? []).findIndex(
-                      (c) => c.line_id === selCut.line_id,
+                      (c) => segIdOf(c) === segIdOf(selCut),
                     );
                     if (idx >= 0) updateCut(selStem.id, idx, "end_s", Number(e.target.value));
                   }}
@@ -2015,7 +2071,7 @@ export function MultiTrackEditor({
                   max={12}
                   step={1}
                   value={Math.round(selCut.gain_db ?? 0)}
-                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { gain_db: Number(e.target.value) })}
+                  onChange={(e) => updateCutEffect(selStem.id, segIdOf(selCut), { gain_db: Number(e.target.value) })}
                 />
                 <span>{Math.round(selCut.gain_db ?? 0)} dB</span>
               </label>
@@ -2027,7 +2083,7 @@ export function MultiTrackEditor({
                   min={0}
                   max={10}
                   value={Number((selCut.fade_in_s ?? 0).toFixed(2))}
-                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { fade_in_s: Number(e.target.value) || 0 })}
+                  onChange={(e) => updateCutEffect(selStem.id, segIdOf(selCut), { fade_in_s: Number(e.target.value) || 0 })}
                 />
               </label>
               <label title="Fade-out seconds">
@@ -2038,7 +2094,7 @@ export function MultiTrackEditor({
                   min={0}
                   max={10}
                   value={Number((selCut.fade_out_s ?? 0).toFixed(2))}
-                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { fade_out_s: Number(e.target.value) || 0 })}
+                  onChange={(e) => updateCutEffect(selStem.id, segIdOf(selCut), { fade_out_s: Number(e.target.value) || 0 })}
                 />
               </label>
               <label title="Playback speed (0.5 slow – 2.0 fast)">
@@ -2049,7 +2105,7 @@ export function MultiTrackEditor({
                   max={200}
                   step={5}
                   value={Math.round((selCut.speed ?? 1) * 100)}
-                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { speed: Number(e.target.value) / 100 })}
+                  onChange={(e) => updateCutEffect(selStem.id, segIdOf(selCut), { speed: Number(e.target.value) / 100 })}
                 />
                 <span>{((selCut.speed ?? 1) * 100).toFixed(0)}%</span>
               </label>
@@ -2061,7 +2117,7 @@ export function MultiTrackEditor({
                   max={1200}
                   step={50}
                   value={selCut.pitch_cents ?? 0}
-                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { pitch_cents: Number(e.target.value) })}
+                  onChange={(e) => updateCutEffect(selStem.id, segIdOf(selCut), { pitch_cents: Number(e.target.value) })}
                 />
                 <span>{selCut.pitch_cents ?? 0}¢</span>
               </label>
@@ -2073,7 +2129,7 @@ export function MultiTrackEditor({
                   max={100}
                   step={5}
                   value={Math.round((selCut.reverb_mix ?? 0) * 100)}
-                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { reverb_mix: Number(e.target.value) / 100 })}
+                  onChange={(e) => updateCutEffect(selStem.id, segIdOf(selCut), { reverb_mix: Number(e.target.value) / 100 })}
                 />
                 <span>{Math.round((selCut.reverb_mix ?? 0) * 100)}%</span>
               </label>
@@ -2082,13 +2138,13 @@ export function MultiTrackEditor({
                 <input
                   type="checkbox"
                   checked={Boolean(selCut.dereverb)}
-                  onChange={(e) => updateCutEffect(selStem.id, selCut.line_id, { dereverb: e.target.checked })}
+                  onChange={(e) => updateCutEffect(selStem.id, segIdOf(selCut), { dereverb: e.target.checked })}
                 />
               </label>
               <button
                 type="button"
                 className="button button-ghost button-sm"
-                onClick={() => void playRegion(selStem.id, selCut.line_id)}
+                onClick={() => void playRegion(selStem.id, segIdOf(selCut))}
               >
                 {auditioning ? "Stop" : "Play"}
               </button>
@@ -2199,11 +2255,46 @@ export function MultiTrackEditor({
               {selCueMissing ? <span className="render-warn">SFX file missing.</span> : null}
             </div>
           </div>
+        ) : selection ? (
+          <div className="mt-selection">
+            <div className="mt-selection-head">
+              <strong>Marked section</strong>
+              <span className="mt-selection-text">
+                {selection.lineId} · {selection.start.toFixed(2)}–{selection.end.toFixed(2)}s
+                ({Math.max(0, selection.end - selection.start).toFixed(2)}s inside the clip)
+              </span>
+            </div>
+            <div className="mt-selection-controls">
+              <button
+                type="button"
+                className="button button-primary button-sm"
+                onClick={() => void cutOutSelection()}
+                title="Remove the marked section and close the gap (Backspace/Delete)"
+              >
+                <Scissors size={14} />
+                Cut out section
+              </button>
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => {
+                  setSelection(null);
+                  selectionRef.current = null;
+                }}
+                title="Clear the mark (Escape)"
+              >
+                Clear
+              </button>
+              <span className="panel-sub">Save all writes the split clips.</span>
+            </div>
+          </div>
         ) : (
           <p className="panel-sub mt-hint">
             Cuts follow the script order. Click a clip to select it, drag its body to move
-            the section, edges to trim, Alt/Ctrl-drag to slip the audio inside. Click a
-            music/SFX clip to edit its anchor, offset and gain. Click empty space to seek.
+            the section, edges to trim, Alt/Ctrl-drag to slip the audio inside.
+            Shift-drag inside a clip marks a section — Backspace/Delete cuts it out.
+            Click a music/SFX clip to edit its anchor, offset and gain. Click empty
+            space to seek.
           </p>
         )}
       </div>

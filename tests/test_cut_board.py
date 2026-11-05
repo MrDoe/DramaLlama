@@ -203,6 +203,69 @@ def test_alignment_omitted_position_follows_script_order(tmp_path):
     assert lines[line_b]["position_s"] == 1.0
 
 
+def test_batch_alignment_allows_split_segments_for_one_line(tmp_path):
+    """Cutting a marked section out of a clip saves as two adjacent segments.
+
+    The batch endpoint (Save-all) must accept several cuts for the same line
+    — the single-stem endpoint already does — and the mix must stagger them
+    left-to-right instead of overlapping.
+    """
+    _, client, project, stem, _ = _cut_project(tmp_path)
+    line_a = stem.line_ids[0]
+    response = client.patch(
+        f"/api/projects/{project['id']}/alignments",
+        json={
+            "stems": {
+                stem.id: [
+                    {
+                        "id": line_a,
+                        "line_id": line_a,
+                        "take_id": "take-a",
+                        "start_s": 0.0,
+                        "end_s": 0.3,
+                        "position_s": 0.0,
+                    },
+                    {
+                        "id": f"{line_a}__tail",
+                        "line_id": line_a,
+                        "take_id": "take-a",
+                        "start_s": 0.7,
+                        "end_s": 1.0,
+                        "position_s": 0.3,
+                    },
+                ]
+            },
+            "rebuild_mix": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    lines = response.json()["alignments"][stem.id]["lines"]
+    assert [line["line_id"] for line in lines] == [line_a, line_a]
+    assert lines[0]["position_s"] == 0.0
+    assert lines[1]["position_s"] == 0.3
+    assert response.json()["project"]["mix_stale"] is False
+
+
+def test_batch_alignment_rejects_duplicate_segment_ids(tmp_path):
+    _, client, project, stem, _ = _cut_project(tmp_path)
+    line_a = stem.line_ids[0]
+    response = client.patch(
+        f"/api/projects/{project['id']}/alignments",
+        json={
+            "stems": {
+                stem.id: [
+                    {"id": "seg", "line_id": line_a, "take_id": "take-a",
+                     "start_s": 0.0, "end_s": 0.3},
+                    {"id": "seg", "line_id": line_a, "take_id": "take-a",
+                     "start_s": 0.3, "end_s": 0.6},
+                ]
+            },
+            "rebuild_mix": False,
+        },
+    )
+    assert response.status_code == 400
+
+
 def test_region_effects_gain_fades_and_speed():
     sr = 24000
     data = np.ones(sr, dtype=np.float32)

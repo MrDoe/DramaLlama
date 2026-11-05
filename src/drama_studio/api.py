@@ -1110,18 +1110,23 @@ def create_app(
                 raise HTTPException(
                     status_code=409, detail=f"stem {stem_id} has no selected take"
                 )
-            seen: set[str] = set()
+            seen_ids: set[str] = set()
             for cut in cuts:
-                if cut.line_id in seen:
-                    raise HTTPException(
-                        status_code=400, detail=f"duplicate cut for {cut.line_id}"
-                    )
-                seen.add(cut.line_id)
                 if cut.line_id not in stem.line_ids:
                     raise HTTPException(
                         status_code=400,
                         detail=f"line {cut.line_id} does not belong to stem {stem_id}",
                     )
+                # Multiple segments per line are allowed (cutting a marked
+                # section out of a clip splits it in two); explicit segment
+                # ids must still be distinct.
+                seg_key = (cut.id or "").strip()
+                if seg_key:
+                    if seg_key in seen_ids:
+                        raise HTTPException(
+                            status_code=400, detail=f"duplicate segment {seg_key}"
+                        )
+                    seen_ids.add(seg_key)
             take_audio: dict[str, tuple[Any, int, float]] = {}
 
             def _take_for(cut: CutUpdate):

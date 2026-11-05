@@ -43,6 +43,7 @@ export function computeCueSpans(
   slots: Map<string, LineSlot>,
   total: number,
   sourceDurations: Record<string, number>,
+  lineStarts?: Map<string, number>,
 ): CueSpan[] {
   if (total <= 0) return [];
 
@@ -54,16 +55,29 @@ export function computeCueSpans(
   for (const scene of project.script.scenes) {
     let end = 0;
     for (const line of scene.lines) {
-      const slot = slots.get(line.id);
-      if (slot && slot.end > end) end = slot.end;
+      // Segments of one line stagger; the scene runs to the last sub-segment.
+      for (const slot of slots.values()) {
+        if (slot.lineId === line.id && slot.end > end) end = slot.end;
+      }
+      const ls = lineStarts?.get(line.id);
+      if (ls != null && ls > end) end = ls;
     }
     sceneEnd.set(scene.id, end);
   }
 
   const spans: CueSpan[] = [];
   for (const cue of cues) {
-    const slot = slots.get(cue.anchor_line_id);
-    const anchor = (slot?.start ?? 0) + cue.offset_s;
+    const anchorBase =
+      lineStarts?.get(cue.anchor_line_id) ??
+      (() => {
+        let first: number | null = null;
+        for (const slot of slots.values()) {
+          if (slot.lineId !== cue.anchor_line_id) continue;
+          if (first == null || slot.start < first) first = slot.start;
+        }
+        return first ?? 0;
+      })();
+    const anchor = anchorBase + cue.offset_s;
     const sourceDuration = Math.max(0, sourceDurations[cue.sfx_id] ?? 0);
     const unknown = sourceDuration <= 0;
     const fallback = unknown ? UNKNOWN_SOURCE_S : sourceDuration;
