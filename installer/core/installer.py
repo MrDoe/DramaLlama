@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import INSTALLER_VERSION
+from . import tls
 from .app_payload import install_payload, write_notices
 from .detect import SystemInfo
 from .engines import (
@@ -100,6 +101,7 @@ def run_install(
     *,
     repair: bool = False,
 ) -> InstallOutcome:
+    tls.configure()
     device = effective_device(selection, system)
     warnings = validate_selection(selection, pins, system)
     paths = selection.paths().ensure()
@@ -113,6 +115,12 @@ def run_install(
         f"{system.os_name}/{system.arch} | device={device} | prefix={paths.prefix}"
     )
     progress.log(f"install log: {log_path}")
+    progress.log(f"ca bundle: {tls.source()}")
+    if not tls.verified():
+        progress.log(
+            "warning: TLS certificate verification is disabled for installer "
+            "downloads; SHA-256 pins still protect the downloaded runtimes"
+        )
 
     # Before unpack, paths.app has no version yet; read it from the bundled
     # payload so the header and state are never "0.0.0".

@@ -1087,6 +1087,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--components")
     parser.add_argument("--accept-breeze-license", action="store_true")
     parser.add_argument("--allow-docker-install", action="store_true")
+    parser.add_argument("--insecure-tls", action="store_true")
     parser.add_argument("--yes", action="store_true")
     return parser
 

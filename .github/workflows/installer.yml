@@ -102,6 +102,33 @@ jobs:
           else
             python scripts/build_installer.py --target linux
           fi
+      - name: Check TLS on an Arch trust store
+        # The AppImage bundles the Ubuntu build host's OpenSSL, whose compiled-in
+        # CA paths do not exist on Arch/CachyOS. Run the artifact in an Arch
+        # container once with the system store and once with no store at all, to
+        # exercise both the probe and the no-verification fallback.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          appimages=(dist/*.AppImage)
+          if [ ${#appimages[@]} -eq 0 ]; then
+            echo "no AppImage built; skipping the Arch trust-store check"
+            exit 0
+          fi
+          docker run --rm -v "$PWD/dist:/dist:ro" archlinux:latest bash -c '
+            set -eo pipefail
+            pacman -Q ca-certificates >/dev/null 2>&1 ||
+              pacman -Sy --noconfirm ca-certificates >/dev/null 2>&1 || true
+            cp /dist/*.AppImage /tmp/setup.AppImage
+            chmod +x /tmp/setup.AppImage
+            echo "--- with the system trust store ---"
+            APPIMAGE_EXTRACT_AND_RUN=1 /tmp/setup.AppImage --headless --check-tls https://github.com | tee /tmp/check.txt
+            grep -q "verification: enabled" /tmp/check.txt
+            echo "--- without any trust store ---"
+            rm -rf /etc/ssl/certs /etc/ssl/cert.pem /etc/pki/tls/certs
+            APPIMAGE_EXTRACT_AND_RUN=1 /tmp/setup.AppImage --headless --check-tls https://github.com | tee /tmp/check.txt
+            grep -q "verification: disabled" /tmp/check.txt
+          '
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:

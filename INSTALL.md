@@ -36,21 +36,21 @@ protected your PC*; choose **More info → Run anyway** only after verifying the
 checksum. On Linux, make the AppImage executable and verify the checksum:
 
 ```bash
-chmod +x DramaLlama-0.3.3-x86_64.AppImage
-sha256sum -c DramaLlama-0.3.3-x86_64.AppImage.sha256
+chmod +x DramaLlama-0.3.4-x86_64.AppImage
+sha256sum -c DramaLlama-0.3.4-x86_64.AppImage.sha256
 ```
 
 On Windows PowerShell:
 
 ```powershell
-Get-FileHash .\DramaLlama-Setup-0.3.3.exe -Algorithm SHA256
+Get-FileHash .\DramaLlama-Setup-0.3.4.exe -Algorithm SHA256
 # compare with the .sha256 file
 ```
 
 If your desktop cannot run AppImages (missing FUSE), use:
 
 ```bash
-./DramaLlama-0.3.3-x86_64.AppImage --appimage-extract-and-run
+./DramaLlama-0.3.4-x86_64.AppImage --appimage-extract-and-run
 ```
 
 or install `libfuse2` / `fuse2` from your distribution.
@@ -206,7 +206,7 @@ From the app-wizard welcome page, or:
 ```bash
 # Linux
 ~/.local/share/drama-llama/bin/drama-llama --help   # lists app commands
-./DramaLlama-0.3.3-x86_64.AppImage --headless --uninstall --keep-data
+./DramaLlama-0.3.4-x86_64.AppImage --headless --uninstall --keep-data
 
 # Windows
 DramaLlama-Setup.exe --headless --uninstall --keep-data
@@ -248,6 +248,8 @@ Useful flags:
 | `--allow-docker-install`, `--yes` | allow elevated Docker installation |
 | `--json` | machine-readable result |
 | `--repair` | re-check and repair an existing install |
+| `--insecure-tls` | skip TLS verification for downloads (SHA-256 pins still apply) |
+| `--check-tls URL` | probe the CA store, test one HTTPS request and exit |
 
 Exit codes: `0` success, `1` install/verify failure, `2` invalid invocation,
 `130` cancelled.
@@ -298,6 +300,18 @@ Packaging files:
 **The installer stops on a checksum.** Delete the partial file under
 `<prefix>/cache/downloads` and run it again; downloads resume, but a corrupted
 file is discarded.
+
+**Downloads fail with `CERTIFICATE_VERIFY_FAILED` / "unable to get local issuer
+certificate".** The frozen Linux installer carries the build host's OpenSSL and
+does not always see the distribution's trust store (Arch/CachyOS, NixOS,
+Alpine). Current builds probe `/etc/ssl/cert.pem`,
+`/etc/ssl/certs/ca-certificates.crt`, the RHEL/SUSE equivalents and a valid
+`SSL_CERT_FILE`, then export the bundle they found. If none is usable,
+verification is disabled for the installer's own downloads; the pinned SHA-256
+hashes still protect the downloaded archives. Inspect the decision with
+`DramaLlama-Setup --headless --check-tls https://github.com`, point the
+installer at a bundle with `SSL_CERT_FILE=/path/to/ca-bundle.pem`, or force the
+fallback with `--insecure-tls`.
 
 **Breeze is missing from the engine list.** Check `~/code/breeze-tts` and
 `~/models/Breeze-TTS-2`, then run the installer with `--verify`. The engine

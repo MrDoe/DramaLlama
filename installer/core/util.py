@@ -31,6 +31,10 @@ class DownloadError(InstallerError):
     """A download failed after all retries."""
 
 
+class TlsError(InstallerError):
+    """TLS certificate verification failed; retrying cannot help."""
+
+
 class Cancelled(InstallerError):
     """The user cancelled the installation."""
 

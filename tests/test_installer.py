@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import ssl
 import sys
 import tarfile
+import types
+import urllib.error
 import zipfile
 from pathlib import Path
 
@@ -18,7 +22,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from installer.core import plan, state, verify
+import installer.core.download as download_module
+from installer.core import cli, plan, state, tls, verify
 from installer.core.detect import GpuInfo, SystemInfo, cuda_channel
 from installer.core.download import download, hf_url
 from installer.core.engines import DockerUnavailable, ensure_docker
@@ -41,6 +46,7 @@ from installer.core.util import (
     Cancelled,
     DownloadError,
     InstallerError,
+    TlsError,
     app_version,
     human_bytes,
     human_duration,
@@ -453,6 +459,143 @@ def test_progress_cancel_event() -> None:
     assert progress.cancelled()
     with pytest.raises(Cancelled):
         progress.check_cancelled()
+
+
+# --------------------------------------------------------------------------- tls
+
+TEST_CA_PEM = """-----BEGIN CERTIFICATE-----
+MIIDHzCCAgegAwIBAgIUDeqRRKiqvjihpDJ3dR9Uv/+yE5QwDQYJKoZIhvcNAQEL
+BQAwHjEcMBoGA1UEAwwTRHJhbWEgTGxhbWEgVGVzdCBDQTAgFw0yNjExMDUxOTA2
+NDJaGA8yMTI2MTAxMjE5MDY0MlowHjEcMBoGA1UEAwwTRHJhbWEgTGxhbWEgVGVz
+dCBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAJsvjY49uQxFLtgc
+mrRdafUE8EVE3xf8py0wGlMAg/FASUvAKeWvgRMds5WAYrl4a+ZlZt1O05KbbEkM
+/owPW0affhRwH9gES7qQQvdwVpWt3uG8BH9316M8/haBVDD+lfb9uzhGQ1TZpq8I
+zYH6JtsdAOKw0rDoLQRAiYspdpmnPMsdjBj+FFfFiZk4ilQJmyidDDXcplsp+vpn
+W4TtEwn4YeoNEcEOwJ4ns9IY7BCTIPt41NXnpiECkQqEXJY2gSu2M0557SW+WV/7
+cYt+N+0EYm8fTc2/LWHKDdvwS1VqpYiBtwBIWhBEeSYyZzIEpwhhObo2bPu4gpIY
+SvGTKUECAwEAAaNTMFEwHQYDVR0OBBYEFCjq9/AFskCrLbtQR3u2Ty+8iJjCMB8G
+A1UdIwQYMBaAFCjq9/AFskCrLbtQR3u2Ty+8iJjCMA8GA1UdEwEB/wQFMAMBAf8w
+DQYJKoZIhvcNAQELBQADggEBAC5kfIrXdy2yQUBcGSitfK2Nm8XcqlTRIbtOi7iK
+PF5vfByyZG3THyzGxMt3klhpg0a3VXS42yn+ITrNbcG3TbQICb88LQRdPFclKwmj
+YhVpLZgNHiOrC/B9FKCfi2Qmmlvzou4ct2Uen5GvmSIQ+KUf+1jzVElr0ZjK7DZL
+/nClj0iplkubRomVnr+2K+1IprTdvIkT/OWmOdrE8Xe6Z3GJ9qCeaiLdnoY0N1SP
+HzhZtB7L/bIkO3xJ6MUdJTfqDoIzseulIthWlJz18JWNrbMkR3sk57vayI7SFDCF
+hJjRcimbF8uFrQA1Hja3PCRVNcKshHZm5329x54gahVLBnM=
+-----END CERTIFICATE-----
+"""
+
+
+def _write_test_ca(path: Path) -> Path:
+    path.write_text(TEST_CA_PEM, encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def tls_state(monkeypatch):
+    """Isolate the cached trust-store decision and the environment it mutates."""
+    saved = {
+        key: os.environ.get(key)
+        for key in ("SSL_CERT_FILE", "SSL_CERT_DIR", tls.INSECURE_ENV)
+    }
+    monkeypatch.setattr(tls, "is_windows", lambda *_: False)
+    monkeypatch.setattr(tls, "CANDIDATE_FILES", ())
+    for key in saved:
+        monkeypatch.delenv(key, raising=False)
+    tls.reset()
+    yield monkeypatch
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    tls.reset()
+
+
+def test_tls_prefers_configured_bundle(tmp_path: Path, tls_state) -> None:
+    bundle = _write_test_ca(tmp_path / "ca.pem")
+    tls_state.setenv("SSL_CERT_FILE", str(bundle))
+    path, source = tls.discover()
+    assert path == bundle
+    assert "SSL_CERT_FILE" in source
+
+
+def test_tls_skips_empty_bundles(tmp_path: Path, tls_state) -> None:
+    empty = tmp_path / "empty.pem"
+    empty.write_text("", encoding="utf-8")
+    valid = _write_test_ca(tmp_path / "ca.pem")
+    tls_state.setattr(tls, "CANDIDATE_FILES", (str(empty), str(valid)))
+    assert tls.discover()[0] == valid
+
+
+def test_tls_exports_bundle_and_verifies(tmp_path: Path, tls_state) -> None:
+    bundle = _write_test_ca(tmp_path / "ca.pem")
+    tls_state.setattr(tls, "CANDIDATE_FILES", (str(bundle),))
+    assert tls.configure() == bundle
+    assert os.environ["SSL_CERT_FILE"] == str(bundle)
+    assert tls.verified()
+    context = tls.ssl_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname
+
+
+def test_tls_without_a_store_disables_verification(tls_state) -> None:
+    assert tls.configure() is None
+    assert not tls.verified()
+    context = tls.ssl_context()
+    assert context.verify_mode == ssl.CERT_NONE
+    assert not context.check_hostname
+
+
+def test_tls_insecure_flag_overrides_a_store(tmp_path: Path, tls_state) -> None:
+    bundle = _write_test_ca(tmp_path / "ca.pem")
+    tls_state.setattr(tls, "CANDIDATE_FILES", (str(bundle),))
+    assert tls.configure(insecure=True) == bundle
+    assert not tls.verified()
+    assert tls.ssl_context().verify_mode == ssl.CERT_NONE
+
+
+def test_tls_errors_are_not_retried(tmp_path: Path, tls_state) -> None:
+    bundle = _write_test_ca(tmp_path / "ca.pem")
+    tls_state.setattr(tls, "CANDIDATE_FILES", (str(bundle),))
+    tls.configure()
+    attempts: list[int] = []
+
+    class FailingOpener:
+        def open(self, *_args, **_kwargs):
+            attempts.append(1)
+            raise urllib.error.URLError(
+                ssl.SSLCertVerificationError(1, "certificate verify failed")
+            )
+
+    tls_state.setattr(tls, "opener", lambda: FailingOpener())
+    with pytest.raises(TlsError) as caught:
+        download("https://example.invalid/uv.tar.gz", tmp_path / "uv.tar.gz", retries=3)
+    assert len(attempts) == 1
+    assert "SSL_CERT_FILE" in str(caught.value)
+
+
+def test_download_still_retries_transient_errors(tmp_path: Path, tls_state) -> None:
+    attempts: list[int] = []
+
+    def failing_open(*_args, **_kwargs):
+        attempts.append(1)
+        raise urllib.error.URLError("connection reset")
+
+    tls_state.setattr(
+        tls, "opener", lambda: types.SimpleNamespace(open=failing_open)
+    )
+    tls_state.setattr(download_module, "_sleep", lambda *_args, **_kwargs: None)
+    with pytest.raises(DownloadError):
+        download("https://example.invalid/x", tmp_path / "x", retries=2)
+    assert len(attempts) == 2
+
+
+def test_cli_check_tls_reports_failure(
+    tls_state, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(tls, "check", lambda url: (False, f"failed {url}"))
+    assert cli.main(["--check-tls", "https://example.invalid"]) == 1
+    assert "failed https://example.invalid" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------- plan

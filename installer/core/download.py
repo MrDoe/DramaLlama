@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -10,17 +11,20 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
+from .. import INSTALLER_VERSION
+from . import tls
 from .progress import DownloadProgress
 from .util import (
     Cancelled,
     DownloadError,
     InstallerError,
+    TlsError,
     human_bytes,
     sha256_file,
     verify_file,
 )
 
-USER_AGENT = "DramaLlama-Installer/0.2 (+https://github.com/MrDoe/DramaLlama)"
+USER_AGENT = f"DramaLlama-Installer/{INSTALLER_VERSION}"
 RETRYABLE = (urllib.error.URLError, TimeoutError, ConnectionError, OSError)
 
 
@@ -101,6 +105,36 @@ def _sleep(seconds: float, cancel: Callable[[], bool] | None) -> None:
         time.sleep(0.1)
 
 
+def _is_certificate_error(exc: BaseException) -> bool:
+    """Whether ``exc`` (or its urllib reason/cause) is TLS verification failure."""
+    for item in (exc, getattr(exc, "reason", None), exc.__cause__):
+        if item is None:
+            continue
+        if isinstance(item, ssl.SSLCertVerificationError):
+            return True
+        if "CERTIFICATE_VERIFY_FAILED" in str(item):
+            return True
+    return False
+
+
+def _tls_error(url: str, exc: BaseException) -> TlsError:
+    reason = getattr(exc, "reason", exc)
+    lines = [
+        f"TLS certificate verification failed for {url}",
+        f"  reason: {reason}",
+        f"  CA bundle: {tls.source()}",
+    ]
+    if tls.verified():
+        lines += [
+            "  fix: point the installer at your CA bundle, for example",
+            "       SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt <installer>",
+            "       or skip verification for this run with --insecure-tls",
+        ]
+    else:
+        lines.append("  note: certificate verification was already disabled for this run")
+    return TlsError("\n".join(lines))
+
+
 def _download_once(
     url: str,
     target: Path,
@@ -119,13 +153,21 @@ def _download_once(
         headers["Range"] = f"bytes={resume}-"
     request = urllib.request.Request(url, headers=headers)
     try:
-        response = urllib.request.urlopen(request, timeout=timeout)
+        response = tls.opener().open(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
         if exc.code == 416 and part.is_file():
             if verify_file(part, size=size, sha256=sha256, cancel=cancel):
                 part.replace(target)
                 return
             part.unlink(missing_ok=True)
+        raise
+    except urllib.error.URLError as exc:
+        if _is_certificate_error(exc):
+            raise _tls_error(url, exc) from exc
+        raise
+    except ssl.SSLError as exc:
+        if _is_certificate_error(exc):
+            raise _tls_error(url, exc) from exc
         raise
 
     with response:
@@ -178,5 +220,10 @@ def _download_once(
 
 def download_text(url: str, *, timeout: float = 20.0) -> str:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="replace")
+    try:
+        with tls.opener().open(request, timeout=timeout) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        if _is_certificate_error(exc):
+            raise _tls_error(url, exc) from exc
+        raise

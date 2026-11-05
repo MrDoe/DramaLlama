@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import traceback
 from pathlib import Path
 
 from .. import INSTALLER_VERSION
+from . import tls
 from .detect import detect_system
 from .installer import InstallOutcome, plan_text, run_install
 from .paths import InstallPaths, load_pins, resolve_prefix
@@ -86,6 +88,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="allow an elevated Docker installation (also implied by --yes)",
     )
     parser.add_argument("--repair", action="store_true", help="re-check and repair an install")
+    parser.add_argument(
+        "--insecure-tls",
+        action="store_true",
+        help="skip TLS certificate verification for downloads (checksums still apply)",
+    )
+    parser.add_argument(
+        "--check-tls",
+        metavar="URL",
+        help="probe the host CA store, test URL and exit",
+    )
     parser.add_argument("--verify", action="store_true", help="verify an existing install")
     parser.add_argument("--uninstall", action="store_true", help="remove Drama Llama")
     parser.add_argument(
@@ -185,6 +197,15 @@ def _print_outcome(outcome: InstallOutcome, *, as_json: bool) -> None:
         print(f"Installation failed: {outcome.error}", file=sys.stderr)
 
 
+def _handle_check_tls(url: str, as_json: bool) -> int:
+    ok, report = tls.check(url)
+    if as_json:
+        print(json.dumps({"ok": ok, "report": report}, indent=2))
+    else:
+        print(report)
+    return 0 if ok else 1
+
+
 def _handle_uninstall(args: argparse.Namespace, as_json: bool) -> int:
     prefix = resolve_prefix(args.prefix)
     paths = InstallPaths.for_prefix(prefix)
@@ -250,6 +271,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     as_json = bool(args.json)
+    if args.insecure_tls:
+        os.environ[tls.INSECURE_ENV] = "1"
+    if args.check_tls:
+        return _handle_check_tls(args.check_tls, as_json)
     try:
         if args.uninstall:
             return _handle_uninstall(args, as_json)

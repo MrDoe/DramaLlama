@@ -27,6 +27,7 @@ CONSOLE_FLAGS = {
     "--uninstall",
     "--json",
     "--repair",
+    "--check-tls",
     "--help",
     "-h",
     "--version",
@@ -95,6 +96,15 @@ def _xcb_cursor_available() -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     ensure_console_streams()
+    args = list(sys.argv[1:] if argv is None else argv)
+    # Resolve the trust store before anything can issue an HTTPS request. The
+    # frozen AppImage carries the build host's OpenSSL paths, which do not
+    # exist on Arch/CachyOS, so this also installs the no-store fallback.
+    from installer.core import tls
+
+    if "--insecure-tls" in args:
+        os.environ[tls.INSECURE_ENV] = "1"
+    tls.configure()
     # Qt's native file dialogs pull in GTK/GVFS modules from the host, which
     # frequently mismatch the bundled glib and print scary (but harmless)
     # "undefined symbol" warnings. The wizard does not need them.
@@ -102,7 +112,6 @@ def main(argv: list[str] | None = None) -> int:
     # incompatible-module load we are trying to avoid.
     os.environ["GIO_EXTRA_MODULES"] = ""
     os.environ["GTK_MODULES"] = ""
-    args = list(sys.argv[1:] if argv is None else argv)
     if wants_gui(args):
         if not _qt_available():
             print(
