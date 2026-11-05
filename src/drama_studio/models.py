@@ -323,6 +323,8 @@ class AlignedLine(BaseModel):
     pitch_cents: int = 0  # -1200..+1200, phase-vocoder-ish via resample pair
     reverb_mix: float = 0.0  # 0..1 wet amount (convolver with noise IR)
     dereverb: bool = False  # STFT spectral-subtraction dereverb via audio.apply_region_effects
+    # False = clip disabled (dim + silent in the editor, keeps its slot timing).
+    enabled: bool = True
     confidence: float | None = None
     fallback: bool = False
 

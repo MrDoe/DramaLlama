@@ -246,6 +246,57 @@ def test_batch_alignment_allows_split_segments_for_one_line(tmp_path):
     assert response.json()["project"]["mix_stale"] is False
 
 
+def test_alignment_persists_enabled_flag(tmp_path):
+    """Suno-style disable survives a single-stem save; mix goes stale."""
+    app, client, project, stem, _ = _cut_project(tmp_path)
+    line_a = stem.line_ids[0]
+    response = client.patch(
+        f"/api/projects/{project['id']}/stems/{stem.id}/alignment",
+        json={
+            "cuts": [
+                {
+                    "line_id": line_a,
+                    "take_id": "take-a",
+                    "start_s": 0.0,
+                    "end_s": 0.5,
+                    "enabled": False,
+                }
+            ],
+            "rebuild_mix": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+    line = response.json()["alignment"]["lines"][0]
+    assert line["enabled"] is False
+    stored = app.state.store.get(project["id"]).alignments[stem.id].lines[0]
+    assert stored.enabled is False
+
+
+def test_batch_alignment_persists_enabled_flag(tmp_path):
+    _, client, project, stem, _ = _cut_project(tmp_path)
+    line_a = stem.line_ids[0]
+    response = client.patch(
+        f"/api/projects/{project['id']}/alignments",
+        json={
+            "stems": {
+                stem.id: [
+                    {
+                        "line_id": line_a,
+                        "take_id": "take-a",
+                        "start_s": 0.0,
+                        "end_s": 0.5,
+                        "enabled": False,
+                    }
+                ]
+            },
+            "rebuild_mix": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+    lines = response.json()["alignments"][stem.id]["lines"]
+    assert lines[0]["enabled"] is False
+
+
 def test_batch_alignment_rejects_duplicate_segment_ids(tmp_path):
     _, client, project, stem, _ = _cut_project(tmp_path)
     line_a = stem.line_ids[0]

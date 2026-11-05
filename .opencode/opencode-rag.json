@@ -147,7 +147,7 @@
     "cacheTtlMs": 600000
   },
   "description": {
-    "enabled": true,
+    "enabled": false,
     "think": false,
     "numCtx": 4096,
     "timeoutMs": 60000,
@@ -169,5 +169,9 @@
   "logging": {
     "level": "info",
     "logFilePath": "./.opencode/opencode-rag.log"
+  },
+  "memory": {
+    "autoInject": true,
+    "passiveCapture": true
   }
 }

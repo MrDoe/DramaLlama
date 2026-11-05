@@ -2,9 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   CaretLeft,
   CaretRight,
+  CornersOut,
   FloppyDisk,
-  MagnifyingGlassMinus,
-  MagnifyingGlassPlus,
   MusicNotes,
   Pause,
   Play,
@@ -21,7 +20,7 @@ import {
 } from "../audio/cues";
 import { SyncEngine, type ScheduleSegment } from "../audio/syncEngine";
 import { computeTimeline, segIdOf, type Cut } from "../audio/timeline";
-import type { Cue, Project, Stem, Take } from "../types";
+import type { Cue, Project, SfxItem, Stem, Take } from "../types";
 import { formatDuration, speakerStyle } from "../utils";
 
 interface Props {
@@ -81,10 +80,11 @@ function cueSegmentOf(
 const round2 = (value: number) => Math.round(value * 100) / 100;
 const clamp = (lo: number, hi: number, v: number) => Math.max(lo, Math.min(hi, v));
 
+
 interface DragState {
   stemId: string;
   idx: number;
-  mode: "trim-start" | "trim-end" | "slip" | "move";
+  mode: "trim-start" | "trim-end" | "slip" | "move" | "fade-in" | "fade-out";
   /** Global slot start when the drag began (stable while trimming). */
   anchorGlobal: number;
   /** Local take time under the cursor when the drag began. */
@@ -95,6 +95,8 @@ interface DragState {
   origEnd: number;
   /** Global position before the drag (for move). */
   origPosition: number;
+  /** Multi-clip move: every selected segment and its original position. */
+  group?: { stemId: string; idx: number; origPosition: number }[];
 }
 
 interface CueDragState {
@@ -156,6 +158,7 @@ export function MultiTrackEditor({
             pitch_cents: l.pitch_cents ?? 0,
             reverb_mix: l.reverb_mix ?? 0,
             dereverb: l.dereverb ?? false,
+            enabled: l.enabled ?? true,
           }))
         : stem.line_ids.map((id) => ({
             line_id: id,
@@ -172,6 +175,7 @@ export function MultiTrackEditor({
     const idx = cuts.findIndex((c) => segIdOf(c) === segId);
     if (idx < 0) return;
     cuts[idx] = { ...cuts[idx], ...patch };
+    pushHistory(1000);
     commitCuts(stemId, cuts);
   };
 
@@ -188,11 +192,37 @@ export function MultiTrackEditor({
   const [view, setView] = useState<{ start: number; end: number } | null>(null);
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [selected, setSelected] = useState<{ stemId: string; segId: string } | null>(null);
+  // Multi-clip selection (Shift-click adds/removes). The last entry is the
+  // primary clip used by the inspector.
+  const [clipSelection, setClipSelection] = useState<
+    { stemId: string; segId: string }[]
+  >([]);
+  const selected =
+    clipSelection.length > 0 ? clipSelection[clipSelection.length - 1] : null;
+  const setSelected = useCallback((value: { stemId: string; segId: string } | null) => {
+    setClipSelection(value ? [value] : []);
+  }, []);
+  const isClipSelected = useCallback(
+    (stemId: string, segId: string) =>
+      clipSelection.some((c) => c.stemId === stemId && c.segId === segId),
+    [clipSelection],
+  );
+  const toggleClipSelection = useCallback(
+    (ref: { stemId: string; segId: string }, additive: boolean) => {
+      setClipSelection((prev) => {
+        if (!additive) return [ref];
+        const exists = prev.some(
+          (c) => c.stemId === ref.stemId && c.segId === ref.segId,
+        );
+        return exists
+          ? prev.filter((c) => !(c.stemId === ref.stemId && c.segId === ref.segId))
+          : [...prev, ref];
+      });
+    },
+    [],
+  );
   const [selection, setSelection] = useState<{
     stemId: string;
-    lineId: string;
-    segId: string;
     start: number;
     end: number;
   } | null>(null);
@@ -205,6 +235,7 @@ export function MultiTrackEditor({
   const [confirmDeleteCueId, setConfirmDeleteCueId] = useState<string | null>(null);
   const [trackH, setTrackH] = useState(TRACK_H);
 
+
   const timelineRef = useRef<HTMLDivElement>(null);
   const canvasRefs = useRef(new Map<string, HTMLCanvasElement>());
   const headRefs = useRef(new Map<string, HTMLDivElement>());
@@ -214,11 +245,9 @@ export function MultiTrackEditor({
   const cueDragRef = useRef<CueDragState | null>(null);
   const selectionRef = useRef<{
     stemId: string;
-    lineId: string;
-    segId: string;
     anchorGlobal: number;
-    clipStart: number;
-    clipEnd: number;
+    trackStart: number;
+    trackEnd: number;
   } | null>(null);
   const auditionRef = useRef<{ stemId: string; lineId: string; endGlobal: number } | null>(null);
   const viewRef = useRef(view);
@@ -283,11 +312,14 @@ export function MultiTrackEditor({
     [loaded],
   );
 
-  // Sync non-dirty pending cuts from saved alignments.
+  // Sync non-dirty pending cuts from saved alignments. Stems without an
+  // alignment are seeded locally (even split); their savedCuts entries are
+  // zero-length placeholders, so never overwrite them from the server.
   useEffect(() => {
     setPending((prev) => {
       const next: Record<string, Cut[]> = { ...prev };
       for (const stem of project.stems) {
+        if (!project.alignments[stem.id]) continue;
         if (dirty[stem.id]) continue;
         next[stem.id] = savedCuts[stem.id] ?? [];
       }
@@ -324,6 +356,7 @@ export function MultiTrackEditor({
     const segments: ScheduleSegment[] = [];
     for (const stem of project.stems) {
       for (const cut of pending[stem.id] ?? []) {
+        if (cut.enabled === false) continue; // disabled: dim + silent, slot kept
         const slot = slots.get(segIdOf(cut));
         if (!slot || slot.end <= slot.start) continue;
         const take = takeByIdFor(stem, cut.take_id);
@@ -376,6 +409,61 @@ export function MultiTrackEditor({
     () => [...schedule, ...cueSegments],
     [schedule, cueSegments],
   );
+
+  // ---- insert sounds / music at the playhead (Suno library-dock equivalent)
+  // Immediate server op like cue delete (not part of undo history).
+  const [insertQuery, setInsertQuery] = useState("");
+  const [insertItems, setInsertItems] = useState<SfxItem[]>([]);
+  const [insertId, setInsertId] = useState("");
+  const [insertKind, setInsertKind] = useState<"one_shot" | "bed" | "music">("one_shot");
+  const [inserting, setInserting] = useState(false);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      api.searchSfx(insertQuery, 8).then((items) => {
+        setInsertItems(items);
+        setInsertId((prev) =>
+          items.some((item) => item.id === prev) ? prev : (items[0]?.id ?? ""),
+        );
+      }).catch(() => setInsertItems([]));
+    }, 220);
+    return () => window.clearTimeout(handle);
+  }, [insertQuery]);
+
+  const insertCueAtPlayhead = useCallback(async () => {
+    const item = insertItems.find((i) => i.id === insertId);
+    if (!item || inserting) return;
+    const t = playheadRef.current;
+    let anchor = "";
+    let anchorStart = 0;
+    for (const line of allLines) {
+      const s = lineStarts.get(line.id);
+      if (s == null || s > t) continue;
+      if (anchor === "" || s >= anchorStart) {
+        anchor = line.id;
+        anchorStart = s;
+      }
+    }
+    if (!anchor) return;
+    setInserting(true);
+    try {
+      await api.addCue(project.id, {
+        kind: insertKind,
+        sfx_id: item.id,
+        name: item.name,
+        anchor_line_id: anchor,
+        offset_s: round2(Math.max(0, t - anchorStart)),
+        gain_db: insertKind === "music" ? -18 : -12,
+        loop: insertKind !== "one_shot",
+        duck: true,
+      });
+      await onRefresh();
+    } catch {
+      // The page surfaces the error; keep the insert bar state for retry.
+    } finally {
+      setInserting(false);
+    }
+  }, [insertItems, insertId, insertKind, inserting, allLines, lineStarts, project.id, onRefresh]);
 
   const audibleEnd = useMemo(
     () => allSchedule.reduce((max, seg) => Math.max(max, seg.end), 0),
@@ -622,35 +710,37 @@ export function MultiTrackEditor({
     return () => cancelAnimationFrame(raf);
   }, [playing, engine, total]);
 
-  const zoomIn = useCallback(() => {
-    const v = viewRef.current;
-    const start = v?.start ?? 0;
-    const end = v?.end ?? total;
-    const center = (() => {
-      if (!selected) return (start + end) / 2;
-      const slot = slots.get(selected.segId);
-      if (!slot) return (start + end) / 2;
-      return (slot.start + slot.end) / 2;
-    })();
-    const span = Math.max(0.5, (end - start) / 2);
-    const s = Math.max(0, center - span / 2);
-    const e = Math.min(total, s + span);
-    setView({ start: Math.max(0, e - span), end: e });
-  }, [total, selected, slots]);
+  /** Zoom in ±25% steps of the visible timeline, centered on the selection. */
+  const zoomStep = useCallback(
+    (direction: 1 | -1) => {
+      if (total <= 0) return;
+      const v = viewRef.current;
+      const start = v?.start ?? 0;
+      const end = v?.end ?? total;
+      const span = Math.max(0.001, end - start);
+      const pct = (total / span) * 100;
+      const base = Math.round(pct / 25) * 25;
+      const maxPct = Math.max(125, (total / 0.5) * 100);
+      const target = clamp(100, maxPct, base + direction * 25);
+      if (target <= 100) {
+        setView(null);
+        return;
+      }
+      const newSpan = Math.min(total, total / (target / 100));
+      const center = (() => {
+        if (!selected) return (start + end) / 2;
+        const slot = slots.get(selected.segId);
+        return slot ? (slot.start + slot.end) / 2 : (start + end) / 2;
+      })();
+      const s0 = clamp(0, Math.max(0, total - newSpan), center - newSpan / 2);
+      setView({ start: s0, end: s0 + newSpan });
+    },
+    [total, selected, slots],
+  );
 
-  const zoomOut = useCallback(() => {
-    const v = viewRef.current;
-    const start = v?.start ?? 0;
-    const end = v?.end ?? total;
-    const center = (start + end) / 2;
-    const span = Math.min(total, (end - start) * 2);
-    if (span >= total) {
-      setView(null);
-      return;
-    }
-    const s = clamp(0, total - span, center - span / 2);
-    setView({ start: s, end: s + span });
-  }, [total]);
+  const zoomIn = useCallback(() => zoomStep(1), [zoomStep]);
+
+  const zoomOut = useCallback(() => zoomStep(-1), [zoomStep]);
 
   const zoomToSelection = useCallback(() => {
     if (!selected) return;
@@ -747,7 +837,7 @@ export function MultiTrackEditor({
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.scale(dpr, dpr);
-      ctx.fillStyle = "#0f0f1a";
+      ctx.fillStyle = "#0a0a10";
       ctx.fillRect(0, 0, w, h);
 
       const v = viewRef.current;
@@ -758,7 +848,7 @@ export function MultiTrackEditor({
       const drawPlayhead = () => {
         const px = toX(playheadRef.current);
         if (px < 0 || px > w) return;
-        ctx.strokeStyle = "#fb7185";
+        ctx.strokeStyle = "#f4f4f5";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(Math.round(px) + 0.5, 0);
@@ -823,7 +913,7 @@ export function MultiTrackEditor({
             ctx.rect(x0, 0, wpx, h);
             ctx.clip();
             ctx.strokeStyle = isSel
-              ? "rgba(254, 243, 199, 0.9)"
+              ? "rgba(237, 233, 254, 0.9)"
               : "rgba(226, 232, 240, 0.55)";
             ctx.lineWidth = 1;
             ctx.beginPath();
@@ -865,7 +955,7 @@ export function MultiTrackEditor({
           ctx.strokeStyle = missing
             ? "rgba(248, 113, 113, 0.9)"
             : isSel
-              ? "#fbbf24"
+              ? "#c4b5fd"
               : "rgba(255,255,255,0.75)";
           ctx.lineWidth = 1;
           ctx.beginPath();
@@ -875,7 +965,7 @@ export function MultiTrackEditor({
           ctx.lineTo(Math.round(x1) + 0.5, h);
           ctx.stroke();
           if (isSel) {
-            ctx.strokeStyle = "rgba(251, 191, 36, 0.9)";
+            ctx.strokeStyle = "rgba(167, 139, 250, 0.9)";
             ctx.strokeRect(x0 + 0.5, 0.5, wpx, h - 1);
           }
 
@@ -918,7 +1008,9 @@ export function MultiTrackEditor({
         const x0 = toX(slot.start);
         const x1 = toX(slot.end);
         const wpx = Math.max(1, x1 - x0);
-        const isSel = selected?.stemId === stemId && selected.segId === segIdOf(cut);
+        const isSel = isClipSelected(stemId, segIdOf(cut));
+        const isOff = cut.enabled === false;
+        ctx.globalAlpha = isOff ? 0.45 : 1;
 
         ctx.fillStyle = COLORS[(trackIdx + idx) % COLORS.length];
         ctx.fillRect(x0, 0, wpx, h);
@@ -930,7 +1022,7 @@ export function MultiTrackEditor({
           if (local1 > local0) {
             const i0 = Math.max(0, Math.floor((local0 / takeDur) * peaks.length));
             const i1 = Math.min(peaks.length, Math.ceil((local1 / takeDur) * peaks.length));
-            ctx.strokeStyle = isSel ? "rgba(254, 243, 199, 0.85)" : "rgba(226, 232, 240, 0.55)";
+            ctx.strokeStyle = isSel ? "rgba(237, 233, 254, 0.85)" : "rgba(226, 232, 240, 0.55)";
             ctx.lineWidth = 1;
             ctx.beginPath();
             for (let i = i0; i < i1; i++) {
@@ -945,7 +1037,7 @@ export function MultiTrackEditor({
           }
         }
 
-        ctx.strokeStyle = isSel ? "#fbbf24" : "rgba(255,255,255,0.9)";
+        ctx.strokeStyle = isSel ? "#c4b5fd" : "rgba(255,255,255,0.9)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(Math.round(x0) + 0.5, 0);
@@ -954,23 +1046,23 @@ export function MultiTrackEditor({
         ctx.lineTo(Math.round(x1) + 0.5, h);
         ctx.stroke();
         if (isSel) {
-          ctx.strokeStyle = "rgba(251, 191, 36, 0.9)";
+          ctx.strokeStyle = "rgba(167, 139, 250, 0.9)";
           ctx.strokeRect(x0 + 0.5, 0.5, wpx, h - 1);
-        }
-        // In-clip selection highlight.
-        if (
-          selection &&
-          selection.stemId === stemId &&
-          selection.segId === segIdOf(cut)
-        ) {
-          const sx0 = toX(Math.max(slot.start, selection.start));
-          const sx1 = toX(Math.min(slot.end, selection.end));
-          if (sx1 > sx0) {
-            ctx.fillStyle = "rgba(251, 191, 36, 0.35)";
-            ctx.fillRect(sx0, 0, sx1 - sx0, h);
-            ctx.strokeStyle = "rgba(251, 191, 36, 0.9)";
-            ctx.strokeRect(sx0 + 0.5, 0.5, sx1 - sx0 - 1, h - 1);
-          }
+          // Fade ramps + corner grab handles (drag the top corners).
+          const slotDur = Math.max(0.001, slot.end - slot.start);
+          const inPx = Math.min(wpx, ((cut.fade_in_s ?? 0) / slotDur) * wpx);
+          const outPx = Math.min(wpx, ((cut.fade_out_s ?? 0) / slotDur) * wpx);
+          ctx.strokeStyle = "rgba(196, 181, 253, 0.95)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(x0, h - 1);
+          ctx.lineTo(x0 + inPx, 1);
+          ctx.moveTo(x1, h - 1);
+          ctx.lineTo(x1 - outPx, 1);
+          ctx.stroke();
+          ctx.fillStyle = "rgba(196, 181, 253, 0.95)";
+          ctx.fillRect(x0, 0, 5, 5);
+          ctx.fillRect(x1 - 5, 0, 5, 5);
         }
         const takeNo = stem
           ? stem.takes.findIndex((item) => item.id === take.id) + 1
@@ -978,7 +1070,7 @@ export function MultiTrackEditor({
         const showTake = (stem?.takes.length ?? 0) > 1 && takeNo > 0;
         const label = `${lineNo.get(cut.line_id) ?? "?"} ${cut.line_id}${
           showTake ? ` · T${takeNo}` : ""
-        }`;
+        }${isOff ? " · off" : ""}`;
         ctx.font = isSel ? "600 12px sans-serif" : "12px sans-serif";
         const tw = ctx.measureText(label).width;
         const row = idx % 2;
@@ -989,7 +1081,21 @@ export function MultiTrackEditor({
         ctx.fillRect(lx - pad, ly - 12, tw + pad * 2, 16);
         ctx.fillStyle = isSel ? "#000" : "#fff";
         ctx.fillText(label, lx, ly);
+        ctx.globalAlpha = 1;
       });
+
+      // Free range selection across the whole track (not tied to one clip).
+      if (selection && selection.stemId === stemId && selection.end > selection.start) {
+        const sx0 = toX(selection.start);
+        const sx1 = toX(selection.end);
+        if (sx1 > sx0) {
+          ctx.fillStyle = "rgba(167, 139, 250, 0.24)";
+          ctx.fillRect(sx0, 0, sx1 - sx0, h);
+          ctx.strokeStyle = "rgba(196, 181, 253, 0.95)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(sx0 + 0.5, 0.5, sx1 - sx0 - 1, h - 1);
+        }
+      }
 
       drawPlayhead();
     },
@@ -998,6 +1104,7 @@ export function MultiTrackEditor({
       loaded,
       pending,
       selected,
+      isClipSelected,
       selection,
       slots,
       trackH,
@@ -1087,6 +1194,75 @@ export function MultiTrackEditor({
     [],
   );
 
+  // ---- undo / redo + clipboard (Suno parity: Ctrl+Z/Y, D/C/X/V) -----------
+
+  interface HistoryEntry {
+    pending: Record<string, Cut[]>;
+    cues: Cue[];
+    dirty: Record<string, boolean>;
+    cueDirty: Record<string, boolean>;
+  }
+  const pastRef = useRef<HistoryEntry[]>([]);
+  const futureRef = useRef<HistoryEntry[]>([]);
+  const clipboardRef = useRef<{ stemId: string; cut: Cut }[] | null>(null);
+  const lastPushRef = useRef(0);
+
+  /** Snapshot before a mutating action; redo stack clears on new edits.
+   * Pass coalesceMs for continuous inputs (sliders, drags) so one gesture
+   * stays a single undo step. */
+  const pushHistory = useCallback((coalesceMs = 0) => {
+    const now = Date.now();
+    if (coalesceMs > 0 && now - lastPushRef.current < coalesceMs) return;
+    lastPushRef.current = now;
+    pastRef.current.push({
+      pending: structuredClone(pending),
+      cues: structuredClone(cues),
+      dirty: { ...dirty },
+      cueDirty: { ...cueDirty },
+    });
+    if (pastRef.current.length > 50) pastRef.current.shift();
+    futureRef.current = [];
+  }, [pending, cues, dirty, cueDirty]);
+
+  const restoreHistory = useCallback(
+    (entry: HistoryEntry) => {
+      setPending(entry.pending);
+      // Cue membership is server truth (inserts/deletes apply immediately):
+      // restore field edits for surviving ids, keep newly added cues.
+      const entryById = new Map(entry.cues.map((c) => [c.id, c]));
+      setCues(project.cues.map((c) => entryById.get(c.id) ?? c));
+      setDirty({ ...entry.dirty });
+      setCueDirty({ ...entry.cueDirty });
+      setSelection(null);
+      selectionRef.current = null;
+    },
+    [project.cues],
+  );
+
+  const undoEdit = useCallback(() => {
+    if (pastRef.current.length === 0) return false;
+    futureRef.current.push({
+      pending: structuredClone(pending),
+      cues: structuredClone(cues),
+      dirty: { ...dirty },
+      cueDirty: { ...cueDirty },
+    });
+    restoreHistory(pastRef.current.pop()!);
+    return true;
+  }, [pending, cues, dirty, cueDirty, restoreHistory]);
+
+  const redoEdit = useCallback(() => {
+    if (futureRef.current.length === 0) return false;
+    pastRef.current.push({
+      pending: structuredClone(pending),
+      cues: structuredClone(cues),
+      dirty: { ...dirty },
+      cueDirty: { ...cueDirty },
+    });
+    restoreHistory(futureRef.current.pop()!);
+    return true;
+  }, [pending, cues, dirty, cueDirty, restoreHistory]);
+
   const findCueSpan = useCallback(
     (lane: CueLane, globalT: number) => {
       const laneSpans = cueSpans.filter((item) => item.lane === lane);
@@ -1101,12 +1277,13 @@ export function MultiTrackEditor({
 
   const updateCueLocal = useCallback(
     (cueId: string, patch: Partial<Omit<Cue, "id">>) => {
+      pushHistory(1000);
       setCues((prev) =>
         prev.map((cue) => (cue.id === cueId ? { ...cue, ...patch } : cue)),
       );
       setCueDirty((prev) => ({ ...prev, [cueId]: true }));
     },
-    [],
+    [pushHistory],
   );
 
   const onCueMouseDown = (e: React.MouseEvent, lane: CueLane) => {
@@ -1120,6 +1297,7 @@ export function MultiTrackEditor({
       setSelected(null);
       setSelection(null);
       selectionRef.current = null;
+      pushHistory();
       cueDragRef.current = {
         cueId: item.cue.id,
         grabGlobal: globalT,
@@ -1190,68 +1368,132 @@ export function MultiTrackEditor({
         start_s: round2(start),
         end_s: round2(end),
       };
+      pushHistory();
       commitCuts(stem.id, cuts);
     },
-    [pending, takeByIdFor, takeDurationOf, commitCuts],
+    [pending, takeByIdFor, takeDurationOf, commitCuts, pushHistory],
   );
 
-  const onTrackMouseDown = (e: React.MouseEvent, stemId: string) => {
+  const findFadeHandle = useCallback(
+    (stemId: string, canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.max(1, rect.width);
+      const v = viewRef.current;
+      const start = v?.start ?? 0;
+      const end = v?.end ?? total;
+      const span = Math.max(0.001, end - start);
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      if (y > 16) return null;
+      for (const cut of pending[stemId] ?? []) {
+        const segId = segIdOf(cut);
+        if (!isClipSelected(stemId, segId)) continue;
+        const slot = slots.get(segId);
+        if (!slot || slot.end <= slot.start) continue;
+        const xs = ((slot.start - start) / span) * w;
+        const xe = ((slot.end - start) / span) * w;
+        if (Math.abs(x - xs) <= 12) return { segId, mode: "fade-in" as const };
+        if (Math.abs(x - xe) <= 12) return { segId, mode: "fade-out" as const };
+      }
+      return null;
+    },
+    [pending, slots, total, isClipSelected],
+  );
+
+  // Transient feedback so a shortcut never fails silently.
+  const [actionHint, setActionHint] = useState<string | null>(null);
+  const hintTimerRef = useRef<number | null>(null);
+  const flashHint = useCallback((message: string) => {
+    setActionHint(message);
+    if (hintTimerRef.current != null) window.clearTimeout(hintTimerRef.current);
+    hintTimerRef.current = window.setTimeout(() => setActionHint(null), 3000);
+  }, []);
+
+  const onTrackPointerDown = (e: React.PointerEvent, stemId: string) => {
     if (e.button !== 0) return;
     setSelectedCueId(null);
     setConfirmDeleteCueId(null);
+    setContextMenu(null);
     const canvas = e.currentTarget as HTMLCanvasElement;
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
     const globalT = toGlobal(canvas, e.clientX);
-    const edge = findEdge(stemId, canvas, e.clientX);
-    if (edge) {
-      const cuts = pending[stemId] ?? [];
-      const cut = cuts[edge.idx];
-      if (!cut) return;
-      const slot = slots.get(segIdOf(cut));
-      if (!slot) return;
-      dragRef.current = {
+    const cuts = pending[stemId] ?? [];
+
+    const startRange = () => {
+      if (total <= 0) return;
+      const s = clamp(0, total, globalT);
+      selectionRef.current = {
         stemId,
-        idx: edge.idx,
-        mode: edge.edge,
-        anchorGlobal: slot.start,
-        grabLocal: cut.start_s + (globalT - slot.start),
-        grabGlobal: globalT,
-        origStart: cut.start_s,
-        origEnd: cut.end_s,
-        origPosition: slot.start,
+        anchorGlobal: s,
+        trackStart: 0,
+        trackEnd: total,
       };
-      setSelected({ stemId, segId: segIdOf(cut) });
+      setSelection({ stemId, start: s, end: s });
+    };
+
+    const regionIdx = findRegion(stemId, globalT);
+    const regionCut = regionIdx != null ? cuts[regionIdx] : null;
+
+    // Shift-click a clip: toggle it in the multi-selection (Suno rA/rL).
+    if (e.shiftKey && regionCut) {
+      toggleClipSelection({ stemId, segId: segIdOf(regionCut) }, true);
       return;
     }
-    const regionIdx = findRegion(stemId, globalT);
-    const cuts = pending[stemId] ?? [];
-    const idx = regionIdx ?? -1;
-    const cut = idx >= 0 ? cuts[idx] : null;
+
+    // Fade handles: top corners of an already-selected clip.
+    const fade = findFadeHandle(stemId, canvas, e.clientX, e.clientY);
+    if (fade) {
+      const cut = cuts.find((c) => segIdOf(c) === fade.segId);
+      const slot = cut ? slots.get(fade.segId) : null;
+      if (cut && slot) {
+        pushHistory();
+        dragRef.current = {
+          stemId,
+          idx: cuts.indexOf(cut),
+          mode: fade.mode,
+          anchorGlobal: slot.start,
+          grabLocal: 0,
+          grabGlobal: globalT,
+          origStart: cut.start_s,
+          origEnd: cut.end_s,
+          origPosition: slot.start,
+        };
+        return;
+      }
+    }
+
+    // Trim/slip/move only act on the already-selected clip.
+    const edge = findEdge(stemId, canvas, e.clientX);
+    if (edge && regionCut && isClipSelected(stemId, segIdOf(regionCut))) {
+      const cut = cuts[edge.idx];
+      const slot = cut ? slots.get(segIdOf(cut)) : null;
+      if (cut && slot) {
+        pushHistory();
+        dragRef.current = {
+          stemId,
+          idx: edge.idx,
+          mode: edge.edge,
+          anchorGlobal: slot.start,
+          grabLocal: cut.start_s + (globalT - slot.start),
+          grabGlobal: globalT,
+          origStart: cut.start_s,
+          origEnd: cut.end_s,
+          origPosition: slot.start,
+        };
+        return;
+      }
+    }
+
+    const cut = regionCut;
     const stem = stemById.get(stemId) ?? null;
     const dur = takeDurationOf(takeByIdFor(stem, cut?.take_id));
     const slot = cut ? (slots.get(segIdOf(cut)) ?? null) : null;
-    if (cut && dur > 0 && slot && e.shiftKey) {
-      // Shift-drag inside a clip: mark a section to cut out.
-      // Replaces any previous mark; Backspace/Delete (or the button) cuts it.
-      const segId = segIdOf(cut);
-      const s = clamp(slot.start, slot.end, globalT);
-      selectionRef.current = {
-        stemId,
-        lineId: cut.line_id,
-        segId,
-        anchorGlobal: s,
-        clipStart: slot.start,
-        clipEnd: slot.end,
-      };
-      setSelection({ stemId, lineId: cut.line_id, segId, start: s, end: s });
-      setSelected({ stemId, segId });
-      return;
-    }
-    if (cut && dur > 0 && slot) {
+    if (cut && slot && dur > 0 && isClipSelected(stemId, segIdOf(cut))) {
       if (e.altKey || e.ctrlKey || e.metaKey) {
-        // Alt/Ctrl-drag: slip the cut window inside the take (DAW slip).
+        pushHistory();
         dragRef.current = {
           stemId,
-          idx,
+          idx: regionIdx ?? -1,
           mode: "slip",
           anchorGlobal: slot.start,
           grabLocal: cut.start_s + (globalT - slot.start),
@@ -1260,59 +1502,74 @@ export function MultiTrackEditor({
           origEnd: cut.end_s,
           origPosition: slot.start,
         };
-        setSelected({ stemId, segId: segIdOf(cut) });
         return;
       }
-      // Plain LMB drag (Suno Studio style): move the section on the timeline
-      // (position_s). The local cut window stays intact.
+      // Move the whole selection together (Suno moves multi-clips).
+      const group: { stemId: string; idx: number; origPosition: number }[] = [];
+      for (const ref of clipSelection) {
+        const refCuts = pending[ref.stemId] ?? [];
+        const i = refCuts.findIndex((c) => segIdOf(c) === ref.segId);
+        const refSlot = slots.get(ref.segId);
+        if (i < 0) continue;
+        group.push({
+          stemId: ref.stemId,
+          idx: i,
+          origPosition: refCuts[i].position_s ?? refSlot?.start ?? 0,
+        });
+      }
+      pushHistory();
       dragRef.current = {
         stemId,
-        idx,
+        idx: regionIdx ?? -1,
         mode: "move",
         anchorGlobal: slot.start,
         grabLocal: cut.start_s + (globalT - slot.start),
         grabGlobal: globalT,
         origStart: cut.start_s,
         origEnd: cut.end_s,
-        origPosition: slot.start,
+        origPosition: cut.position_s ?? slot.start,
+        group: group.length ? group : undefined,
       };
-      setSelected({ stemId, segId: segIdOf(cut) });
       return;
     }
-    // Empty space: LMB seeks the shared playhead.
-    if (total > 0) seek(clamp(0, total, globalT));
-    setSelected(null);
+
+    // Rule: with no clip selected, a drag draws a free range.
+    startRange();
   };
 
-  const onTrackMouseMove = (e: React.MouseEvent, stemId: string) => {
+  const onTrackPointerMove = (e: React.PointerEvent, stemId: string) => {
     const canvas = e.currentTarget as HTMLCanvasElement;
     const marking = selectionRef.current;
     if (marking && marking.stemId === stemId && !dragRef.current) {
-      // Shift-drag marking: extend the marked section, clamped to the clip.
       const globalT = toGlobal(canvas, e.clientX);
-      const t = clamp(marking.clipStart, marking.clipEnd, globalT);
+      const t = clamp(marking.trackStart, marking.trackEnd, globalT);
       const s = Math.min(marking.anchorGlobal, t);
       const en = Math.max(marking.anchorGlobal, t);
-      setSelection({
-        stemId: marking.stemId,
-        lineId: marking.lineId,
-        segId: marking.segId,
-        start: round2(s),
-        end: round2(en),
-      });
+      setSelection({ stemId: marking.stemId, start: round2(s), end: round2(en) });
       canvas.style.cursor = "text";
       return;
     }
     const drag = dragRef.current;
     if (!drag || drag.stemId !== stemId) {
       if (!drag && !marking) {
-        const edge = findEdge(stemId, canvas, e.clientX);
-        if (edge) {
-          canvas.style.cursor = "ew-resize";
+        const region = findRegion(stemId, toGlobal(canvas, e.clientX));
+        if (region != null) {
+          const cut = (pending[stemId] ?? [])[region];
+          const marked = cut != null && isClipSelected(stemId, segIdOf(cut));
+          const fade = marked ? findFadeHandle(stemId, canvas, e.clientX, e.clientY) : null;
+          if (fade) {
+            canvas.style.cursor = "ew-resize";
+            return;
+          }
+          const edge = marked ? findEdge(stemId, canvas, e.clientX) : null;
+          if (edge) {
+            canvas.style.cursor = "ew-resize";
+            return;
+          }
+          canvas.style.cursor = marked ? "move" : "pointer";
           return;
         }
-        const region = findRegion(stemId, toGlobal(canvas, e.clientX));
-        canvas.style.cursor = region != null ? "move" : "default";
+        canvas.style.cursor = "default";
       }
       return;
     }
@@ -1324,13 +1581,32 @@ export function MultiTrackEditor({
     const dur = takeDurationOf(takeByIdFor(stem, cut.take_id));
     if (dur <= 0) return;
     const local = drag.origStart + (globalT - drag.anchorGlobal);
+
+    if (drag.mode === "fade-in" || drag.mode === "fade-out") {
+      const len = Math.max(0, (cut.end_s - cut.start_s) / (cut.speed && cut.speed > 0 ? cut.speed : 1));
+      if (drag.mode === "fade-in") {
+        cut.fade_in_s = round2(clamp(0, Math.min(10, len), globalT - drag.anchorGlobal));
+      } else {
+        cut.fade_out_s = round2(clamp(0, Math.min(10, len), drag.anchorGlobal + len - globalT));
+      }
+      canvas.style.cursor = "ew-resize";
+      commitCuts(stemId, cuts);
+      return;
+    }
+
     if (drag.mode === "trim-start") {
       cut.start_s = round2(clamp(0, cut.end_s - 0.05, local));
       canvas.style.cursor = "ew-resize";
-    } else if (drag.mode === "trim-end") {
+      commitCuts(stemId, cuts);
+      return;
+    }
+    if (drag.mode === "trim-end") {
       cut.end_s = round2(clamp(cut.start_s + 0.05, dur, local));
       canvas.style.cursor = "ew-resize";
-    } else if (drag.mode === "slip") {
+      commitCuts(stemId, cuts);
+      return;
+    }
+    if (drag.mode === "slip") {
       const len = drag.origEnd - drag.origStart;
       const shiftMin = -drag.origStart;
       const shiftMax = dur - drag.origEnd;
@@ -1338,122 +1614,630 @@ export function MultiTrackEditor({
       cut.start_s = round2(drag.origStart + shift);
       cut.end_s = round2(drag.origStart + shift + len);
       canvas.style.cursor = "move";
-    } else {
-      // move: Suno-Studio-style position drag — slot start follows cursor.
-      const delta = globalT - drag.grabGlobal;
-      cut.position_s = round2(Math.max(0, drag.origPosition + delta));
-      canvas.style.cursor = "grabbing";
+      commitCuts(stemId, cuts);
+      return;
     }
-    commitCuts(stemId, cuts);
+
+    // move: apply the same delta to every selected clip.
+    const delta = globalT - drag.grabGlobal;
+    const updates: Record<string, Cut[]> = { [stemId]: cuts };
+    for (const g of drag.group ?? []) {
+      if (g.stemId === stemId && g.idx === drag.idx) continue;
+      const arr = updates[g.stemId] ?? (pending[g.stemId] ?? []).map((c) => ({ ...c }));
+      const item = arr[g.idx];
+      if (!item) continue;
+      item.position_s = round2(Math.max(0, g.origPosition + delta));
+      updates[g.stemId] = arr;
+    }
+    const primary = updates[stemId][drag.idx];
+    if (primary) primary.position_s = round2(Math.max(0, drag.origPosition + delta));
+    canvas.style.cursor = "grabbing";
+    for (const [sid, arr] of Object.entries(updates)) commitCuts(sid, arr);
   };
 
-  const onTrackMouseUp = () => {
-    if (selectionRef.current) {
+  const onTrackPointerUp = (e: React.PointerEvent) => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    try { canvas.releasePointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+    const marking = selectionRef.current;
+    if (marking) {
       const cur = selection;
-      if (cur && Math.abs(cur.end - cur.start) >= 0.05) {
-        // Keep the mark so Backspace/Delete (or the button) can cut it out.
-        // The ref only tracks the in-progress drag.
-      } else {
+      if (!cur || Math.abs(cur.end - cur.start) < 0.05) {
         setSelection(null);
+        const t = toGlobal(canvas, e.clientX);
+        const idx = findRegion(marking.stemId, t);
+        const cut = idx != null ? (pending[marking.stemId] ?? [])[idx] : null;
+        if (cut) {
+          toggleClipSelection({ stemId: marking.stemId, segId: segIdOf(cut) }, false);
+        } else {
+          setSelected(null);
+          if (total > 0) seek(clamp(0, total, t));
+        }
       }
       selectionRef.current = null;
     }
     dragRef.current = null;
   };
 
-  const onRulerMouseDown = (e: React.MouseEvent) => {
+  const onRulerPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     seek(clamp(0, total, toGlobal(e.currentTarget as HTMLCanvasElement, e.clientX)));
   };
 
-  /** Cut the marked section out of its clip: the clip splits into the kept
-   * head and tail, placed adjacent so the timeline (and the next mix) closes
-   * the gap. Marking the whole clip removes the segment entirely. */
-  const cutOutSelection = useCallback(() => {
-    if (!selection) return false;
-    const { stemId, lineId, segId, start, end } = selection;
-    const cuts = (pending[stemId] ?? []).map((c) => ({ ...c }));
-    const idx = cuts.findIndex((c) => segIdOf(c) === segId && c.line_id === lineId);
-    if (idx < 0) {
-      setSelection(null);
-      return false;
-    }
-    const cut = cuts[idx];
-    const slot = slots.get(segId);
-    if (!slot || slot.end <= slot.start) {
-      setSelection(null);
-      return false;
-    }
-    const dur = slot.end - slot.start;
-    const len = cut.end_s - cut.start_s;
-    if (len <= 0 || dur <= 0) {
-      setSelection(null);
-      return false;
-    }
-    // Map the global mark to local take times.
-    const localSelStart = cut.start_s + ((start - slot.start) / dur) * len;
-    const localSelEnd = cut.start_s + ((end - slot.start) / dur) * len;
-    const ls = Math.max(cut.start_s, Math.min(cut.end_s, localSelStart));
-    const le = Math.max(cut.start_s, Math.min(cut.end_s, localSelEnd));
-    if (le - ls < 0.01) {
-      setSelection(null);
-      return false;
-    }
-    const speed = cut.speed && cut.speed > 0 ? cut.speed : 1;
-    const keptHeadLen = ls - cut.start_s;
-    const newCuts: Cut[] = [];
-    // Kept head (when the mark does not start at the clip edge).
-    if (keptHeadLen >= 0.05) {
-      newCuts.push({
-        ...cut,
-        id: cut.id,
-        start_s: round2(cut.start_s),
-        end_s: round2(ls),
-        position_s: cut.position_s,
+  /** Double-click the ruler: open the clip under that time in the dock. */
+  const onRulerDoubleClick = (e: React.MouseEvent) => {
+    const t = toGlobal(e.currentTarget as HTMLCanvasElement, e.clientX);
+    for (const stem of project.stems) {
+      const idx = findRegion(stem.id, t);
+      if (idx == null) continue;
+      const cut = (pending[stem.id] ?? [])[idx];
+      if (!cut) continue;
+      setSelected({ stemId: stem.id, segId: segIdOf(cut) });
+      seek(clamp(0, total, t));
+      requestAnimationFrame(() => {
+        document.getElementById("clip-dock")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
-    }
-    // Kept tail (when the mark does not end at the clip edge): placed
-    // adjacent to the head so no silence gap is left behind.
-    if (cut.end_s - le >= 0.05) {
-      const seg: Cut = {
-        ...cut,
-        id: `${cut.id ?? cut.line_id}__${Date.now()}`,
-        line_id: cut.line_id,
-        take_id: cut.take_id,
-        start_s: round2(le),
-        end_s: round2(cut.end_s),
-        position_s: (cut.position_s ?? slot.start) + keptHeadLen / speed,
-      };
-      newCuts.push(seg);
-    }
-    // newCuts empty = the mark covered the whole clip: drop the segment.
-    const replaced = [...cuts.slice(0, idx), ...newCuts, ...cuts.slice(idx + 1)];
-    commitCuts(stemId, replaced);
-    setSelection(null);
-    const kept = newCuts[0];
-    if (kept) setSelected({ stemId, segId: segIdOf(kept) });
-    else setSelected(null);
-    return true;
-  }, [selection, pending, slots, commitCuts]);
-
-  const onCardKeyDown = (e: React.KeyboardEvent) => {
-    const target = e.target as HTMLElement | null;
-    if (target?.closest("input, select, textarea, button, a, [contenteditable='true']")) return;
-    if ((e.key === "Backspace" || e.key === "Delete") && selection) {
-      e.preventDefault();
-      cutOutSelection();
       return;
     }
-    if (e.key === "Escape" && selection) {
+    flashHint("Double-click the ruler on a clip to open its editor.");
+  };
+
+  // Right-click clip menu (Suno onContextMenu).
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    stemId: string;
+    segId: string;
+  } | null>(null);
+
+  const onTrackContextMenu = (e: React.MouseEvent, stemId: string) => {
+    e.preventDefault();
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const t = toGlobal(canvas, e.clientX);
+    const idx = findRegion(stemId, t);
+    const cut = idx != null ? (pending[stemId] ?? [])[idx] : null;
+    if (!cut) {
+      setContextMenu(null);
+      return;
+    }
+    const segId = segIdOf(cut);
+    if (!isClipSelected(stemId, segId)) setSelected({ stemId, segId });
+    setContextMenu({ x: e.clientX, y: e.clientY, stemId, segId });
+  };
+
+  /** Ctrl+E / Delete: cut a free timeline range out of the marked track.
+   * Every segment the range touches keeps its head/tail; fully covered
+   * segments are dropped; later segments ripple left by the removed span. */
+  const cutOutRange = useCallback(() => {
+    if (!selection) {
+      flashHint("Mark a range first: LMB-drag on the timeline (no clip selected).");
+      return false;
+    }
+    const { stemId, start, end } = selection;
+    const span = end - start;
+    if (span < 0.02) {
+      flashHint("Marked range is too short to cut.");
+      return false;
+    }
+    const cuts = pending[stemId] ?? [];
+    const next: Cut[] = [];
+    let removed = false;
+    for (const cut of cuts) {
+      const slot = slots.get(segIdOf(cut));
+      if (!slot || slot.end <= slot.start) {
+        next.push({ ...cut });
+        continue;
+      }
+      const s = slot.start;
+      const e = slot.end;
+      if (e <= start + 1e-6) {
+        next.push({ ...cut });
+        continue;
+      }
+      if (s >= end - 1e-6) {
+        // After the range: ripple left by the removed span.
+        next.push({
+          ...cut,
+          position_s: round2(Math.max(0, (cut.position_s ?? s) - span)),
+        });
+        continue;
+      }
+      removed = true;
+      const slotLen = e - s;
+      const toLocal = (t: number) =>
+        cut.start_s + ((t - s) / slotLen) * (cut.end_s - cut.start_s);
+      if (s < start - 0.01) {
+        next.push({
+          ...cut,
+          start_s: round2(cut.start_s),
+          end_s: round2(toLocal(start)),
+          position_s: round2(cut.position_s ?? s),
+        });
+      }
+      if (e > end + 0.01) {
+        next.push({
+          ...cut,
+          id: `${cut.id ?? cut.line_id}__${Date.now()}`,
+          start_s: round2(toLocal(end)),
+          end_s: round2(cut.end_s),
+          position_s: round2(start),
+        });
+      }
+    }
+    if (!removed) {
+      flashHint("Nothing to cut — the range does not overlap a clip on this track.");
+      return false;
+    }
+    pushHistory();
+    commitCuts(stemId, next);
+    setSelection(null);
+    setSelected(null);
+    flashHint(`Cut ${span.toFixed(2)}s out of the timeline.`);
+    return true;
+  }, [selection, pending, slots, pushHistory, commitCuts, flashHint]);
+
+  // ---- Suno-parity clip actions (key-driven) -------------------------------
+
+  // Fullscreen: native where allowed, CSS-fixed fallback otherwise.
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const onChange = () =>
+      setIsFullscreen(
+        Boolean(pageRef.current && document.fullscreenElement === pageRef.current),
+      );
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    const node = pageRef.current;
+    if (!node) return;
+    if (isFullscreen || document.fullscreenElement === node) {
+      if (document.fullscreenElement === node) void document.exitFullscreen();
+      setIsFullscreen(false);
+      return;
+    }
+    // The class guarantees the layout even when the API is blocked;
+    // requestFullscreen adds the real fullscreen window on top.
+    setIsFullscreen(true);
+    node.requestFullscreen?.().catch(() => {});
+  }, [isFullscreen]);
+
+  // The CSS fallback must escape the animated page wrapper: hide the app
+  // chrome so the fixed editor resolves against the viewport.
+  useEffect(() => {
+    document.body.classList.toggle("mt-fs-active", isFullscreen);
+    return () => document.body.classList.remove("mt-fs-active");
+  }, [isFullscreen]);
+
+  const [showShortcuts, setShowShortcuts] = useState(false);
+
+  /** Suno Cmd/Ctrl+D: duplicate the selected segment right after itself. */
+  /** Suno Cmd/Ctrl+D: duplicate every selected clip right after itself. */
+  const duplicateSelected = useCallback(() => {
+    if (clipSelection.length === 0) {
+      flashHint("Ctrl+D: select a clip first (click it or use ↑/↓).");
+      return false;
+    }
+    pushHistory();
+    const picks = [...clipSelection].sort((a, b) => {
+      if (a.stemId !== b.stemId) return a.stemId < b.stemId ? -1 : 1;
+      return 0;
+    });
+    const created: { stemId: string; segId: string }[] = [];
+    for (const ref of picks) {
+      const cuts = (pending[ref.stemId] ?? []).map((c) => ({ ...c }));
+      const idx = cuts.findIndex((c) => segIdOf(c) === ref.segId);
+      if (idx < 0) continue;
+      const cut = cuts[idx];
+      const slot = slots.get(ref.segId);
+      const dup: Cut = { ...cut, id: `${cut.id ?? cut.line_id}__${Date.now()}` };
+      if (slot) dup.position_s = round2((cut.position_s ?? slot.start) + (slot.end - slot.start));
+      cuts.splice(idx + 1, 0, dup);
+      commitCuts(ref.stemId, cuts);
+      created.push({ stemId: ref.stemId, segId: segIdOf(dup) });
+    }
+    if (created.length) setClipSelection(created);
+    return true;
+  }, [clipSelection, pending, slots, pushHistory, commitCuts, flashHint, setClipSelection]);
+
+  /** Suno 0: dim + silence the selected clip (keeps its slot timing). */
+  /** Suno 0: dim + silence every selected clip (keeps slot timing). */
+  const toggleSelectedEnabled = useCallback(() => {
+    if (clipSelection.length === 0) {
+      flashHint("0: select a clip first (click it or use ↑/↓).");
+      return false;
+    }
+    pushHistory();
+    const byStem = new Map<string, Set<string>>();
+    for (const ref of clipSelection) {
+      const set = byStem.get(ref.stemId) ?? new Set<string>();
+      set.add(ref.segId);
+      byStem.set(ref.stemId, set);
+    }
+    for (const [stemId, segIds] of byStem) {
+      const cuts = (pending[stemId] ?? []).map((c) =>
+        segIds.has(segIdOf(c)) ? { ...c, enabled: c.enabled === false } : { ...c },
+      );
+      commitCuts(stemId, cuts);
+    }
+    return true;
+  }, [clipSelection, pending, pushHistory, commitCuts, flashHint]);
+
+  /** Suno ←/→: nudge the selected section along the timeline. */
+  /** Suno ←/→: nudge every selected clip along the timeline. */
+  const nudgeSelected = useCallback((delta: number) => {
+    if (clipSelection.length === 0) return false;
+    pushHistory();
+    const byStem = new Map<string, Set<string>>();
+    for (const ref of clipSelection) {
+      const set = byStem.get(ref.stemId) ?? new Set<string>();
+      set.add(ref.segId);
+      byStem.set(ref.stemId, set);
+    }
+    for (const [stemId, segIds] of byStem) {
+      const cuts = (pending[stemId] ?? []).map((c) => {
+        if (!segIds.has(segIdOf(c))) return { ...c };
+        const slot = slots.get(segIdOf(c));
+        const base = c.position_s ?? slot?.start ?? 0;
+        return { ...c, position_s: round2(Math.max(0, base + delta)) };
+      });
+      commitCuts(stemId, cuts);
+    }
+    return true;
+  }, [clipSelection, pending, slots, pushHistory, commitCuts]);
+
+  /** Move the marked range, or extend its end (Suno Shift+←/→). */
+  const shiftMark = useCallback((delta: number, extend: boolean) => {
+    if (!selection) {
+      flashHint("Mark a range first: drag on the timeline (no clip selected).");
+      return false;
+    }
+    if (extend) {
+      const end = clamp(selection.start + 0.01, total, round2(selection.end + delta));
+      if (end - selection.start < 0.01) return false;
+      setSelection({ ...selection, end });
+    } else {
+      const len = selection.end - selection.start;
+      const start = clamp(0, Math.max(0, total - len), round2(selection.start + delta));
+      setSelection({ ...selection, start, end: round2(start + len) });
+    }
+    return true;
+  }, [selection, total, flashHint]);
+
+  /** Suno ↑/↓: move the selection across clips (same-stem order here). */
+  const cycleSelected = useCallback((direction: 1 | -1) => {
+    const stemId = selected?.stemId ?? project.stems[0]?.id;
+    if (!stemId) return false;
+    const cuts = pending[stemId] ?? [];
+    if (cuts.length === 0) return false;
+    const order = cuts
+      .map((c, i) => ({ segId: segIdOf(c), start: slots.get(segIdOf(c))?.start ?? 0, i }))
+      .sort((a, b) => a.start - b.start || a.i - b.i);
+    const cur = selected ? order.findIndex((o) => o.segId === selected.segId) : -1;
+    const next = order[(cur + direction + order.length) % order.length];
+    setSelected({ stemId, segId: next.segId });
+    return true;
+  }, [selected, pending, slots, project]);
+
+  /** Suno Shift+M / Shift+S on the selected track. */
+  const toggleMuteSolo = useCallback((kind: "mute" | "solo") => {
+    const stemId = selected?.stemId ?? project.stems[0]?.id;
+    if (!stemId) return false;
+    if (kind === "mute") {
+      setMuted((p) => {
+        const n = new Set(p);
+        if (n.has(stemId)) n.delete(stemId);
+        else n.add(stemId);
+        return n;
+      });
+    } else {
+      setSolo((p) => {
+        const n = new Set(p);
+        if (n.has(stemId)) n.delete(stemId);
+        else n.add(stemId);
+        return n;
+      });
+    }
+    return true;
+  }, [selected, project]);
+
+  /** Suno Shift+F: toggle a short fade on the selected clip. */
+  /** Suno Shift+F: toggle a short fade on every selected clip. */
+  const toggleFadeSelected = useCallback(() => {
+    if (clipSelection.length === 0) {
+      flashHint("Shift+F: select a clip first (click it or use ↑/↓).");
+      return false;
+    }
+    pushHistory();
+    const byStem = new Map<string, Set<string>>();
+    for (const ref of clipSelection) {
+      const set = byStem.get(ref.stemId) ?? new Set<string>();
+      set.add(ref.segId);
+      byStem.set(ref.stemId, set);
+    }
+    for (const [stemId, segIds] of byStem) {
+      const cuts = (pending[stemId] ?? []).map((c) => {
+        if (!segIds.has(segIdOf(c))) return { ...c };
+        const on = (c.fade_in_s ?? 0) > 0 || (c.fade_out_s ?? 0) > 0;
+        return { ...c, fade_in_s: on ? 0 : 0.1, fade_out_s: on ? 0 : 0.1 };
+      });
+      commitCuts(stemId, cuts);
+    }
+    return true;
+  }, [clipSelection, pending, pushHistory, commitCuts, flashHint]);
+
+  const copySelected = useCallback(() => {
+    if (clipSelection.length === 0) {
+      flashHint("Ctrl+C: select a clip first (click it or use ↑/↓).");
+      return false;
+    }
+    clipboardRef.current = clipSelection
+      .map((ref) => {
+        const cut = (pending[ref.stemId] ?? []).find((c) => segIdOf(c) === ref.segId);
+        return cut ? { stemId: ref.stemId, cut: { ...cut } } : null;
+      })
+      .filter((v): v is { stemId: string; cut: Cut } => v != null);
+    flashHint(`Copied ${clipboardRef.current.length} clip(s) — Ctrl+V pastes them.`);
+    return true;
+  }, [clipSelection, pending, flashHint]);
+
+  const pasteClipboard = useCallback(() => {
+    const clips = clipboardRef.current;
+    if (!clips || clips.length === 0) {
+      flashHint("Ctrl+V: copy a clip first (Ctrl+C).");
+      return false;
+    }
+    pushHistory();
+    const created: { stemId: string; segId: string }[] = [];
+    for (const entry of clips) {
+      const stem = stemById.get(entry.stemId) ?? null;
+      if (!stem || !stem.line_ids.includes(entry.cut.line_id)) continue;
+      const cuts = (pending[entry.stemId] ?? []).map((c) => ({ ...c }));
+      const afterIdx = selected?.stemId === entry.stemId
+        ? cuts.findIndex((c) => segIdOf(c) === selected.segId)
+        : cuts.length - 1;
+      const anchor = afterIdx >= 0 ? cuts[afterIdx] : null;
+      const anchorSlot = anchor ? slots.get(segIdOf(anchor)) : null;
+      const dup: Cut = {
+        ...entry.cut,
+        id: `${entry.cut.id ?? entry.cut.line_id}__${Date.now()}`,
+        position_s: anchorSlot ? round2(anchorSlot.end) : entry.cut.position_s,
+      };
+      const at = afterIdx >= 0 ? afterIdx + 1 : cuts.length;
+      cuts.splice(at, 0, dup);
+      commitCuts(entry.stemId, cuts);
+      created.push({ stemId: entry.stemId, segId: segIdOf(dup) });
+    }
+    if (created.length) setClipSelection(created);
+    return created.length > 0;
+  }, [selected, pending, slots, stemById, pushHistory, commitCuts, flashHint, setClipSelection]);
+
+  const cutSelectedToClipboard = useCallback(() => {
+    if (!selected || !copySelected()) return false;
+    const cuts = (pending[selected.stemId] ?? []).map((c) => ({ ...c }));
+    const idx = cuts.findIndex((c) => segIdOf(c) === selected.segId);
+    if (idx < 0) return false;
+    pushHistory();
+    commitCuts(selected.stemId, [...cuts.slice(0, idx), ...cuts.slice(idx + 1)]);
+    setSelected(null);
+    return true;
+  }, [selected, pending, copySelected, pushHistory, commitCuts]);
+
+  /** Suno double-click: open the bottom-dock clip editor for the clip. */
+  const openDock = (stemId: string, e: React.MouseEvent) => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const idx = findRegion(stemId, toGlobal(canvas, e.clientX));
+    if (idx == null) return;
+    const cut = (pending[stemId] ?? [])[idx];
+    if (!cut) return;
+    setSelectedCueId(null);
+    setSelected({ stemId, segId: segIdOf(cut) });
+    requestAnimationFrame(() => {
+      document.getElementById("clip-dock")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  };
+
+  /** Suno Delete with no marked range: remove the selected clip. */
+  /** Delete every selected clip (Suno multi-clip delete). */
+  const deleteSelectedClip = useCallback(() => {
+    if (clipSelection.length === 0) {
+      flashHint("Delete: select a clip first (click it or use ↑/↓).");
+      return false;
+    }
+    const byStem = new Map<string, Set<string>>();
+    for (const ref of clipSelection) {
+      const set = byStem.get(ref.stemId) ?? new Set<string>();
+      set.add(ref.segId);
+      byStem.set(ref.stemId, set);
+    }
+    pushHistory();
+    for (const [stemId, segIds] of byStem) {
+      const kept = (pending[stemId] ?? []).filter((c) => !segIds.has(segIdOf(c)));
+      commitCuts(stemId, kept.map((c) => ({ ...c })));
+    }
+    setSelected(null);
+    return true;
+  }, [clipSelection, pending, pushHistory, commitCuts, flashHint]);
+
+  /** Play from the marked section (Alt+Space, or P where the OS owns
+   * Alt+Space). Falls back to the playhead when nothing is marked. */
+  const playFromMark = useCallback(() => {
+    if (engine.playing) {
+      engine.pause();
+      auditionRef.current = null;
+      setPlaying(false);
+      setPlayhead(engine.getTime());
+      return;
+    }
+    const start = selection ? selection.start : playheadRef.current;
+    if (!selection) {
+      flashHint("No marked range — playing from the playhead. Drag on the timeline to mark one.");
+    }
+    void (async () => {
+      await engine.resume();
+      engine.play(start, allSchedule);
+      setPlaying(engine.playing);
+      setPlayhead(start);
+    })();
+  }, [engine, allSchedule, selection, flashHint]);
+
+  const onCardKeyDown = (e: KeyboardEvent) => {
+    const target = e.target as HTMLElement | null;
+    // Ignore text-entry controls only: buttons/links stay shortcut-enabled so
+    // Space works right after clicking a step or toolbar button, which is
+    // where focus usually lands.
+    if (target?.closest("input, select, textarea, [contenteditable='true']")) return;
+    const mod = e.metaKey || e.ctrlKey;
+    const k = e.key.toLowerCase();
+    // Undo / redo.
+    if (mod && k === "z" && !e.shiftKey) {
       e.preventDefault();
-      setSelection(null);
-      selectionRef.current = null;
+      undoEdit();
+      return;
+    }
+    if ((mod && k === "z" && e.shiftKey) || (mod && k === "y")) {
+      e.preventDefault();
+      redoEdit();
+      return;
+    }
+    if (mod && k === "s") {
+      e.preventDefault();
+      void saveAll();
+      return;
+    }
+    if (mod && k === "e") {
+      e.preventDefault();
+      cutOutRange();
+      return;
+    }
+    if (mod && k === "d") {
+      e.preventDefault();
+      duplicateSelected();
+      return;
+    }
+    if (mod && k === "c") {
+      e.preventDefault();
+      copySelected();
+      return;
+    }
+    if (mod && k === "x") {
+      e.preventDefault();
+      cutSelectedToClipboard();
+      return;
+    }
+    if (mod && k === "v") {
+      e.preventDefault();
+      pasteClipboard();
+      return;
+    }
+    if (mod && (e.key === "=" || e.key === "+" || e.key === "-")) {
+      e.preventDefault();
+      if (e.key === "-") zoomOut();
+      else zoomIn();
+      return;
+    }
+    // Plain + / − zoom (25% steps), Suno-style without a modifier.
+    if (
+      !mod &&
+      !e.altKey &&
+      (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "_" ||
+        e.key === "Add" || e.key === "Subtract")
+    ) {
+      e.preventDefault();
+      if (e.key === "-" || e.key === "_" || e.key === "Subtract") zoomOut();
+      else zoomIn();
+      return;
+    }
+    if (mod && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
+    if (k === "0" && !mod && !e.altKey) {
+      e.preventDefault();
+      toggleSelectedEnabled();
+      return;
+    }
+    if (k === "z" && !mod && !e.altKey) {
+      e.preventDefault();
+      zoomToSelection();
+      return;
+    }
+    if (k === "f" && e.shiftKey && !mod) {
+      e.preventDefault();
+      toggleFadeSelected();
+      return;
+    }
+    if (k === "f" && !e.shiftKey && !mod && !e.altKey) {
+      e.preventDefault();
+      toggleFullscreen();
+      return;
+    }
+    if ((k === "m" || k === "s") && e.shiftKey && !mod && !e.altKey) {
+      e.preventDefault();
+      toggleMuteSolo(k === "m" ? "mute" : "solo");
+      return;
+    }
+    if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+      e.preventDefault();
+      setShowShortcuts((v) => !v);
+      return;
+    }
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      const step = (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey && !selection ? 1 : 0.1);
+      if (selection) shiftMark(step, e.shiftKey);
+      else nudgeSelected(step);
+      return;
+    }
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault();
+      cycleSelected(e.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (e.key === "Backspace" || e.key === "Delete") {
+      e.preventDefault();
+      if (selection) cutOutRange();
+      else deleteSelectedClip();
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (showShortcuts) setShowShortcuts(false);
+      else if (selection) {
+        setSelection(null);
+        selectionRef.current = null;
+      } else if (isFullscreen) {
+        toggleFullscreen();
+      }
+      return;
+    }
+    if (k === "p" && !mod && !e.altKey) {
+      e.preventDefault();
+      playFromMark();
+      return;
+    }
+    if ((e.code === "Space" || e.key === " ") && e.altKey) {
+      // Suno parity; on Linux/Windows the OS may own Alt+Space, so P is the
+      // reliable alias.
+      e.preventDefault();
+      playFromMark();
       return;
     }
     if (e.code !== "Space" && e.key !== " ") return;
     e.preventDefault();
     void togglePlay();
   };
+
+  // Shortcuts are global to the Cut page (DAW behaviour): the timeline div is
+  // not guaranteed to own focus after clicking a step, a toolbar button or a
+  // clip, so a document-level listener is required. The ref avoids
+  // re-registering on every render.
+  const keyHandlerRef = useRef(onCardKeyDown);
+  keyHandlerRef.current = onCardKeyDown;
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => keyHandlerRef.current(event);
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
 
   // ---- save --------------------------------------------------------------
 
@@ -1562,6 +2346,7 @@ export function MultiTrackEditor({
       ...cuts[index],
       [field]: Number.isFinite(value) ? value : cuts[index][field],
     };
+    pushHistory();
     commitCuts(stemId, cuts);
   };
 
@@ -1715,7 +2500,7 @@ export function MultiTrackEditor({
   let lastScene: number | null = null;
 
   return (
-    <div>
+    <div ref={pageRef} className={`mt-page${isFullscreen ? " mt-page-fs" : ""}`}>
       <section className="panel stems-toolbar">
         <div>
           <h2 className="panel-title">
@@ -1724,9 +2509,10 @@ export function MultiTrackEditor({
           </h2>
           <p className="panel-sub">
             Cuts follow the script order (Viktoria 1, Andreas 1, Grandmother 1,
-            Viktoria 2 …) — drag a clip to move its section, edges to trim,
-            Alt/Ctrl-drag to slip the audio inside. Shift-drag marks a section;
-            Backspace/Delete cuts it out. Align to script re-sorts.
+            Viktoria 2 …) — drag a clip to move it, edges to trim,
+            Alt/Ctrl-drag to slip, double-click to edit. Drag with no clip
+            selected for a free range, then Ctrl+E/Delete cuts it out. 0 disables,
+            Ctrl+Z/Y undo/redo. Shift+? lists all keys.
           </p>
         </div>
         <div className="panel-actions">
@@ -1746,6 +2532,26 @@ export function MultiTrackEditor({
           </button>
           <button type="button" className="button button-ghost button-sm" onClick={onRefresh}>
             Refresh
+          </button>
+          <button
+            type="button"
+            className="button button-ghost button-sm"
+            onClick={() => setShowShortcuts((v) => !v)}
+            title="Keyboard shortcuts (Shift+?)"
+            aria-label="Show keyboard shortcuts"
+          >
+            Keys
+          </button>
+          <button
+            type="button"
+            className="button button-ghost button-sm"
+            onClick={toggleFullscreen}
+            title="Fullscreen the Cut page (F) — fits the whole editor on screen"
+            aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen the Cut page"}
+            aria-pressed={isFullscreen}
+          >
+            <CornersOut size={14} />
+            {isFullscreen ? "Exit" : "Fullscreen"}
           </button>
           {project.mix_stale ? <span className="render-warn">mix stale</span> : null}
           <button
@@ -1779,11 +2585,61 @@ export function MultiTrackEditor({
         </div>
       ) : null}
 
+      {showShortcuts ? (
+        <div
+          className="panel mt-shortcuts"
+          role="dialog"
+          aria-label="Keyboard shortcuts"
+          style={{ marginBottom: 12, padding: "14px 18px" }}
+        >
+          <div className="mt-selection-head">
+            <strong>Keyboard shortcuts</strong>
+            <span className="panel-sub">global on the Cut page · Suno Studio parity</span>
+            <button
+              type="button"
+              className="button button-ghost button-sm"
+              onClick={() => setShowShortcuts(false)}
+              title="Close (Esc)"
+              aria-label="Close keyboard shortcuts"
+            >
+              ×
+            </button>
+          </div>
+          <div className="mt-selection-controls" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "4px 18px" }}>
+            <span><b>Space</b> · play / pause</span>
+            <span><b>P / Alt+Space</b> · play from mark</span>
+            <span><b>Ctrl/Cmd+E</b> · cut marked range</span>
+            <span><b>Backspace/Del</b> · cut range / delete clip</span>
+            <span><b>0</b> · disable / enable clip</span>
+            <span><b>Ctrl/Cmd+D</b> · duplicate clip</span>
+            <span><b>Ctrl/Cmd+C/X/V</b> · copy / cut / paste clip</span>
+            <span><b>Ctrl/Cmd+Z</b> · undo</span>
+            <span><b>Ctrl+Shift+Z / Ctrl+Y</b> · redo</span>
+            <span><b>Ctrl/Cmd+S</b> · save all</span>
+            <span><b>←/→</b> · nudge clip (Shift: coarse)</span>
+            <span><b>Shift+←/→</b> · extend marked section</span>
+            <span><b>↑/↓</b> · select prev / next clip</span>
+            <span><b>Shift+M / Shift+S</b> · mute / solo track</span>
+            <span><b>+ / −</b> · zoom 25% steps (Ctrl/Cmd too)</span>
+            <span><b>Z</b> · zoom to selection</span>
+            <span><b>F</b> · fullscreen Cut page (Shift+F: fade)</span>
+            <span><b>Shift+?</b> · this dialog</span>
+            <span><b>Esc</b> · clear mark / close</span>
+            <span><b>LMB-drag</b> · free range (no clip marked)</span>
+            <span><b>Click clip</b> · select · drag again to move</span>
+            <span><b>Shift-click clip</b> · add / remove from selection</span>
+            <span><b>Drag top corners</b> · fade in / out</span>
+            <span><b>Right-click clip</b> · actions menu</span>
+            <span><b>Double-click ruler</b> · open clip editor</span>
+            <span><b>Double-click</b> · open clip editor</span>
+          </div>
+        </div>
+      ) : null}
+
       <div
         className="panel mt-timeline"
-        onKeyDown={onCardKeyDown}
         tabIndex={0}
-        aria-label="Multitrack timeline. Left click sets the playhead, Space plays or pauses all tracks."
+        aria-label="Multitrack timeline. Left click sets the playhead, Space plays or pauses, double-click opens the clip editor, Shift+question-mark lists all shortcuts."
       >
         {/* transport */}
         <div className="mt-toolbar">
@@ -1800,27 +2656,31 @@ export function MultiTrackEditor({
             {playhead.toFixed(1)}s / {total.toFixed(1)}s
           </span>
           <span className="mt-sep" />
-          <span className="mt-zoom-label">Zoom:</span>
-          <button
-            type="button"
-            className="button button-ghost button-sm"
-            onClick={zoomIn}
-            disabled={total <= 0}
-            title="Zoom in (centers on the selected region)"
-            aria-label="Zoom in"
-          >
-            <MagnifyingGlassPlus size={14} />
-          </button>
-          <button
-            type="button"
-            className="button button-ghost button-sm"
-            onClick={zoomOut}
-            disabled={total <= 0 || !zoomed}
-            title="Zoom out"
-            aria-label="Zoom out"
-          >
-            <MagnifyingGlassMinus size={14} />
-          </button>
+          <div className="mt-zoom" role="group" aria-label="Timeline zoom">
+            <button
+              type="button"
+              className="button button-ghost button-sm mt-zoom-btn"
+              onClick={zoomOut}
+              disabled={total <= 0 || !zoomed}
+              title="Zoom out 25% (−)"
+              aria-label="Zoom out"
+            >
+              −
+            </button>
+            <span className="mt-zoom-pct" aria-live="polite" title="Visible portion of the timeline">
+              {Math.round((total / Math.max(0.001, viewEnd - viewStart)) * 100)}%
+            </span>
+            <button
+              type="button"
+              className="button button-ghost button-sm mt-zoom-btn"
+              onClick={zoomIn}
+              disabled={total <= 0}
+              title="Zoom in 25% (+), centered on the selection"
+              aria-label="Zoom in"
+            >
+              +
+            </button>
+          </div>
           <button
             type="button"
             className="button button-ghost button-sm"
@@ -1861,7 +2721,55 @@ export function MultiTrackEditor({
           </button>
           <span className="mt-view-label">{viewLabel}</span>
         </div>
+        {actionHint ? (
+          <div className="mt-hint-flash" role="status" aria-live="polite">
+            {actionHint}
+          </div>
+        ) : null}
         {loadError ? <div className="render-error">waveform: {loadError}</div> : null}
+
+        {/* insert sounds / music at the playhead (no page switch needed) */}
+        <div className="mt-insert">
+          <span className="mt-zoom-label">Insert:</span>
+          <input
+            type="search"
+            value={insertQuery}
+            onChange={(e) => setInsertQuery(e.target.value)}
+            placeholder="Search sounds…"
+            aria-label="Search sounds to insert"
+          />
+          <select
+            value={insertId}
+            onChange={(e) => setInsertId(e.target.value)}
+            aria-label="Sound to insert"
+            disabled={insertItems.length === 0}
+          >
+            {insertItems.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={insertKind}
+            onChange={(e) => setInsertKind(e.target.value as "one_shot" | "bed" | "music")}
+            aria-label="Cue kind"
+            title="one-shot plays once, beds and music run to the scene end"
+          >
+            <option value="one_shot">one-shot</option>
+            <option value="bed">bed</option>
+            <option value="music">music</option>
+          </select>
+          <button
+            type="button"
+            className="button button-ghost button-sm"
+            onClick={() => void insertCueAtPlayhead()}
+            disabled={!insertId || inserting}
+            title="Insert the selected sound at the playhead"
+          >
+            {inserting ? "…" : "At playhead"}
+          </button>
+        </div>
 
         <div ref={timelineRef} className="mt-rows">
           {/* ruler */}
@@ -1874,7 +2782,8 @@ export function MultiTrackEditor({
                 if (el) canvasRefs.current.set("__ruler__", el);
                 else canvasRefs.current.delete("__ruler__");
               }}
-              onMouseDown={onRulerMouseDown}
+              onPointerDown={onRulerPointerDown}
+              onDoubleClick={onRulerDoubleClick}
             />
           </div>
 
@@ -1958,10 +2867,12 @@ export function MultiTrackEditor({
                         if (el) canvasRefs.current.set(stem.id, el);
                         else canvasRefs.current.delete(stem.id);
                       }}
-                      onMouseDown={(e) => onTrackMouseDown(e, stem.id)}
-                      onMouseMove={(e) => onTrackMouseMove(e, stem.id)}
-                      onMouseUp={onTrackMouseUp}
-                      onMouseLeave={onTrackMouseUp}
+                      onPointerDown={(e) => onTrackPointerDown(e, stem.id)}
+                      onPointerMove={(e) => onTrackPointerMove(e, stem.id)}
+                      onPointerUp={onTrackPointerUp}
+                      onPointerCancel={onTrackPointerUp}
+                      onDoubleClick={(e) => openDock(stem.id, e)}
+                      onContextMenu={(e) => onTrackContextMenu(e, stem.id)}
                     />
                   ) : (
                     <div className="mt-noaudio">Render this stem first.</div>
@@ -2003,12 +2914,30 @@ export function MultiTrackEditor({
 
         {/* selected-region editor (keyboard-accessible alternative to drag) */}
         {selected && selCut && selStem ? (
-          <div className="mt-selection">
+          <div className="mt-selection" id="clip-dock">
+            <div className="mt-selection-head">
+              <span className="panel-sub">clip editor · double-click a clip to open</span>
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => {
+                  setSelected(null);
+                  setSelection(null);
+                }}
+                title="Close clip editor"
+                aria-label="Close clip editor"
+              >
+                ×
+              </button>
+            </div>
             <div className="mt-selection-head">
               <span className="speaker-badge" style={speakerStyle(selStem.speaker)}>
                 {selStem.speaker}
               </span>
-              <strong>{selCut.line_id}</strong>
+              <strong>
+                {selCut.line_id}
+                {clipSelection.length > 1 ? ` +${clipSelection.length - 1}` : ""}
+              </strong>
               <span className="mt-selection-text" title={selLine?.text}>
                 {selLine?.text ?? ""}
               </span>
@@ -2141,6 +3070,14 @@ export function MultiTrackEditor({
                   onChange={(e) => updateCutEffect(selStem.id, segIdOf(selCut), { dereverb: e.target.checked })}
                 />
               </label>
+              <label title="Clip enabled — 0 toggles (disabled clips are dim and silent)">
+                <span>enabled</span>
+                <input
+                  type="checkbox"
+                  checked={selCut.enabled !== false}
+                  onChange={(e) => updateCutEffect(selStem.id, segIdOf(selCut), { enabled: e.target.checked })}
+                />
+              </label>
               <button
                 type="button"
                 className="button button-ghost button-sm"
@@ -2258,21 +3195,22 @@ export function MultiTrackEditor({
         ) : selection ? (
           <div className="mt-selection">
             <div className="mt-selection-head">
-              <strong>Marked section</strong>
+              <strong>Marked range</strong>
               <span className="mt-selection-text">
-                {selection.lineId} · {selection.start.toFixed(2)}–{selection.end.toFixed(2)}s
-                ({Math.max(0, selection.end - selection.start).toFixed(2)}s inside the clip)
+                {stemById.get(selection.stemId)?.speaker ?? selection.stemId} ·{" "}
+                {selection.start.toFixed(2)}–{selection.end.toFixed(2)}s
+                ({Math.max(0, selection.end - selection.start).toFixed(2)}s on the timeline)
               </span>
             </div>
             <div className="mt-selection-controls">
               <button
                 type="button"
                 className="button button-primary button-sm"
-                onClick={() => void cutOutSelection()}
-                title="Remove the marked section and close the gap (Backspace/Delete)"
+                onClick={() => void cutOutRange()}
+                title="Cut this range out and ripple the rest left (Ctrl+E or Delete)"
               >
                 <Scissors size={14} />
-                Cut out section
+                Cut range
               </button>
               <button
                 type="button"
@@ -2285,19 +3223,49 @@ export function MultiTrackEditor({
               >
                 Clear
               </button>
-              <span className="panel-sub">Save all writes the split clips.</span>
+              <span className="panel-sub">Save all writes the cut segments.</span>
             </div>
           </div>
         ) : (
           <p className="panel-sub mt-hint">
-            Cuts follow the script order. Click a clip to select it, drag its body to move
-            the section, edges to trim, Alt/Ctrl-drag to slip the audio inside.
-            Shift-drag inside a clip marks a section — Backspace/Delete cuts it out.
-            Click a music/SFX clip to edit its anchor, offset and gain. Click empty
-            space to seek.
+            Click a clip to select it (↑/↓ cycles clips), drag its body to move
+            it, edges to trim, Alt/Ctrl-drag to slip the audio inside,
+            double-click to open the clip editor. With no clip selected, drag on
+            the timeline for a free range — Ctrl+E/Delete cuts it out and ripples
+            the rest left. 0 disables, Ctrl+Z/Y undo/redo, Shift+? lists all
+            keys. Click a music/SFX clip to edit its anchor, offset and gain.
+            Click empty space to seek.
           </p>
         )}
       </div>
+
+      {contextMenu ? (
+        <div
+          className="mt-ctx-overlay"
+          onClick={() => setContextMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setContextMenu(null);
+          }}
+        >
+          <div
+            className="mt-ctx-menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            role="menu"
+            aria-label="Clip actions"
+          >
+            <button type="button" onClick={() => { duplicateSelected(); setContextMenu(null); }}>Duplicate</button>
+            <button type="button" onClick={() => { copySelected(); setContextMenu(null); }}>Copy</button>
+            <button type="button" onClick={() => { pasteClipboard(); setContextMenu(null); }}>Paste here</button>
+            <button type="button" onClick={() => { toggleSelectedEnabled(); setContextMenu(null); }}>Disable / enable</button>
+            <button type="button" onClick={() => { toggleFadeSelected(); setContextMenu(null); }}>Toggle fade</button>
+            {selection ? (
+              <button type="button" onClick={() => { cutOutRange(); setContextMenu(null); }}>Cut marked range</button>
+            ) : null}
+            <button type="button" onClick={() => { deleteSelectedClip(); setContextMenu(null); }}>Delete</button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -2,13 +2,13 @@
 
 [![Drama Llama mascot](web/public/llogo.png)](web/public/llogo.png)
 
-Drama Llama is a local-first web app that turns a pasted script into a finished audio drama. You paste in your script, and the app splits it into scenes and dialogue lines, voices each character with a text-to-speech engine of your choice, and aligns the generated speech to the text. You then fine-tune the timing on a multitrack timeline and let the app mix dialogue, sound effects and music into a loudness-normalised WAV or MP3 master. Apart from the optional hosted LLM and Suno music generation, everything runs on your own machine.
+Drama Llama is a local-first web app that turns a pasted script into a finished audio drama. You paste in your script, and the app splits it into scenes and dialogue lines, voices each character with a text-to-speech engine of your choice — local Breeze/Chatterbox clones, or Suno for TTS audio generation with no GPU needed — and aligns the generated speech to the text. You then fine-tune the timing on a multitrack timeline and let the app mix dialogue, sound effects and music into a loudness-normalised WAV or MP3 master. Apart from the optional hosted LLM and Suno, everything runs on your own machine.
 
 ## How it works
 
-When you paste a script, Drama Llama parses it into scenes and dialogue lines. The parser is deterministic by default, but a local LLM can optionally normalise scripts with messy formatting first. The lines are then grouped by scene and speaker into stem scripts, and each stem is rendered with the project's engine. Breeze or the Breeze-DE sidecar produce designed-clone voices, Chatterbox clones voices from samples, Suno handles sung dialogue, and a Fake engine exists for testing. Every render produces one or more takes per character.
+When you paste a script, Drama Llama parses it into scenes and dialogue lines. The parser is deterministic by default, but a local LLM can optionally normalise scripts with messy formatting first. The lines are then grouped by scene and speaker into stem scripts, and each stem is rendered with the project's engine: Breeze/Breeze-DE or Chatterbox voice clones, Suno cloud dialogue voices, or Fake for testing. Every render produces one or more takes per character.
 
-Once a stem has been rendered, Whisper aligns each take on the CPU and cuts it into per-line clips. You refine these clips on the shared Cut board, where you can trim windows, slip audio inside a region and choose which take each clip uses. Sound effects, one-shot sounds and music cues are anchored to individual lines, and music can be generated live with Suno through the BetterSuno browser extension. Finally, the app assembles everything, ducks the beds under speech, applies EQ and normalises the loudness to produce the master.
+Once a stem has been rendered, Whisper aligns each take on the CPU and cuts it into per-line clips. You refine these clips on the shared Cut board, where you can trim windows, slip audio inside a region and choose which take each clip uses. Sound effects, one-shot sounds and music cues are anchored to individual lines. Finally, the app assembles everything, ducks the beds under speech, applies EQ and normalises the loudness to produce the master.
 
 ## A tour of the interface
 
@@ -42,7 +42,7 @@ Rendering follows the pipeline described above: a Breeze reference voice is desi
 
 The German path uses Chatterbox Multilingual 0.5B through its local HTTP server, with per-character voice samples and exaggeration and cfg settings per take. It has been verified end to end with a 20.7-second stem, seven of seven line cuts and a 46.8-second test mix.
 
-Music generation works through the `bettersuno-mcp` modules. In the Sound stage you can generate a theme, bed or song, preview the returned track, add it as a music cue and mix it. This has been validated with a real BetterSuno extension connection and a WAV download.
+Suno dialogue and music have been validated through a real BetterSuno extension connection with WAV download.
 
 Native installers wrap all of this in a PySide6 wizard over a stdlib-only installer core that is shared with a headless CLI. The same core produces an AppImage on Linux and an Inno Setup installer on Windows, with a per-user layout, GPU auto-detection with `--cpu`/`--gpu` overrides, and opt-in Breeze English, Breeze German and Chatterbox using pinned wheels, models and Docker image digests. See [`INSTALL.md`](INSTALL.md).
 
@@ -91,7 +91,7 @@ installers.
 
 A clean setup needs Python 3.12 or newer, an `ffmpeg` binary on your `PATH` and Node.js 20 or newer. The mixer calls `ffmpeg` for loudness normalisation and MP3 encoding, and uploads are converted with it. The web frontend is built with Node.js. A local NVIDIA GPU is optional but recommended. Without one, Breeze rendering and Whisper alignment fall back to slow CPU execution, while the Fake engine and the full test suite run anywhere.
 
-Start by cloning the repository and pulling in the BetterSuno submodule, which the music sidecar depends on:
+Start by cloning the repository and pulling in the BetterSuno submodule, which the Suno sidecar depends on:
 
 ```
 git clone git@github.com:MrDoe/DramaLlama.git
@@ -126,11 +126,11 @@ The legacy `drama-studio` command is still installed as an alias. If you prefer 
 
 The `./start-ui.sh` launcher wraps all of this. It builds the frontend when it is stale and then serves the app. Pass `--dev` for Vite hot reload on port 5173, `--open` to launch the browser once `/api/health` passes, and `--build` or `--no-build` to control the rebuild.
 
-### Suno music bridge
+### Suno bridge (dialogue voices + music)
 
-Suno generation needs the BetterSuno browser extension and an open `suno.com` tab. The submodule was already fetched during installation, but its own dependencies must be installed once. Its postinstall script is local-only, so a plain install skips it upstream, and you should run `npm ci --ignore-scripts` inside `third_party/bettersuno-mcp`. Then start the HTTP sidecar in another terminal with `~/.venvs/drama-llama/bin/drama-llama suno-bridge`. The `serve` command starts the bridge automatically unless you pass `--no-suno-bridge`.
+Suno dialogue rendering and music generation both need the BetterSuno browser extension and an open `suno.com` tab. The submodule was already fetched during installation, but its own dependencies must be installed once. Its postinstall script is local-only, so a plain install skips it upstream, and you should run `npm ci --ignore-scripts` inside `third_party/bettersuno-mcp`. Then start the HTTP sidecar in another terminal with `~/.venvs/drama-llama/bin/drama-llama suno-bridge`. The `serve` command starts the bridge automatically unless you pass `--no-suno-bridge`.
 
-The bridge listens on `http://127.0.0.1:9430` and owns the extension WebSocket on `ws://127.0.0.1:9423`. Only one process can own port 9423 at a time, so stop any other `bettersuno-mcp` instance first. The Sound stage shows the connection status and the Suno generation form. Downloads use the WAV conversion flow, so the mixer always receives a decodable file.
+The bridge listens on `http://127.0.0.1:9430` and owns the extension WebSocket on `ws://127.0.0.1:9423`. Only one process can own port 9423 at a time, so stop any other `bettersuno-mcp` instance first. The Stems & Render stage uses it for dialogue takes and the Sound stage shows the connection status plus the music generation form. Downloads use the WAV conversion flow, so the mixer always receives a decodable file.
 
 ## Workflow
 
@@ -140,7 +140,7 @@ Paste your script and choose English or German. `Save & parse` parses determinis
 
 ### 2. Stems & Render
 
-Group the lines by scene and speaker, then render them with the project's default engine, which you pick in the project header. The `auto` setting means Breeze for English and Chatterbox for German. Breeze works from a designed reference voice of 6鈥�11 seconds, while Chatterbox uses an uploaded voice sample or its default voice. The worker renders the stem, aligns it with Whisper on the CPU, cuts the line clips and stores a confidence value for each. Takes accumulate and stay labelled by engine so you can compare them, and switching a cut's take scales its window by the ratio of the two durations.
+Group the lines by scene and speaker, then render them with the project's default engine, which you pick in the project header. The `auto` setting means Breeze for English and Chatterbox for German; pick `suno` explicitly for cloud voices in English and German (voice, persona and take details: see Engines). Breeze works from a designed reference voice of 6-11 seconds, while Chatterbox uses an uploaded voice sample or its default voice. The worker renders the stem, aligns it with Whisper on the CPU, cuts the line clips and stores a confidence value for each. Takes accumulate and stay labelled by engine so you can compare them, and switching a cut's take scales its window by the ratio of the two durations.
 
 ### 3. Cut
 
@@ -148,7 +148,7 @@ Trim every line on one shared timeline that follows script order and mixer spaci
 
 ### 4. Sound
 
-Search `~/Sounds` (plus `data/sfx` and your uploads), preview the results and attach beds, one-shots or music to specific lines. Alternatively, generate music with Suno and add the returned track as a cue.
+Search `~/Sounds` (plus `data/sfx` and your uploads), preview the results and attach beds, one-shots or music to specific lines. Alternatively, generate a Suno music cue (see Suno bridge) and add the returned track as a cue.
 
 ### 5. Mix
 
@@ -156,9 +156,13 @@ The mixer assembles the line clips, ducks the beds under speech, filters telepho
 
 ## Engines
 
-For English, Drama Llama uses Breeze TTS 2. You design a 6鈥�11 second reference voice for each character, and the engine clones it for every scene stem. For German there is an optional Breeze-TTS-2.cpp sidecar that runs a community finetune called Articulatio-DE and supports both voice design and cloning. Its weights and outputs are for research and non-commercial use only.
+For English, Drama Llama uses Breeze TTS 2. You design a 6-11 second reference voice for each character, and the engine clones it for every scene stem. For German there is an optional Breeze-TTS-2.cpp sidecar that runs a community finetune called Articulatio-DE and supports both voice design and cloning. Its weights and outputs are for research and non-commercial use only.
 
-Chatterbox Multilingual 0.5B covers both English and German. It clones a voice from an uploaded sample and falls back to its default voice when no sample is provided. Drama Llama expects the Chatterbox model server at `http://127.0.0.1:4123`. You can start it independently, and it keeps the model warm between requests. Drama Llama only sends text and an optional voice sample over HTTP. Music comes from Suno through BetterSuno, where a prompt produces a track that you add as a music cue.
+Chatterbox Multilingual 0.5B covers both English and German. It clones a voice from an uploaded sample and falls back to its default voice when no sample is provided. Drama Llama expects the Chatterbox model server at `http://127.0.0.1:4123`. You can start it independently, and it keeps the model warm between requests. Drama Llama only sends text and an optional voice sample over HTTP.
+
+### Suno cloud voices (no GPU needed)
+
+Suno is a first-class dialogue engine in Drama Llama, not just a music source: pick `suno` as the project engine and every stem renders as expressive spoken or sung dialogue. It covers English and German, needs no GPU and no reference sample, and works language-agnostically. Each stem is sent as dialogue-verbatim lyrics with `[delivery]` tags (built from the line directions, voice baseline and scene mood), plus a title and style tags starting from `audio drama radio play`. You can set a Suno persona voice per character, vocal gender, model version (`mv`) and — on paid Suno plans — style/weirdness/audio weights. Each render returns multiple candidate takes that accumulate next to local-engine takes for A/B comparison; downloads are converted to WAV so Whisper alignment and the mixer keep working, and vocal-stem extraction is a manual per-take step (Demucs or Suno stems). The same bridge also generates theme music, beds and songs from the Sound stage, where a prompt produces a track that you add as a music cue.
 
 ### German Breeze sidecar (optional)
 
@@ -234,4 +238,4 @@ Smoke tests against the real models are opt-in:
 
 ## Known gaps
 
-Chatterbox voice samples are uploaded per character, but the app has no recorder or trimmer yet, so characters without a sample get the server's default voice. Suno generation needs the BetterSuno extension and a live `suno.com` tab, and because the bridge owns port 9423, any other `bettersuno-mcp` instance must be stopped first. Cue timing is anchored to lines, so sound effects cannot yet be dragged on the Cut timeline. Finally, LLM parsing requires Ollama and is deliberately serialised against Breeze on GPU.
+Chatterbox voice samples are uploaded per character, but the app has no recorder or trimmer yet, so characters without a sample get the server's default voice. Suno still needs the BetterSuno extension, a live `suno.com` tab, and exclusive ownership of port 9423 (see Suno bridge). Cue timing is anchored to lines, so sound effects cannot yet be dragged on the Cut timeline. Finally, LLM parsing requires Ollama and is deliberately serialised against Breeze on GPU.

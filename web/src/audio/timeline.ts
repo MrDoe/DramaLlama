@@ -16,6 +16,8 @@ export interface Cut {
   pitch_cents?: number;
   reverb_mix?: number;
   dereverb?: boolean;
+  /** False = clip disabled (dim + silent, keeps its slot timing). */
+  enabled?: boolean;
 }
 
 /** Stable segment key: explicit id, else the line id (one segment per line). */

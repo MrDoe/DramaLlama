@@ -142,6 +142,7 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
                     "pitch_cents": int(seg.pitch_cents or 0),
                     "reverb_mix": float(seg.reverb_mix or 0.0),
                     "dereverb": bool(seg.dereverb),
+                    "enabled": bool(getattr(seg, "enabled", True)),
                 }
                 segments.append((seg_id, seg.line_id, clip_path, float(pos), fx))
     else:
@@ -209,10 +210,13 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
     total = max(1, int(total_s * SR))
     dialogue = np.zeros(total, dtype=np.float32)
 
-    # Place every segment clip at its (freeform) position.
+    # Place every enabled segment clip at its (freeform) position.
+    # Disabled segments keep their slot (timing) but stay silent.
     seen_paths: set[Path] = set()
     for seg_id, line_id, clip_path, pos, fx in segments:
         if not clip_path.exists():
+            continue
+        if fx is not None and not fx.get("enabled", True):
             continue
         clip = _load_audio(clip_path)
         if fx:

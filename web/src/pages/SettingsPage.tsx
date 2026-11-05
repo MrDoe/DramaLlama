@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, CheckCircle, WarningCircle } from "@phosphor-icons/react";
 import { api } from "../api";
 import type { LlmConfig, LlmTestResult } from "../api";
+import { applyTheme, getTheme, type Theme } from "../theme";
 
 function sourceLabel(source: string | undefined): string {
   if (source === "file") return "saved in settings";
@@ -13,6 +14,7 @@ function sourceLabel(source: string | undefined): string {
 export function SettingsPage() {
   const [config, setConfig] = useState<LlmConfig | null>(null);
   const [sunoPlan, setSunoPlan] = useState<"free" | "pro">("free");
+  const [theme, setTheme] = useState<Theme>(() => getTheme());
   const [savingPlan, setSavingPlan] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -443,6 +445,43 @@ export function SettingsPage() {
               <button type="submit" className="button button-primary" disabled={savingPlan}>
                 {savingPlan ? "Saving…" : "Save plan"}
               </button>
+            </div>
+          </form>
+
+          <form className="form-card" onSubmit={(event) => event.preventDefault()}>
+            <div className="field">
+              <span className="label">
+                Theme <span>appearance of the app</span>
+              </span>
+              <div className="segmented" role="group" aria-label="Theme">
+                <button
+                  type="button"
+                  className={`segment${theme === "classic" ? " active" : ""}`}
+                  onClick={() => {
+                    setTheme("classic");
+                    applyTheme("classic");
+                  }}
+                  aria-pressed={theme === "classic"}
+                >
+                  Classic
+                </button>
+                <button
+                  type="button"
+                  className={`segment${theme === "violet" ? " active" : ""}`}
+                  onClick={() => {
+                    setTheme("violet");
+                    applyTheme("violet");
+                  }}
+                  aria-pressed={theme === "violet"}
+                >
+                  Violet
+                </button>
+              </div>
+              <span className="panel-sub">
+                {theme === "classic"
+                  ? "Warm orange accent on a deep navy background (the original look)."
+                  : "Violet accent on a darker background."}
+              </span>
             </div>
           </form>
 

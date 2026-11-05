@@ -223,6 +223,8 @@ class CutUpdate(BaseModel):
     pitch_cents: int = Field(default=0, ge=-1200, le=1200)
     reverb_mix: float = Field(default=0.0, ge=0, le=1)
     dereverb: bool = False
+    # False = clip disabled (dim + silent, keeps its slot timing).
+    enabled: bool = True
 
 
 class AlignmentPatch(BaseModel):
@@ -1051,6 +1053,7 @@ def create_app(
                     pitch_cents=int(cut.pitch_cents),
                     reverb_mix=float(cut.reverb_mix),
                     dereverb=bool(cut.dereverb),
+                    enabled=bool(cut.enabled),
                     confidence=1.0,
                     fallback=False,
                 )
@@ -1206,6 +1209,7 @@ def create_app(
                         pitch_cents=int(cut.pitch_cents),
                         reverb_mix=float(cut.reverb_mix),
                         dereverb=bool(cut.dereverb),
+                        enabled=bool(cut.enabled),
                         confidence=1.0,
                         fallback=False,
                     )

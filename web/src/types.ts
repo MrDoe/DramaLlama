@@ -206,6 +206,8 @@ export interface AlignedLine {
   pitch_cents?: number;
   reverb_mix?: number;
   dereverb?: boolean;
+  /** False = clip disabled (dim + silent, keeps its slot timing). */
+  enabled?: boolean;
   confidence?: number | null;
   fallback: boolean;
 }
