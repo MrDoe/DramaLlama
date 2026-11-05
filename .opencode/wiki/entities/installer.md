@@ -8,10 +8,11 @@ sourceRefs:
   - installer/packaging/pyinstaller.spec
   - installer/packaging/inno/DramaLlama.iss
   - installer/packaging/appimage/build-appimage.sh
+  - installer/core/tls.py
   - scripts/build_installer.py
   - .github/workflows/installer.yml
   - INSTALL.md
-lastReviewed: 2026-11-02
+lastReviewed: 2026-11-05
 ---
 
 # Installer
@@ -56,6 +57,8 @@ package is treated as a namespace.
 - `verify.py` — file checks plus an import smoke test and a server boot probe.
 - `uninstall.py` — removal with `keep_data` / `purge_models`.
 - `download.py`, `util.py`, `state.py`, `progress.py`, `cli.py`.
+- `tls.py` — host CA discovery, `SSL_CERT_FILE` export, unverified fallback,
+  `--check-tls`.
 
 ## Install layout
 
@@ -115,6 +118,36 @@ loop while `run_install()` blocks.
 
 CLI exit codes: `0` success, `1` install/verify failure, `2` invalid
 invocation, `130` cancelled.
+
+## TLS trust store
+
+The frozen Linux build carries the build host's OpenSSL (Ubuntu 22.04), so its
+compiled-in CA paths point at `/usr/lib/ssl`. Arch/CachyOS, NixOS and Alpine
+have no such path: OpenSSL loads zero trust anchors and the first download dies
+with `CERTIFICATE_VERIFY_FAILED` (seen on CachyOS at the uv step of 0.3.1).
+
+`installer/core/tls.py` runs once in `entry.main()` and again at the top of
+`run_install()`:
+
+- a valid `SSL_CERT_FILE` wins;
+- otherwise it probes `/etc/ssl/cert.pem`,
+  `/etc/ssl/certs/ca-certificates.crt`, the RHEL/SUSE equivalents and validates
+  each candidate with `load_verify_locations()` plus
+  `cert_store_stats()["x509_ca"] > 0` — an Arch box with only
+  `ca-certificates-utils` has the file but no certificates in it;
+- the chosen bundle is exported as `SSL_CERT_FILE`, so `uv` and `npm` children
+  inherit it;
+- when no bundle exists at all (or `--insecure-tls` /
+  `DRAMA_LLAMA_INSECURE_TLS=1` is set) downloads use an unverified context.
+  The pinned SHA-256 hashes still protect the runtime archives, and the install
+  log records `ca bundle:` plus a warning.
+
+`download.py` goes through `tls.opener()` and converts a certificate failure
+into a non-retried `TlsError` (it is an `OSError`, so the generic retry tuple
+used to retry it three times before failing). `--check-tls URL` prints the
+probe table and performs one request; CI runs the AppImage in an `archlinux`
+container, once with the system store and once with `/etc/ssl` removed, and
+asserts `verification: enabled` then `verification: disabled`.
 
 ## Packaging
 
@@ -206,7 +239,10 @@ without PySide6 or torch: path/layout resolution, archive traversal rejection,
 download hashing/retry, plan validation and estimates, state round-trips,
 launcher generation, uninstall semantics, Docker refusal, and simulated
 Windows paths. `InstallPaths` accepts `system=` so Windows layouts are
-exercised on Linux.
+exercised on Linux. The TLS tests use an embedded self-signed CA to check
+candidate precedence, empty-bundle rejection, the unverified fallback, the
+`--insecure-tls` override, and that a certificate failure is attempted once
+while a transient `URLError` still retries.
 
 ## Related
 

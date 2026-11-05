@@ -450,3 +450,15 @@ Timeline, schedule, drawing, selection and inspector are per-segment now
 (slots keyed by `cut.id ?? line_id`, `lineStarts` for cue anchors, matching
 the mixer stagger), and batch Save-all accepts several cuts per line.
 Verified: web build green, full backend suite 256 passed (2 new split tests).
+
+## [2026-11-05] fix | installer TLS trust store (v0.3.4)
+
+A CachyOS user hit `CERTIFICATE_VERIFY_FAILED` at the uv step of 0.3.1: the
+frozen AppImage carries Ubuntu's compiled-in OpenSSL paths (`/usr/lib/ssl`),
+which do not exist on Arch. New `installer/core/tls.py` probes the host store,
+validates candidates by CA count, exports `SSL_CERT_FILE` for child processes,
+and falls back to an unverified context when nothing is usable; `download.py`
+turns certificate failures into a non-retried `TlsError` instead of retrying a
+deterministic error three times. Added `--check-tls` / `--insecure-tls`, a
+troubleshooting entry, and an Arch-container check in the installer workflow.
+See [[entities/installer]].
