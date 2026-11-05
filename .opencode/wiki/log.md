@@ -462,3 +462,11 @@ turns certificate failures into a non-retried `TlsError` instead of retrying a
 deterministic error three times. Added `--check-tls` / `--insecure-tls`, a
 troubleshooting entry, and an Arch-container check in the installer workflow.
 See [[entities/installer]].
+
+## [2026-11-05] release | v0.3.4 published
+
+Tag `v0.3.4` (release commit b116c74) publishes the installer TLS trust-store
+fix. CI run 42094672349 green: installer tests, Linux AppImage, Windows Setup,
+and the new Arch-container TLS check (system store and no-store fallback both
+verified), release upload complete. Assets: AppImage, linux tarball, Windows
+Setup and their `.sha256` files.
