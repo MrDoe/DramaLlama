@@ -11,6 +11,7 @@ sourceRefs:
   - installer/core/runtimes.py
   - MANIFEST.in
   - src/drama_studio/mixer.py
+  - src/drama_studio/handlers.py
   - src/drama_studio/models.py
   - web/src/components/StageBoard.tsx
   - scripts/build_spatial.py
@@ -90,18 +91,27 @@ discipline that Breeze, Chatterbox and Ollama are under.
 
 ## Motion, and how the export is written
 
-A `SceneStage` carries `paths: list[StagePath]` — keyframes interpolated linearly
-between two points. **Keyframe times are scene-relative, not project-absolute.**
-A stem is one speaker's continuous performance inside one scene, and the mixer
-places every stem of a scene at that scene's first sound, so sample 0 of the
-sources *is* `t = 0` of the path. `render_scene` is given the scene's absolute
-`start_s` for block labelling and subtracts it before looking up keyframes.
-Reading them at project time made every staged scene after the first one sit
-still at its last keyframe — scene 1 only looked correct because its offset is
-zero, which is why the bug survived the first round of live testing.
-`render_scene` re-evaluates source positions on a 100 ms grid
-(`MOTION_GRID_S`), because every move makes SAF rebuild its image-source
-echograms and per-sample motion is wasted CPU.
+A `SceneStage` carries `paths: list[StagePath]` — keyframes sampled with a
+cubic Hermite curve and Catmull-Rom tangents. **Keyframe times are
+scene-relative, not project-absolute.** A stem is one speaker's continuous
+performance inside one scene, and the mixer places every stem of a scene at
+that scene's first sound, so sample 0 of the sources *is* `t = 0` of the path.
+`render_scene` is given the scene's absolute `start_s` for block labelling and
+subtracts it before looking up keyframes. Reading them at project time made
+every staged scene after the first one sit still at its last keyframe — scene 1
+only looked correct because its offset is zero, which is why the bug survived
+the first round of live testing. `render_scene` re-evaluates source positions
+on a 100 ms grid (`MOTION_GRID_S`), because every move makes SAF rebuild its
+image-source echograms and per-sample motion is wasted CPU.
+
+The spline passes through every key and has a continuous tangent across one, so
+a three-key walk turns a corner instead of snapping. Endpoint tangents are
+one-sided, which keeps a two-key path **exactly** the old straight line —
+auto-staged enter/approach moves are unchanged. `_path_tangents` and
+`sample_path` in `spatial.py` have a line-for-line mirror in `StageBoard.tsx`
+(`pathTangents` / `samplePath`); the board draws the curve by sampling that
+function finely and clamping to the room, so the drawn walk and the audible one
+cannot drift apart.
 
 `layout_scene` derives the moves from the script. The parser keeps the direction
 on each line, so "through the hatch", "closer now", "as he leaves" and "pacing"
@@ -111,6 +121,41 @@ Those windows come from the alignments: **a project that has not been rendered
 and aligned yet gets positions and no paths.** An invented timing would produce
 movement nobody could hear. A mover's dot sits where the move ends, and someone
 leaving faces the exit rather than the listener.
+
+Paths are also editable by hand in the Stage board. `ActorPanel` has a **Motion
+path** section: *Add walk* seeds two keyframes (`t = 0` and `t = 3 s`) at the
+actor's current spot, and the keyframe list edits `t / x / y / z`, adds a key
+(+1 s), removes one, or clears the path. Keyframe time is authored as **minutes
+and seconds**, not a raw second count: large scene clocks (a 60 s walk, a
+multi-minute scene) are what people actually read. The model still stores
+seconds. The selected actor's keyframes are also draggable handles on the SVG;
+they paint last so a freshly seeded pair is not buried under the actor dot, and
+each handle nudges with the arrow keys (25 cm, Shift 1 m). `patchPath` sorts keys
+by time on every write, so an out-of-order panel edit cannot trip the server's
+`keys_sorted` validator, and it drops a path below two keys. `fitToRoom` clamps
+keyframes together with the listener and actors when the room shrinks — the
+renderer's `clamp_to_room` used to hide that mismatch in the mix while the board
+still drew the walk through a wall.
+
+The board also has a **transport above the canvas**, driven by the scene
+audition (`mix/preview_s<N>.wav`). It sits above rather than below because the
+4:3 canvas is taller than a laptop viewport: under the canvas the only preview
+control was below the fold, so clicking *Audition scene* looked like nothing
+happened. While the mix job runs the transport (and the button) report the job's
+progress; when it finishes the transport plays the audition. Play/pause and the
+scrubber move the board's clock: while it is running, each actor dot is drawn at
+`samplePath(path.keys, playhead)` rather than at its resting `position_m`, and
+the distance readout follows. Starting a drag leaves the audition clock and
+returns the board to resting poses, because a drag edits `position_m` and the
+board must show the position being edited. Without a preview the transport is
+disabled ("no preview") and the dots rest.
+
+The audition file is **trimmed to the scene** (`build_mix(..., only_scene=N)`):
+its segments are filtered to that scene and rebased so sample 0 is the scene's
+first sound. That is what makes the board clock correct — the transport samples
+scene-relative keyframes, so a full-play file made every scene after the first
+move at the wrong time and start by playing the previous scene. The full master
+still contains the whole play; only the audition is rebased.
 
 Two rules keep re-spreading honest, because "Spread the cast" is a decision about
 people, not architecture:

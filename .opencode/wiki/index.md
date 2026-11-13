@@ -40,3 +40,4 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 ## Sources
 
 - [[sources/kepler-stem-pipeline]] — vendored stem/aligner contract and hashes.
+- [[sources/log-from-2138-story]] — detailed story summary of the Suno audio drama in `summary.json` (premise, cast, episodes, themes, craft notes).

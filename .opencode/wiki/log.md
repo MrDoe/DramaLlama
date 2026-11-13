@@ -746,3 +746,81 @@ keeps it grabbable and marks it.
 Verified live on `strata-second-pass-12ea69`: the cue stranded at offset 101.26
 came back as `position_s 53.52`, the mix placed 3 of 3 with no warnings, and an
 anchored cue still shows its offset field.
+
+## [2026-11-13] update | Motion paths are authorable on the Stage board
+
+The Stage board could draw and render `SceneStage.paths` but only
+`POST /stage/layout` ever wrote one, so a derived walk could not be corrected
+and an actor with no stage direction could never move. `ActorPanel` now has a
+Motion path section — *Add walk* seeds two keys at 0 s and 3 s, and the keyframe
+list edits `t / x / y / z`, adds (+1 s), removes, or clears. The selected
+actor's keyframes are draggable SVG handles that paint above the actor dot and
+nudge with the arrow keys. `patchPath` sorts by time on every write so the
+`keys_sorted` validator cannot 422 an edit, and drops a path below two keys.
+`fitToRoom` now clamps keyframes with the listener and actors, closing a gap
+where the renderer's `clamp_to_room` hid a walk outside the walls.
+
+Verified live on a scratch project: Add walk → drag a waypoint (2, 1.5) →
+(2.76, 1.08), Save, reload, path persisted; time edit reordered keys and saved
+200; Narrow corridor (2 m) clamped the keyframe x from 2.76 to 2.0; audition
+rendered a non-silent 6 s stereo preview whose file changed by 0.64 peak when
+the path was cleared, so the motion reached the DSP and not only the JSON.
+Scratch projects deleted. No backend change; 59 stage/spatial tests pass.
+
+## [2026-11-13] update | Spline walks and a scene transport on the Stage board
+
+`sample_path` is now a cubic Hermite with Catmull-Rom tangents instead of a
+straight lerp. It passes through every key and is C1 across one, so a three-key
+walk curves; endpoint tangents are one-sided, which keeps a two-key path exactly
+linear and leaves the auto-staged enter/approach moves unchanged. `StageBoard`
+mirrors the math (`pathTangents` / `samplePath`) and draws the curve by sampling
+it finely and clamping to the room, so the board and the mix show the same walk.
+
+The board gained a transport under the canvas, driven by the scene audition.
+Play/pause and the scrubber move the scene clock; actor dots are drawn at the
+sampled path position instead of the resting pose, and the distance readout
+follows. Starting a drag leaves playback and returns to resting poses, because a
+drag edits `position_m`. Without a preview the transport is disabled.
+
+Verified live: a 3-key path drew 161 sampled points, and the point at t=1 was
+(255.75, 98.25) — the Hermite value, not the linear (240, 114); scrubbing to
+t=3 put MARA at (381.75, 224.25) with a 2.2 m readout; trusted play advanced the
+clock and moved the dot, pause held both; pointer-down on the dot returned it to
+its resting (114, 114) and the time read "—". New unit tests pin the two-key
+line, the three-key bend and C1 continuity; stage/spatial/mixer suites pass and
+the web build is green.
+
+## [2026-11-13] fix | The Stage audition is visible and scene-sized
+
+"Preview is missing in Stage, although Cut was complete" was two faults in the
+same control. The transport is the only preview player, and it sat *under* a 4:3
+canvas that is taller than a laptop viewport (y ≈ 1227 at 1920×1080), so clicking
+*Audition scene* changed nothing on screen; the old `<audio controls>` had been
+in the side panel. And `mix_preview_scene` rendered the whole play (198.6 s for
+a 28.6 s scene), so even a found transport started at scene 1. The transport now
+sits above the canvas, the button and transport report the job's progress while
+it renders (`Rendering…`, `rendering preview… 43%`), and the handler passes the
+new `build_mix(..., only_scene=N)`, which filters to that scene's segments and
+rebases its first sound to t=0. That also makes the board clock correct for
+every scene after the first: keyframes are scene-relative.
+
+Keyframe time is now authored as **minutes + seconds** (`TimeField`) instead of
+one raw seconds input; the model still stores seconds and the seconds field
+clamps to 0–59.
+
+Verified live on `strata-second-pass-12ea69`: at 1920×1080 the transport sits at
+y=437 (visible); scene 1 audition reported 198.6 s before the restart and
+28.58 s / 6 lines after, scene 5 48.34 s / 6 lines; trusted play advanced the
+clock (`1.2 / 28.6 s`, `7.4 / 28.6 s`), pause held it; keyframes showed `0m 0s`
+and `1m 0s`, a minutes edit moved the key and a 75 s entry clamped to 59 s.
+New `test_scene_audition_is_trimmed_to_the_scene`; full pytest suite green, web
+build green.
+
+## [2026-11-13] ingest | Log from 2138 story summary
+
+Read `summary.json` (Gemini export of the "Log from 2138" / "2138" audio-drama
+session) and filed [[sources/log-from-2138-story]]: premise, the Neural Harmony
+implant level ladder, cast, episode-by-episode plot (Tracks 14–20 and the
+Episode 8 script), themes, Suno craft rules, and open threads. Also documented
+the export's inconsistent episode numbering (Episode 4 is absent; Track 18 is
+labelled Episode 5).
