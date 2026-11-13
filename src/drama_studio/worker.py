@@ -71,12 +71,16 @@ class Worker:
         worker_id: str | None = None,
         poll_interval: float = 0.5,
         recover_stale_after_s: float | None = 300,
+        recovery_interval_s: float = 60.0,
+        heartbeat_interval_s: float = 30.0,
     ) -> None:
         self.queue = queue
         self.handlers = handlers
         self.worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}"
         self.poll_interval = poll_interval
         self.recover_stale_after_s = recover_stale_after_s
+        self.recovery_interval_s = recovery_interval_s
+        self.heartbeat_interval_s = heartbeat_interval_s
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -90,10 +94,20 @@ class Worker:
         return True
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
-        if self.recover_stale_after_s is not None:
-            self.queue.recover_stale(self.recover_stale_after_s)
         stop = stop_event or self._stop
+        last_recovery = 0.0
         while not stop.is_set():
+            if (
+                self.recover_stale_after_s is not None
+                and time.monotonic() - last_recovery >= self.recovery_interval_s
+            ):
+                # Once at startup is not enough: a job orphaned by a crash or a
+                # restart mid-flight is seconds old when this worker begins, so
+                # it would outlive the recovery pass and hold the queue open
+                # until the next restart. Observed after a restart, where one
+                # render sat "running" with an idle GPU and nothing followed.
+                self.queue.recover_stale(self.recover_stale_after_s)
+                last_recovery = time.monotonic()
             try:
                 worked = self.run_once()
             except Exception:
@@ -113,6 +127,11 @@ class Worker:
                 retryable=False,
             )
             return
+        stop_beat = threading.Event()
+        beat = threading.Thread(
+            target=self._keep_lease, args=(job.id, stop_beat), daemon=True
+        )
+        beat.start()
         try:
             result = handler(job, ctx)
             ctx.check_cancelled()
@@ -123,3 +142,20 @@ class Worker:
             self.queue.fail(job.id, str(exc), retryable=False)
         except Exception:
             self.queue.fail(job.id, traceback.format_exc(), retryable=True)
+        finally:
+            stop_beat.set()
+
+    def _keep_lease(self, job_id: str, stop: threading.Event) -> None:
+        """Refresh the lease while a handler sits inside a long engine call.
+
+        Recovery reclaims anything quiet for five minutes, and one Breeze take
+        can run longer than that between two progress reports. Without this the
+        recovery pass would hand a healthy render to a second worker while the
+        first is still writing audio, and recovery could never be made
+        periodic. The write is a no-op once the job is no longer running.
+        """
+        while not stop.wait(self.heartbeat_interval_s):
+            try:
+                self.queue.heartbeat(job_id)
+            except Exception:  # pragma: no cover - a lost lease must not kill the run
+                return
