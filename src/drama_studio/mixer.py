@@ -47,28 +47,51 @@ def _db(value: float) -> float:
     return float(10 ** (value / 20.0))
 
 
-def _highpass(samples: np.ndarray, cutoff: float = 80.0) -> np.ndarray:
-    sos = butter(2, cutoff / (SR / 2), btype="highpass", output="sos")
+def _highpass(samples: np.ndarray, cutoff: float = 80.0, sample_rate: int = SR) -> np.ndarray:
+    sos = butter(2, cutoff / (sample_rate / 2), btype="highpass", output="sos")
     return sosfilt(sos, samples).astype(np.float32)
 
 
-def _telephone(samples: np.ndarray) -> np.ndarray:
-    sos = butter(4, [300 / (SR / 2), 3400 / (SR / 2)], btype="bandpass", output="sos")
+def _telephone(samples: np.ndarray, sample_rate: int = SR) -> np.ndarray:
+    sos = butter(4, [300 / (sample_rate / 2), 3400 / (sample_rate / 2)], btype="bandpass", output="sos")
     return np.tanh(sosfilt(sos, samples) * 1.5).astype(np.float32) * 0.85
 
 
-def _place(buffer: np.ndarray, clip: np.ndarray, start_s: float, gain: float = 1.0) -> None:
-    start = max(0, round(start_s * SR))
+def _place(
+    buffer: np.ndarray,
+    clip: np.ndarray,
+    start_s: float,
+    gain: float = 1.0,
+    sample_rate: int = SR,
+) -> None:
+    start = max(0, round(start_s * sample_rate))
     if start >= len(buffer) or clip.size == 0:
         return
     length = min(len(clip), len(buffer) - start)
     buffer[start : start + length] += clip[:length] * gain
 
 
-def _speech_envelope(dialogue: np.ndarray) -> np.ndarray:
+def _place_stereo(
+    buffer: np.ndarray,
+    clip: np.ndarray,
+    start_s: float,
+    gain: float = 1.0,
+    sample_rate: int = SR,
+) -> None:
+    """Additively place a (2, n) or (n,) clip into a (2, N) buffer."""
+    start = max(0, round(start_s * sample_rate))
+    if start >= buffer.shape[1] or clip.size == 0:
+        return
+    if clip.ndim == 1:
+        clip = np.stack([clip, clip])
+    length = min(clip.shape[1], buffer.shape[1] - start)
+    buffer[:, start : start + length] += clip[:, :length] * gain
+
+
+def _speech_envelope(dialogue: np.ndarray, sample_rate: int = SR) -> np.ndarray:
     if dialogue.size == 0:
         return np.ones(0, dtype=np.float32)
-    frame = max(1, int(0.05 * SR))
+    frame = max(1, int(0.05 * sample_rate))
     padded = np.pad(dialogue, (0, (-len(dialogue)) % frame))
     rms = np.sqrt(np.mean(padded.reshape(-1, frame) ** 2, axis=1))
     threshold = max(0.0025, float(rms.max()) * 0.02)
@@ -83,7 +106,124 @@ def _duck_envelope(speech: np.ndarray, depth_db: float = 4.5) -> np.ndarray:
     return (1.0 - (1.0 - duck) * speech).astype(np.float32)
 
 
-def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
+# ------------------------------------------------------------------- spatial
+
+
+def _scene_bounds(line_by_id, segments, durations) -> dict[int, tuple[float, float]]:
+    """First start and last end of every scene that has placed segments."""
+    bounds: dict[int, tuple[float, float]] = {}
+    for seg_id, line_id, clip_path, pos, _fx in segments:
+        line = line_by_id.get(line_id)
+        if line is None:
+            continue
+        end = pos + durations.get(seg_id, 0.0)
+        current = bounds.get(line.scene)
+        if current is None:
+            bounds[line.scene] = (pos, end)
+        else:
+            bounds[line.scene] = (min(current[0], pos), max(current[1], end))
+    return bounds
+
+
+def _first_stage(stage):
+    """Any staged scene: enough to build a decoder-only room instance."""
+    for key in sorted(stage.scenes):
+        scene = stage.scenes[key]
+        if scene.actors:
+            return scene
+    return next(iter(stage.scenes.values()), None)
+
+
+def _render_staged_scenes(stage, tracks, scene_bounds, sr, total, spatial_render):
+    """Render every staged scene into one Ambisonic timeline.
+
+    Returns (bed, scene_beds, extra) where bed is (n_sh, total) ACN/N3D,
+    scene_beds holds each scene's own bed for the Ambisonic export, and extra is
+    the centred dry contribution of actors blended out of the room.
+    """
+    order = int(stage.order)
+    bed = np.zeros((spatial_render.sh_channels(order), total), dtype=np.float32)
+    extra = np.zeros(total, dtype=np.float32)
+    scene_beds: list[tuple[int, float, np.ndarray]] = []
+
+    for scene_id in spatial_render.staged_scenes(stage):
+        scene = stage.scenes.get(str(scene_id))
+        span = scene_bounds.get(scene_id)
+        if scene is None or span is None:
+            continue  # staged but nothing was placed in it
+
+        speakers = [actor.speaker for actor in scene.actors]
+        rows = [tracks.get((scene_id, speaker)) for speaker in speakers]
+        if not any(row is not None for row in rows):
+            continue
+
+        length = max(row.size for row in rows if row is not None)
+        sources = np.zeros((len(speakers), length), dtype=np.float32)
+        for index, row in enumerate(rows):
+            if row is not None:
+                sources[index, : row.size] = row
+
+        with spatial_render.RoomSimulator(scene, sr, order) as sim:
+            scene_bed, scene_dry = spatial_render.render_scene(
+                sim, scene, sources, speakers, span[0]
+            )
+
+        start = round(span[0] * sr)
+        take = min(scene_bed.shape[1], total - start)
+        if take <= 0:
+            continue
+        bed[:, start : start + take] += scene_bed[:, :take]
+        extra[start : start + take] += scene_dry[:take]
+        scene_beds.append((scene_id, span[0], scene_bed[:, :take]))
+
+    return bed, scene_beds, extra
+
+
+def _write_ambisonic_master(path, scene_beds, stage, sr, spatial_render):
+    """Write the per-scene beds back out as one ACN/SN3D (AmbiX) master.
+
+    Streamed scene by scene rather than materialising the whole timeline: a
+    10-minute third-order master is well over a gigabyte.
+    """
+    n_sh = spatial_render.sh_channels(stage.order)
+    scene = _first_stage(stage)
+    if scene is None:
+        return None
+
+    try:
+        with (
+            spatial_render.RoomSimulator(scene, sr, int(stage.order)) as sim,
+            sf.SoundFile(
+                str(path), "w", samplerate=sr, channels=n_sh, subtype="PCM_24", format="WAV"
+            ) as handle,
+        ):
+            cursor = 0
+            for _scene_id, start_s, bed in scene_beds:
+                start = round(start_s * sr)
+                if start > cursor:
+                    handle.write(np.zeros((start - cursor, n_sh), dtype=np.float32))
+                    cursor = start
+                chunk = sim.to_sn3d(bed).T
+                handle.write(chunk)
+                cursor += chunk.shape[0]
+    except Exception:
+        path.unlink(missing_ok=True)
+        return None
+    # MixResult paths are project-relative, like the stereo master's.
+    return f"mix/{path.name}"
+
+
+def build_mix(
+    project: Project,
+    project_dir: Path,
+    sfx_lookup,
+    name: str = "master",
+) -> MixResult:
+    """Assemble the master mix.
+
+    `name` selects the output filenames inside `mix/`; the Stage step uses a
+    per-scene name so a preview never overwrites the real master.
+    """
     warnings: list[str] = []
     pause = project.settings.pause_ms / 1000.0
     scene_gap = project.settings.scene_gap_ms / 1000.0
@@ -195,6 +335,7 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
     segments = placed
 
     max_end = 0.0
+    durations: dict[str, float] = {}
     for seg_id, line_id, clip_path, pos, fx in segments:
         rate = max(0.1, float((fx or {}).get("speed", 1.0) or 1.0))
         dur = 0.0
@@ -204,25 +345,63 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
                 dur = (float(info.frames) / float(info.samplerate)) / rate
             except Exception:
                 dur = 0.0
+        durations[seg_id] = dur
         max_end = max(max_end, pos + dur)
 
     total_s = max_end + TAIL_S if segments else (0.0 + TAIL_S)
-    total = max(1, int(total_s * SR))
+
+    # Spatial staging is opt-in per project and per scene. A project with
+    # staging enabled but no native renderer falls back to the dry mono mix and
+    # says so, rather than failing the job.
+    from . import spatial as spatial_render
+
+    stage = project.stage
+    staged = set(spatial_render.staged_scenes(stage)) if stage and stage.enabled else set()
+    spatial_on = bool(staged) and spatial_render.available()
+    if staged and not spatial_on:
+        warnings.append("spatial staging enabled but the renderer library is missing; mixed dry")
+        staged = set()
+
+    sr = int(project.settings.spatial_sample_rate) if spatial_on else SR
+    total = max(1, int(total_s * sr))
+    tail_pad = min(stage.tail_s, spatial_render.max_tail_s(sr)) if spatial_on else 0.0
+
+    # A staged scene renders as a unit: its own room, its own source list, its
+    # own zero-padded tail. Everything is gathered relative to the scene start
+    # and written back at the scene's timeline offset.
+    scene_bounds = _scene_bounds(line_by_id, segments, durations)
+    bed: np.ndarray | None = None
+    scene_beds: list[tuple[int, float, np.ndarray]] = []
     dialogue = np.zeros(total, dtype=np.float32)
+
+    if spatial_on:
+        # Per (scene, speaker) timelines, in samples relative to scene start.
+        # Only speakers that actually have an actor slot get a track; anything
+        # else stays in the centre dialogue so nothing silently disappears.
+        cast: dict[int, set[str]] = {
+            scene_id: {actor.speaker for actor in stage.scenes[str(scene_id)].actors}
+            for scene_id in staged
+            if str(scene_id) in stage.scenes
+        }
+        tracks: dict[tuple[int, str], np.ndarray] = {}
+        pending: list[tuple[int, str, np.ndarray, float]] = []
+    else:
+        cast = {}
+        tracks = {}
+        pending = []
 
     # Place every enabled segment clip at its (freeform) position.
     # Disabled segments keep their slot (timing) but stay silent.
-    seen_paths: set[Path] = set()
     for seg_id, line_id, clip_path, pos, fx in segments:
         if not clip_path.exists():
             continue
         if fx is not None and not fx.get("enabled", True):
             continue
-        clip = _load_audio(clip_path)
+        clip = _load_audio(clip_path, sr)
         if fx:
             try:
                 clip = apply_region_effects(
-                    clip, SR,
+                    clip, sr,
                     gain_db=float(fx.get("gain_db", 0.0)),
                     fade_in_s=float(fx.get("fade_in_s", 0.0)),
                     fade_out_s=float(fx.get("fade_out_s", 0.0)),
@@ -233,10 +412,45 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
                 )
             except Exception as exc:
                 warnings.append(f"region effects failed for {line_id}: {exc}")
-        _place(dialogue, clip, pos)
-    dialogue = _highpass(dialogue, 80.0)
 
-    speech = _speech_envelope(dialogue)
+        line = line_by_id.get(line_id)
+        scene = line.scene if line is not None else None
+        if scene is not None and scene in staged and line.speaker in cast.get(scene, set()):
+            # Staged speech joins its scene's per-speaker track instead of the
+            # mono sum; the room renderer replaces the panning it used to get.
+            key = (scene, line.speaker)
+            if key not in tracks:
+                span = scene_bounds[scene]
+                size = round((span[1] - span[0] + tail_pad) * sr)
+                tracks[key] = np.zeros(max(1, size), dtype=np.float32)
+            pending.append((scene, line.speaker, clip, pos))
+        else:
+            _place(dialogue, clip, pos, sample_rate=sr)
+
+    if spatial_on:
+        for scene, speaker, clip, pos in pending:
+            span = scene_bounds[scene]
+            _place(tracks[(scene, speaker)], clip, pos - span[0], sample_rate=sr)
+        dialogue = _highpass(dialogue, 80.0, sr)
+        try:
+            bed, scene_beds, extra = _render_staged_scenes(
+                stage, tracks, scene_bounds, sr, total, spatial_render
+            )
+        except spatial_render.SpatialUnavailable as exc:
+            # Never lose lines to a renderer failure: fold the staged tracks back
+            # into the centre and mix the project dry.
+            warnings.append(f"spatial render failed ({exc}); mixed dry")
+            bed, scene_beds = None, []
+            for (scene, _speaker), buffer in tracks.items():
+                span = scene_bounds[scene]
+                _place(dialogue, buffer, span[0], sample_rate=sr)
+        else:
+            dialogue += extra
+
+    # Duck under everything the listener hears, spatial bed included. The W
+    # channel is the omni component, so it is the right thing to envelope.
+    speech_source = dialogue if bed is None else dialogue + bed[0]
+    speech = _speech_envelope(speech_source, sr)
     duck = _duck_envelope(speech)
 
     effects = np.zeros(total, dtype=np.float32)
@@ -251,7 +465,7 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
             warnings.append(f"SFX file missing for cue {cue.name}: {path}")
             continue
         try:
-            source = _load_audio(path)
+            source = _load_audio(path, sr)
         except Exception as exc:
             warnings.append(f"could not decode {cue.name}: {exc}")
             continue
@@ -267,7 +481,7 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
                 ),
                 total_s,
             )
-            needed = max(0, int((min(total_s, end) - anchor) * SR))
+            needed = max(0, int((min(total_s, end) - anchor) * sr))
         if needed <= 0:
             continue
         if cue.kind != "one_shot":
@@ -275,32 +489,51 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
                 source = np.tile(source, int(np.ceil(needed / max(1, len(source)))))
             source = source[:needed]
         if cue.filter == "telephone":
-            source = _telephone(source)
+            source = _telephone(source, sr)
         elif cue.filter == "radio":
-            source = _telephone(source) * 0.8
+            source = _telephone(source, sr) * 0.8
         gain = _db(cue.gain_db)
         if cue.duck and cue.kind != "one_shot":
-            start = max(0, int(anchor * SR))
+            start = max(0, int(anchor * sr))
             segment = duck[start : start + len(source)]
             if len(segment) < len(source):
                 segment = np.pad(segment, (0, len(source) - len(segment)), constant_values=1.0)
             source = source * segment
-        _place(effects, source, anchor, gain)
+        _place(effects, source, anchor, gain, sr)
         cue_count += 1
 
-    mix = dialogue + effects
+    if bed is None:
+        mix = dialogue + effects
+    else:
+        # Decode the summed Ambisonic timeline once, then fold in the centre
+        # material and the (still non-spatial) effects bed.
+        with spatial_render.RoomSimulator(_first_stage(stage), sr, int(stage.order)) as decoder:
+            dialogue_stereo = decoder.decode_stereo(bed)
+        mix = np.zeros((2, total), dtype=np.float32)
+        mix[0] = dialogue_stereo[0] + dialogue + effects
+        mix[1] = dialogue_stereo[1] + dialogue + effects
+
     peak = float(np.max(np.abs(mix))) if mix.size else 0.0
     if peak > 0:
         mix = mix * (0.89 / peak)
 
     mix_dir = project_dir / "mix"
     mix_dir.mkdir(parents=True, exist_ok=True)
-    pre_path = mix_dir / "master_24k.wav"
-    sf.write(str(pre_path), mix, SR, subtype="PCM_24")
+    pre_path = mix_dir / (f"{name}_pre.wav" if bed is not None else f"{name}_24k.wav")
+    # soundfile wants (frames, channels); the mix is (channels, frames).
+    sf.write(str(pre_path), mix.T if mix.ndim == 2 else mix, sr, subtype="PCM_24")
+
+    ambisonic_path: str | None = None
+    if bed is not None and stage is not None and stage.export_ambisonic:
+        ambisonic_path = _write_ambisonic_master(
+            mix_dir / f"{name}_ambisonic.wav", scene_beds, stage, sr, spatial_render
+        )
+        if ambisonic_path is None:
+            warnings.append("could not write the Ambisonic master")
 
     target = "-16" if project.settings.loudness_target == "podcast" else "-23"
-    master = mix_dir / "master.wav"
-    mp3 = mix_dir / "master.mp3"
+    master = mix_dir / f"{name}.wav"
+    mp3 = mix_dir / f"{name}.mp3"
     result = subprocess.run(
         [
             "ffmpeg",
@@ -320,7 +553,7 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
         capture_output=True,
     )
     if result.returncode != 0:
-        warnings.append("ffmpeg loudnorm failed; peak-normalised 24 kHz master kept")
+        warnings.append(f"ffmpeg loudnorm failed; peak-normalised {sr // 1000} kHz master kept")
         master.write_bytes(pre_path.read_bytes())
         mp3_path = None
     else:
@@ -337,5 +570,7 @@ def build_mix(project: Project, project_dir: Path, sfx_lookup) -> MixResult:
         loudness_target=f"{target} LUFS",
         line_count=len({lid for (_sid, lid, cp, _p, _fx) in segments if cp.exists()}),
         cue_count=cue_count,
+        spatial=bed is not None,
+        ambisonic=ambisonic_path,
         warnings=warnings,
     )

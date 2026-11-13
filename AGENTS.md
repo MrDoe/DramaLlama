@@ -15,9 +15,12 @@ CLI alias are intentionally unchanged.
 
 - Deterministic parser + optional Ollama LLM parse with verbatim validation.
 - Stem builder, reference design, render + align worker, take/alignment storage.
+- Reference voices from uploaded samples: CPU-only decode/window/trim/Whisper
+  pipeline, editable transcript, per-character voice list in a dedicated
+  Voices workflow step.
 - SFX index over `~/Sounds`, cue sheet, mixer with ducking/EQ/loudnorm.
 - React UI: projects, script/parse, stems, render, sound, mix.
-- 236 backend tests, web build green.
+- 334 backend tests (spatial ones skip without the native renderer), web build green.
 - English Breeze path validated on one real scene; German Chatterbox path
   validated end-to-end (20.7 s ANNA stem, 7/7 cuts). Suno music generation and
   WAV download validated through the BetterSuno bridge.
@@ -74,6 +77,22 @@ CLI alias are intentionally unchanged.
 - **Suno needs the BetterSuno extension** and a live `suno.com` tab. The
   `suno-bridge/` sidecar owns `ws://127.0.0.1:9423`; only one process can own
   it. Download music as WAV (the M4A path is not reliably decodable).
+- **Spatial staging links ISC code, never the GPLv3 plug-in.** The room DSP is
+  SAF's `ambi_roomsim` example, wrapped by `src/drama_studio/spatial/`. SPARTA's
+  `audio_plugins/_SPARTA_ambiRoomSim_/src/**` (including `ui/SceneModel.*` and
+  `StudioShell.*`) is GPLv3 JUCE and must not be copied or adapted into this
+  repo; only the shared *coordinate convention* and a future JSON schema are
+  exchanged. Do not add a SPARTA submodule to `pyproject.toml`.
+- **Staging must never break a mix.** `spatial.available()` False means the mix
+  falls back to the dry mono path with a warning; a render failure folds the
+  staged tracks back into the centre. Never let the spatial path raise out of
+  `build_mix`, and never change the `stage is None` path — it must stay
+  byte-identical for every pre-staging project.
+- **Room tail is bounded by the DSP, not a setting.** SAF buffers
+  `IMS_CIRC_BUFFER_LENGTH` = 32768 samples of source history: **0.68 s at
+  48 kHz**, 1.37 s at 24 kHz. Long-reverberation "cathedral" presets will not
+  ring. `ambi_roomsim`'s `maxTime_s = -0.05f` is an order-mode sentinel, not a
+  50 ms cap.
 
 ## Layout conventions
 
@@ -94,12 +113,22 @@ CLI alias are intentionally unchanged.
   script and the AppImage builder. Build output goes to `build/` and `dist/`
   (gitignored). `scripts/build_installer.py` stages the same payload the tests
   exercise.
+- Spatial code splits in three places: `src/drama_studio/spatial.py` (ctypes
+  wrapper, geometry, presets, scene assembly — Python, testable without a
+  compiler), `src/drama_studio/spatial/` (the C shim + its CMakeLists — the only
+  native code in the app), and `web/src/components/StageBoard.tsx` (the Stage
+  step). `mixer.py` is the only consumer of the renderer.
 
 ## Commands
 
 ```bash
 ~/.venvs/qwen3tts/bin/python -m pytest
 cd web && npm run build
+
+# spatial renderer (optional; staging stays disabled without it)
+~/.venvs/qwen3tts/bin/python scripts/build_spatial.py          # needs cmake + SAF
+~/.venvs/qwen3tts/bin/python scripts/spike_spatial.py          # physics self-test
+~/.venvs/qwen3tts/bin/python scripts/bench_spatial.py          # render cost, s per s
 
 ~/.venvs/qwen3tts/bin/drama-llama init
 ./start-ui.sh                                         # build if stale + serve UI
@@ -165,6 +194,50 @@ observable behavior, not just DOM presence.
   memory, not the Drama Llama worker process. The engine stops the container
   on unload and after each render — never leave it running idle; the next
   render restarts it automatically.
+- Reference generation (`reference.generate`) is CPU-only: ffmpeg decode,
+  faster-whisper large-v3 int8, librosa trim/F0. It must never call
+  `_require_gpu`, `EngineManager`, or `BreezeEngine.load()`.
+- Per-stem reference selection must pass that `RefVoice.ref_text` into
+  `StemRenderRequest`; falling back to `character.ref_text` silently pairs the
+  wrong transcript with the clone. `_resolve_reference` owns this.
+- Generated reference WAVs are 24 kHz mono PCM-16; `audio.write_mono` defaults
+  to PCM-24, so `refvoice` passes `subtype="PCM_16"` explicitly.
+- Uploaded generation inputs live in `refs/.uploads/` and are deleted by the
+  job; generated voices use unique ids and never overwrite an existing ref.
+  Inputs longer than 6 s are accepted and automatically cut to the best 6–11 s
+  window; the hard guard is 10 minutes.
+- `.page` has a fill-mode animation with a transform, which makes `position:
+  fixed` children behave like they belong to the page. Render true full-screen
+  dialogs through a React portal; Voices is a workflow step, not a modal.
+- `librosa.pyin` can reject every frame on noisy dialogue; `refvoice.measure_f0`
+  uses `yin` first and falls back to `pyin`. Keep F0 advisory.
+- When shelling out to ffmpeg, put `-i <input>` before output options; a bare
+  input path plus an early `-map` makes ffmpeg treat the input as an output.
+- `ambi_roomsim_process()` takes **arrays of per-channel pointers** for both
+  inputs and outputs (`outputs[i]` is channel *i*), not one flat buffer — a
+  single pointer writes out of bounds and segfaults. It also only renders when
+  `nSamples == 128` exactly and silently emits silence otherwise; the shim does
+  the buffering so callers pass any block size.
+- For a 2-channel decode use `LOUDSPEAKER_DECODER_SAD` with max-rE.
+  `LOUDSPEAKER_DECODER_ALLRAD` returns an **all-zero matrix** for `nLS = 2`
+  (its VBAP table needs ≥3 speakers to form triangles), so the master is pure
+  silence with no error anywhere. MMD is ill-conditioned for `nLS < nSH`.
+- Building SAF's example standalone needs `set(example_prefix "saf_example_")`
+  before `add_subdirectory(examples)`; that variable normally comes from SAF's
+  top-level CMakeLists, which this build bypasses. Also set
+  `SAF_PERFORMANCE_LIB` or configure aborts.
+- Stage azimuth 0 faces the front wall (`y = 0`), `+90` faces `+x`, which is the
+  listener's **left**. SAF's decoder convention is `+x` = front, so the shim
+  rotates the field by `90 - facing`. `ims_shoebox` also flips y internally
+  (`room_dims[1] - y`) — never pre-flip a position.
+- Moving a source re-runs `ims_shoebox_computeEchograms` for that source
+  (crossfaded), so per-sample motion is wasted CPU. `MOTION_GRID_S` (100 ms)
+  bounds it; measured cost is ~0.12–0.24 s of wall time per audio second at
+  order 3 with 6 sources, so staging is comfortably faster than real time and
+  needs no GPU.
+- Stage positions must be inside the room; the Pydantic validators compare
+  against the *scene's* room, and `scene`/`room` field order matters for the
+  `info.data` lookup in `SceneStage`.
 
 <!-- BEGIN opencode-rag -->
 ## Code Navigation

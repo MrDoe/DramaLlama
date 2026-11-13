@@ -470,3 +470,37 @@ fix. CI run 42094672349 green: installer tests, Linux AppImage, Windows Setup,
 and the new Arch-container TLS check (system store and no-store fallback both
 verified), release upload complete. Assets: AppImage, linux tarball, Windows
 Setup and their `.sha256` files.
+
+## [2026-11-13] ingest | Spatial stage rendering, Spatial coordinate convention
+
+New Stage production step (M0–M3): SPARTA AmbiRoomSim's room acoustics now
+render Drama Llama mixes. Integrated at the DSP layer, not the plug-in layer —
+`ambi_roomsim` is ISC and reusable, the GPLv3 JUCE wrapper is neither linked nor
+copied, and the plug-in is realtime-only with no file export anyway.
+
+- M0 spike: SAF 1.3.5 built standalone, ctypes shim written, verified against
+  physics (3.43 m → 10.00 ms onset, front source centred, ±x panning, listener
+  rotation recentres). Benchmarked: order 3, 6 moving sources ≈ 0.22 s CPU per
+  audio second — staging needs no GPU and does not join [[concepts/gpu-serialization]].
+- M1 model: `StageRoom`/`StageListener`/`StageActor`/`StagePath`/`SceneStage`
+  under `Project.stage`, validated (16 sources, positions inside the room,
+  sorted keyframes, unique speakers). `stage is None` keeps the old mix exactly.
+- M2 renderer: `spatial.py` + `spatial/spatial_shim.c`, wired into `build_mix`
+  via a per-(scene, speaker) track split, one summed ambisonic timeline decoded
+  once (SAD + max-rE, ±30° virtual pair). Optional ACN/SN3D order-3 master.
+  Degrades to dry on missing library or render failure — never loses a line.
+- M3 UI: Stage step with a top-down SVG stage, drag/keyboard actor placement,
+  8 room presets, listener panel, per-actor dry blend, "Spread the cast" and
+  per-scene audition through the real render path.
+
+Two traps cost real time and are now written down: `ambi_roomsim_process` wants
+per-channel pointer arrays (a flat buffer segfaults), and `LOUDSPEAKER_DECODER_ALLRAD`
+returns a silent all-zero matrix for nLS=2 — SAD is the correct stereo decoder.
+`maxTime_s = -0.05f` is an order-mode sentinel, not a reverb cap; the true bound
+is `IMS_CIRC_BUFFER_LENGTH`, 0.68 s at 48 kHz.
+
+334 tests green (44 new), web build clean, ruff delta zero on new files. Live
+browser verification of the Stage step is still outstanding — no browser MCP is
+configured in this workspace, so it was checked through the running API instead.
+Packaging is the open end: no CI-built binaries or `installer/pins.json` entry
+yet, so staging is currently build-it-yourself.

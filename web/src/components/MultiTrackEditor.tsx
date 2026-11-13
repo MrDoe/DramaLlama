@@ -21,7 +21,7 @@ import {
 import { SyncEngine, type ScheduleSegment } from "../audio/syncEngine";
 import { computeTimeline, segIdOf, type Cut } from "../audio/timeline";
 import type { Cue, Project, SfxItem, Stem, Take } from "../types";
-import { formatDuration, speakerStyle } from "../utils";
+import { formatDuration, speakerColor, speakerStyle } from "../utils";
 
 interface Props {
   project: Project;
@@ -31,13 +31,6 @@ interface Props {
   onDeleteCue?: (cue: Cue) => void | Promise<void>;
   onRefresh: () => void;
 }
-
-const COLORS = [
-  "rgba(99, 102, 241, 0.25)",
-  "rgba(16, 185, 129, 0.25)",
-  "rgba(245, 158, 11, 0.25)",
-  "rgba(236, 72, 153, 0.25)",
-];
 
 /** Minimum waveform height; grows to match the track card on the left. */
 const TRACK_H = 120;
@@ -50,8 +43,22 @@ const CUE_LANES: { id: CueLane; label: string; hint: string }[] = [
   { id: "sfx", label: "SFX", hint: "beds and one-shots" },
 ];
 
+/** Cue audio buffer key helpers. */
 const cueLaneKey = (lane: CueLane) => `cue:${lane}`;
 const cueBufferKey = (sfxId: string) => `sfx:${sfxId}`;
+
+/** Clip fill for a track: the speaker's badge colour, kept translucent. */
+function clipFill(speaker: string): string {
+  const value = speakerColor(speaker).replace("#", "");
+  const n = Number.parseInt(value, 16);
+  if (Number.isNaN(n)) return "rgba(99, 102, 241, 0.25)";
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, 0.26)`;
+}
+
+/** `bbc_footsteps-_07041190` → `bbc_footsteps` (drop the dedup hash in labels). */
+function sfxLabel(name: string): string {
+  return name.replace(/[-_][0-9a-f]{8,}$/i, "").replace(/[-_]+$/, "") || name;
+}
 
 function cueSegmentOf(
   span: CueSpan,
@@ -868,8 +875,17 @@ export function MultiTrackEditor({
       const firstTick = Math.ceil(start / tickStep) * tickStep;
       for (let t = firstTick; t <= end; t += tickStep) {
         const x = toX(t);
-        ctx.fillRect(x, kind.ruler ? 14 : h - 12, 1, kind.ruler ? 8 : 6);
-        ctx.fillText(`${t.toFixed(tickStep < 1 ? 1 : 0)}s`, x + 3, kind.ruler ? 12 : h - 14);
+        if (kind.ruler) {
+          ctx.fillStyle = "rgba(255,255,255,0.55)";
+          ctx.fillRect(x, 14, 1, 8);
+          ctx.fillText(`${t.toFixed(tickStep < 1 ? 1 : 0)}s`, x + 3, 12);
+        } else {
+          // Grid line instead of repeating the time label on every row.
+          ctx.fillStyle = "rgba(255,255,255,0.05)";
+          ctx.fillRect(x, 0, 1, h);
+          ctx.fillStyle = "rgba(255,255,255,0.22)";
+          ctx.fillRect(x, h - 6, 1, 6);
+        }
       }
 
       if (kind.ruler) {
@@ -973,22 +989,35 @@ export function MultiTrackEditor({
           ctx.beginPath();
           ctx.rect(x0, 0, wpx, h);
           ctx.clip();
-          const label = `${item.cue.name}${item.loops ? " ↻" : ""}`;
+          const base = `${item.cue.name}${item.loops ? " ↻" : ""}`;
           ctx.font = isSel ? "600 12px sans-serif" : "12px sans-serif";
-          const tw = ctx.measureText(label).width;
+          const full = missing ? `${base} · missing` : base;
           const lx = Math.max(x0 + 4, 4);
-          const ly = 15;
-          ctx.fillStyle = isSel ? "rgba(251,191,36,0.9)" : "rgba(0,0,0,0.65)";
-          ctx.fillRect(lx - 3, ly - 12, tw + 6, 16);
-          ctx.fillStyle = missing ? "#fecaca" : isSel ? "#000" : "#fff";
-          ctx.fillText(missing ? `${label} · missing` : label, lx, ly);
+          const maxText = x1 - lx - 6;
+          let label = full;
+          if (maxText < 16) {
+            label = "";
+          } else {
+            while (label.length > 1 && ctx.measureText(`${label}…`).width > maxText) {
+              label = label.slice(0, -1);
+            }
+            if (label !== full) label = `${label}…`;
+          }
+          if (label) {
+            const tw = ctx.measureText(label).width;
+            const ly = 15;
+            ctx.fillStyle = isSel ? "rgba(251,191,36,0.9)" : "rgba(0,0,0,0.65)";
+            ctx.fillRect(lx - 3, ly - 12, tw + 6, 16);
+            ctx.fillStyle = missing ? "#fecaca" : isSel ? "#000" : "#fff";
+            ctx.fillText(label, lx, ly);
+          }
           ctx.restore();
         }
         drawPlayhead();
         return;
       }
 
-      const { stemId, trackIdx } = kind;
+      const { stemId } = kind;
       const stem = stemById.get(stemId) ?? null;
       const mid = h / 2;
 
@@ -1012,7 +1041,7 @@ export function MultiTrackEditor({
         const isOff = cut.enabled === false;
         ctx.globalAlpha = isOff ? 0.45 : 1;
 
-        ctx.fillStyle = COLORS[(trackIdx + idx) % COLORS.length];
+        ctx.fillStyle = clipFill(stem?.speaker ?? "");
         ctx.fillRect(x0, 0, wpx, h);
 
         const len = cut.end_s - cut.start_s;
@@ -1068,19 +1097,37 @@ export function MultiTrackEditor({
           ? stem.takes.findIndex((item) => item.id === take.id) + 1
           : 0;
         const showTake = (stem?.takes.length ?? 0) > 1 && takeNo > 0;
-        const label = `${lineNo.get(cut.line_id) ?? "?"} ${cut.line_id}${
+        const fullLabel = `${lineNo.get(cut.line_id) ?? "?"} ${cut.line_id}${
           showTake ? ` · T${takeNo}` : ""
         }${isOff ? " · off" : ""}`;
         ctx.font = isSel ? "600 12px sans-serif" : "12px sans-serif";
-        const tw = ctx.measureText(label).width;
-        const row = idx % 2;
-        const ly = 14 + row * 18;
-        const lx = Math.min(Math.max(4, x0 + 6), Math.max(4, w - tw - 10));
-        ctx.fillStyle = isSel ? "rgba(251,191,36,0.9)" : "rgba(0,0,0,0.65)";
-        const pad = 3;
-        ctx.fillRect(lx - pad, ly - 12, tw + pad * 2, 16);
-        ctx.fillStyle = isSel ? "#000" : "#fff";
-        ctx.fillText(label, lx, ly);
+        const lx = Math.max(x0 + 6, 6);
+        const maxText = Math.min(x0 + wpx, w) - lx - 6;
+        let label = fullLabel;
+        if (maxText < 20) {
+          label = "";
+        } else {
+          while (label.length > 1 && ctx.measureText(`${label}…`).width > maxText) {
+            label = label.slice(0, -1);
+          }
+          if (label !== fullLabel) label = `${label}…`;
+        }
+        if (label) {
+          const tw = ctx.measureText(label).width;
+          const row = idx % 2;
+          const ly = 14 + row * 18;
+          // Clip to the clip rect so a label never spills into its neighbour.
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x0, 0, wpx, h);
+          ctx.clip();
+          ctx.fillStyle = isSel ? "rgba(251,191,36,0.9)" : "rgba(0,0,0,0.65)";
+          const pad = 3;
+          ctx.fillRect(lx - pad, ly - 12, tw + pad * 2, 16);
+          ctx.fillStyle = isSel ? "#000" : "#fff";
+          ctx.fillText(label, lx, ly);
+          ctx.restore();
+        }
         ctx.globalAlpha = 1;
       });
 
@@ -2507,12 +2554,9 @@ export function MultiTrackEditor({
             <Scissors size={15} weight="fill" />
             Cut board
           </h2>
-          <p className="panel-sub">
-            Cuts follow the script order (Viktoria 1, Andreas 1, Grandmother 1,
-            Viktoria 2 …) — drag a clip to move it, edges to trim,
-            Alt/Ctrl-drag to slip, double-click to edit. Drag with no clip
-            selected for a free range, then Ctrl+E/Delete cuts it out. 0 disables,
-            Ctrl+Z/Y undo/redo. Shift+? lists all keys.
+          <p className="panel-note">
+            Cuts follow the script order — drag a clip to move it, edges to trim,
+            Alt/Ctrl-drag to slip, double-click to edit. Shift+? lists all keys.
           </p>
         </div>
         <div className="panel-actions">
@@ -2745,8 +2789,8 @@ export function MultiTrackEditor({
             disabled={insertItems.length === 0}
           >
             {insertItems.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
+              <option key={item.id} value={item.id} title={item.name}>
+                {sfxLabel(item.name)}
               </option>
             ))}
           </select>
@@ -3227,14 +3271,12 @@ export function MultiTrackEditor({
             </div>
           </div>
         ) : (
-          <p className="panel-sub mt-hint">
+          <p className="panel-note mt-hint">
             Click a clip to select it (↑/↓ cycles clips), drag its body to move
-            it, edges to trim, Alt/Ctrl-drag to slip the audio inside,
-            double-click to open the clip editor. With no clip selected, drag on
-            the timeline for a free range — Ctrl+E/Delete cuts it out and ripples
-            the rest left. 0 disables, Ctrl+Z/Y undo/redo, Shift+? lists all
-            keys. Click a music/SFX clip to edit its anchor, offset and gain.
-            Click empty space to seek.
+            it, edges to trim, Alt/Ctrl-drag to slip, double-click to edit. With
+            no clip selected, drag on the timeline for a free range — Ctrl+E
+            deletes it and ripples the rest left. Click a music/SFX clip to edit
+            its anchor, offset and gain; click empty space to seek.
           </p>
         )}
       </div>

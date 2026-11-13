@@ -20,6 +20,8 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[concepts/batch-render-and-captcha-recovery]] — sequential "render all", pause-on-captcha, recovery dialog.
 - [[concepts/suno-account-switch]] — stale identity cache after a Suno login change, and the fix.
 - [[concepts/gpu-optional-install]] — CPU-only installs, CUDA wheel channels, opt-in engines, size envelope.
+- [[concepts/spatial-stage-rendering]] — SAF room acoustics in the mix: why ISC not GPLv3, the decode-once timeline, the 0.68 s tail limit, benchmarks.
+- [[concepts/spatial-coordinate-convention]] — stage vs SAF vs ims axes, the `90 - facing` rotation, the y-flip trap, ACN/N3D vs AmbiX.
 
 ## Engines and music
 

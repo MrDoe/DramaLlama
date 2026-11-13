@@ -7,8 +7,13 @@ import type {
   Language,
   Project,
   ProjectSummary,
+  RefVoice,
+  SceneStage,
   Script,
   SfxItem,
+  StageCapabilities,
+  StageProject,
+  StageResponse,
   SunoLibraryClip,
   SunoPersona,
 } from "./types";
@@ -313,6 +318,24 @@ export const api = {
     }),
   renderMix: (projectId: string) =>
     request<Job>(`/projects/${projectId}/mix`, { method: "POST" }),
+  stageCapabilities: () => request<StageCapabilities>("/stage/capabilities"),
+  getStage: (projectId: string) =>
+    request<StageResponse>(`/projects/${projectId}/stage`),
+  saveStage: (projectId: string, stage: StageProject) =>
+    request<StageProject>(`/projects/${projectId}/stage`, {
+      method: "PUT",
+      body: JSON.stringify({ stage }),
+    }),
+  layoutScene: (projectId: string, scene: number) =>
+    request<SceneStage>(`/projects/${projectId}/stage/layout`, {
+      method: "POST",
+      body: JSON.stringify({ scene }),
+    }),
+  previewScene: (projectId: string, scene: number) =>
+    request<Job>(`/projects/${projectId}/stage/preview`, {
+      method: "POST",
+      body: JSON.stringify({ scene }),
+    }),
   fileUrl: (projectId: string, path: string) =>
     `${BASE}/projects/${projectId}/files/${path}`,
   uploadVoiceSample: async (
@@ -355,6 +378,49 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  generateReference: async (
+    projectId: string,
+    speaker: string,
+    file: File,
+    input?: { name?: string; makeDefault?: boolean },
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (input?.name) form.append("name", input.name);
+    if (input?.makeDefault) form.append("make_default", "true");
+    const response = await fetch(
+      `${BASE}/projects/${projectId}/characters/${encodeURIComponent(speaker)}/reference/generate`,
+      { method: "POST", body: form },
+    );
+    if (!response.ok) {
+      let detail = `${response.status} ${response.statusText}`;
+      try {
+        const body = (await response.json()) as { detail?: string };
+        if (body.detail) detail = body.detail;
+      } catch {
+        // keep status text
+      }
+      throw new ApiError(response.status, detail);
+    }
+    return (await response.json()) as Job;
+  },
+  updateReference: (
+    projectId: string,
+    speaker: string,
+    refId: string,
+    input: {
+      name?: string;
+      ref_text?: string;
+      make_default?: boolean;
+    },
+  ) =>
+    request<{ project: Project; reference: RefVoice }>(
+      `/projects/${projectId}/characters/${encodeURIComponent(speaker)}/references/${encodeURIComponent(refId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      },
+    ),
   renderStem: (
     projectId: string,
     stemId: string,

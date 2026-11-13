@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,6 @@ from .engines.fake import FakeEngine
 from .engines.manager import EngineManager
 from .engines.suno import CaptchaRequiredError, _convert_to_wav, _pick_vocal_stem
 from .mixer import build_mix
-from .settings import resolve_suno
 from .models import (
     AlignedLine,
     AlignmentResult,
@@ -36,7 +36,14 @@ from .models import (
     StemRenderRequest,
     SunoTrack,
     Take,
+    utcnow,
 )
+from .refvoice import (
+    ReferenceCancelled,
+    ReferencePreparationError,
+    prepare_reference,
+)
+from .settings import resolve_suno
 from .sfx import SfxLibrary
 from .store import ProjectStore, slugify
 from .suno import SunoBridge, SunoError
@@ -157,10 +164,17 @@ def _scene_heading(project: Project, scene_id: int) -> str:
     return ""
 
 
-def _resolve_ref_file(
+@dataclass
+class ResolvedReference:
+    path: Path
+    ref_text: str | None
+    f0_hz: float | None
+
+
+def _resolve_reference(
     character: Character, directory: Path, ref_voice_id: str | None
-) -> Path | None:
-    """Resolve a reference wav for a render.
+) -> ResolvedReference | None:
+    """Resolve the reference wav and its matching transcript.
 
     ``ref_voice_id`` selects one of the character's named RefVoice entries;
     None means the default (legacy ``ref_file``). Returns None when the
@@ -178,11 +192,19 @@ def _resolve_ref_file(
         candidate = directory / entry.file
         if not candidate.exists():
             raise PermanentJobError(f"reference file missing: {candidate}")
-        return candidate
+        return ResolvedReference(
+            path=candidate,
+            ref_text=entry.ref_text,
+            f0_hz=entry.f0_hz,
+        )
     if character.ref_file:
         candidate = directory / character.ref_file
         if candidate.exists():
-            return candidate
+            return ResolvedReference(
+                path=candidate,
+                ref_text=character.ref_text,
+                f0_hz=character.f0_hz,
+            )
     return None
 
 
@@ -238,8 +260,11 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
     _require_gpu(engine_name)
     ctx.progress(0.02, f"loading {engine_name}")
     engine = _MANAGER.get(engine_name)
-    ctx.progress(0.1, f"designing reference for {speaker}")
+    engine.load()
+    ctx.progress(0.08, f"{engine_name} ready")
+    ctx.progress(0.12, f"designing reference for {speaker}")
     result = engine.design_reference(request)
+    ctx.progress(0.95, "saving reference")
     character.ref_file = str(output.relative_to(directory))
     character.f0_hz = result.f0_hz
     if ref_name:
@@ -253,6 +278,11 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
                 ref_text=character.ref_text,
                 ref_instruction=character.ref_instruction,
                 f0_hz=result.f0_hz,
+                f0_range_hz=result.f0_range_hz,
+                source="designed",
+                duration_s=result.duration_s,
+                warnings=result.warnings,
+                created_at=utcnow(),
             )
         ]
     _STORE.save(project)
@@ -262,6 +292,136 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
         "ref_file": character.ref_file,
         "ref_voice_id": ref_id or None,
         "reference": result.model_dump(mode="json"),
+    }
+
+
+def generate_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
+    """Build a Breeze reference voice from an uploaded speech clip.
+
+    This is deliberately CPU-only: no TTS model is loaded and no GPU memory is
+    touched. The job commits the voice; the frontend edits its transcript via
+    the reference PATCH endpoint afterwards.
+    """
+    payload = job.payload
+    project = _load_project(payload["project_id"])
+    speaker = payload["speaker"]
+    character = project.script.characters.get(speaker)
+    if character is None:
+        raise PermanentJobError(f"character {speaker!r} not found in project")
+
+    engine_name = _engine_name(project)
+    if engine_name not in {"breeze", "breeze-de", "fake"}:
+        raise PermanentJobError(
+            f"{engine_name} does not use prepared Breeze reference voices"
+        )
+    expected_language = {"breeze": "en", "breeze-de": "de"}.get(engine_name)
+    if expected_language and project.language != expected_language:
+        raise PermanentJobError(
+            f"{engine_name} does not support project language "
+            f"{project.language!r}"
+        )
+
+    directory = _STORE.project_dir(project.id).resolve()
+    raw_input = str(payload.get("input_path") or "").strip()
+    if not raw_input:
+        raise PermanentJobError("input_path is required")
+    relative_input = Path(raw_input)
+    if relative_input.is_absolute():
+        raise PermanentJobError("input_path must be relative to the project")
+    input_path = (directory / relative_input).resolve()
+    try:
+        input_path.relative_to(directory)
+    except ValueError as exc:
+        raise PermanentJobError("input_path escapes the project directory") from exc
+    if not input_path.is_file():
+        raise PermanentJobError(f"uploaded clip not found: {raw_input}")
+    temp_upload = input_path if input_path.parent.name == ".uploads" else None
+
+    speaker_slug = slugify(speaker, limit=32) or "voice"
+    requested_name = (payload.get("name") or "").strip()
+    display_name = requested_name or f"Sample {len(character.references) + 1}"
+    base_id = slugify(display_name, limit=32) or "sample"
+    existing_ids = {item.id for item in character.references}
+    ref_id = base_id
+    suffix = 2
+    output = directory / "refs" / f"{speaker_slug}-{ref_id}.wav"
+    while ref_id in existing_ids or output.exists():
+        ref_id = f"{base_id}-{suffix}"
+        suffix += 1
+        output = directory / "refs" / f"{speaker_slug}-{ref_id}.wav"
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    language = "de" if engine_name == "breeze-de" else "en"
+
+    def _progress(value: float, message: str) -> None:
+        ctx.progress(0.02 + 0.93 * max(0.0, min(1.0, value)), message)
+
+    try:
+        ctx.progress(0.02, f"preparing reference for {speaker}")
+        prepared = prepare_reference(
+            input_path,
+            output,
+            language=language,
+            progress=_progress,
+            cancelled=ctx.cancelled,
+        )
+    except ReferenceCancelled as exc:
+        raise JobCancelled(str(exc)) from exc
+    except ReferencePreparationError as exc:
+        raise PermanentJobError(str(exc)) from exc
+    except RuntimeError as exc:
+        if "cancel" in str(exc).lower():
+            raise JobCancelled(str(exc)) from exc
+        raise PermanentJobError(str(exc)) from exc
+    finally:
+        if temp_upload is not None:
+            temp_upload.unlink(missing_ok=True)
+
+    relative = str(output.relative_to(directory))
+    entry = RefVoice(
+        id=ref_id,
+        name=display_name,
+        file=relative,
+        ref_text=prepared.ref_text,
+        ref_instruction=None,
+        f0_hz=prepared.f0_hz,
+        f0_range_hz=prepared.f0_range_hz,
+        source="generated",
+        duration_s=prepared.duration_s,
+        transcript_confidence=prepared.transcript_confidence,
+        transcript_source="whisper",
+        window_start_s=prepared.window_start_s,
+        window_end_s=prepared.window_end_s,
+        warnings=prepared.warnings,
+        created_at=utcnow(),
+    )
+    character.references = [
+        item for item in character.references if item.id != ref_id
+    ] + [entry]
+
+    is_default = bool(payload.get("make_default")) or not character.ref_file
+    if is_default:
+        character.ref_file = relative
+        character.ref_text = prepared.ref_text
+        character.ref_instruction = None
+        character.f0_hz = prepared.f0_hz
+    _STORE.save(project)
+    ctx.progress(1.0, "reference ready")
+    return {
+        "speaker": speaker,
+        "ref_voice_id": ref_id,
+        "ref_file": relative,
+        "is_default": is_default,
+        "ref_text": prepared.ref_text,
+        "duration_s": prepared.duration_s,
+        "sample_rate": prepared.sample_rate,
+        "f0_hz": prepared.f0_hz,
+        "f0_range_hz": prepared.f0_range_hz,
+        "transcript_confidence": prepared.transcript_confidence,
+        "window_start_s": prepared.window_start_s,
+        "window_end_s": prepared.window_end_s,
+        "warnings": prepared.warnings,
+        "reference": entry.model_dump(mode="json"),
     }
 
 
@@ -290,18 +450,29 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     directory = _STORE.project_dir(project.id)
     ref_voice_id = payload.get("ref_voice_id") or stem.ref_voice_id
     ref_path = None
+    ref_text = character.ref_text
+    resolved: ResolvedReference | None = None
+    if engine_name in {"breeze", "breeze-de", "chatterbox"}:
+        resolved = _resolve_reference(character, directory, ref_voice_id)
     if engine_name in {"breeze", "breeze-de"}:
         # A per-stem voice override wins; otherwise the default reference.
-        # Either way Breeze needs a usable reference file.
-        ref_path = _resolve_ref_file(character, directory, ref_voice_id)
-        if ref_path is None:
+        # Either way Breeze needs a usable reference file and transcript.
+        if resolved is None:
             raise PermanentJobError(
                 f"no reference voice for {stem.speaker}; design it first"
+            )
+        ref_path = resolved.path
+        ref_text = resolved.ref_text
+        if not ref_text:
+            raise PermanentJobError(
+                f"reference voice for {stem.speaker} has no transcript; "
+                "edit the voice and add the matching text first"
             )
     elif engine_name == "chatterbox":
         # Reference clips are optional; the Chatterbox server falls back to its
         # configured default voice when no sample is attached.
-        ref_path = _resolve_ref_file(character, directory, ref_voice_id)
+        if resolved is not None:
+            ref_path = resolved.path
     elif engine_name == "suno":
         # Suno uses preset voices/personas; no local reference file.
         ref_path = None
@@ -336,7 +507,7 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         instruction=stem.instruction,
         output_dir=str(directory),
         ref_audio_path=str(ref_path) if ref_path else None,
-        ref_text=character.ref_text,
+        ref_text=ref_text,
         language=project.language,
         cfg_scale=float(cfg_value) if cfg_value is not None else stem.cfg_scale,
         seed=int(seed_value) if seed_value is not None else stem.seed,
@@ -1017,6 +1188,39 @@ def mix_project(job: Job, ctx: JobContext) -> dict[str, Any]:
     return result.model_dump(mode="json")
 
 
+def mix_preview_scene(job: Job, ctx: JobContext) -> dict[str, Any]:
+    """Render one staged scene to an audition file.
+
+    Goes through the same build_mix path as the master with the other scenes
+    unstaged and the cue bed muted, so what you hear is what the master will
+    contain for that scene.
+    """
+    import copy
+
+    from .spatial import SpatialUnavailable, staged_scenes
+
+    project = _load_project(job.payload["project_id"])
+    directory = _STORE.project_dir(project.id)
+    scene_id = int(job.payload["scene"])
+    if project.stage is None or str(scene_id) not in project.stage.scenes:
+        raise ValueError(f"scene {scene_id} is not staged")
+    if scene_id not in staged_scenes(project.stage):
+        raise ValueError(f"scene {scene_id} has no staged sources")
+
+    ctx.progress(0.1, f"rendering scene {scene_id} preview")
+    preview = copy.deepcopy(project)
+    stage = preview.stage
+    keep = str(scene_id)
+    stage.scenes = {keep: stage.scenes[keep]}
+    preview.cues = []  # the bed is context, not part of a staging audition
+    name = f"preview_s{scene_id}"
+    result = build_mix(preview, directory, lambda _sfx_id: None, name=name)
+    if not result.spatial:
+        raise SpatialUnavailable("spatial renderer produced no staged output")
+    ctx.progress(1.0, "preview ready")
+    return result.model_dump(mode="json")
+
+
 def unload_engines(job: Job, ctx: JobContext) -> dict[str, Any]:
     _MANAGER.unload_all()
     return {"unloaded": True}
@@ -1033,9 +1237,11 @@ def default_handlers() -> dict[str, Handler]:
         "stem.import_suno": import_suno_take,
         "reference.design": design_reference,
         "reference.design.breeze": design_reference,
+        "reference.generate": generate_reference,
         "stem.align.breeze": align_stem,
         "stem.realign": realign_stem,
         "suno.generate": suno_generate,
         "mix.render": mix_project,
+        "mix.preview_scene": mix_preview_scene,
         "engine.unload": unload_engines,
     }

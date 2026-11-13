@@ -29,6 +29,19 @@ class RefVoice(BaseModel):
     ref_text: str | None = None
     ref_instruction: str | None = None
     f0_hz: float | None = None
+    # Advisory only: median pitch plus the p10/p90 range of voiced frames.
+    f0_range_hz: tuple[float, float] | None = None
+    source: Literal["unknown", "designed", "generated", "uploaded"] = "unknown"
+    duration_s: float | None = None
+    # Mean Whisper word probability. None for design/upload/legacy refs and
+    # after a manual transcript edit.
+    transcript_confidence: float | None = None
+    transcript_source: Literal["whisper", "edited"] | None = None
+    # Which seconds of the uploaded clip were used (generated refs only).
+    window_start_s: float | None = None
+    window_end_s: float | None = None
+    warnings: list[str] = Field(default_factory=list)
+    created_at: datetime | None = None
 
 
 class Character(BaseModel):
@@ -124,6 +137,142 @@ class Cue(BaseModel):
     filter: Literal["none", "telephone", "radio"] = "none"
 
 
+class StageRoom(BaseModel):
+    """Shoebox room geometry for one scene, in metres.
+
+    Coordinates match SPARTA AmbiRoomSim: x is width (0..W), y is depth
+    (0..D, the front wall is at y=0), z is height (0..H). +x is the
+    listener's left at the default facing.
+    """
+
+    dims_m: tuple[float, float, float] = (6.0, 5.0, 3.0)
+    # Per-wall absorption, in the order SAF's room sim wants it:
+    # +x, -x, +y, -y, +z, -z.
+    absorption: tuple[float, float, float, float, float, float] = (0.25,) * 6
+    # Image-source reflection order. 0 renders the direct path only.
+    reflections: int = Field(default=2, ge=0, le=4)
+
+    @field_validator("dims_m")
+    @classmethod
+    def dims_in_range(cls, value: tuple[float, float, float]) -> tuple[float, float, float]:
+        for axis, limit in zip(value, (20.0, 20.0, 6.0)):
+            if axis < 0.5 or axis > limit:
+                raise ValueError("room dimensions must be within the room sim range")
+        return value
+
+    @field_validator("absorption")
+    @classmethod
+    def absorption_in_range(
+        cls, value: tuple[float, float, float, float, float, float]
+    ) -> tuple[float, float, float, float, float, float]:
+        if any(coeff < 0.02 or coeff > 0.98 for coeff in value):
+            raise ValueError("wall absorption must be between 0.02 and 0.98")
+        return value
+
+
+class StageListener(BaseModel):
+    """Where the microphone (the listener's head) sits, and which way it faces.
+
+    facing_deg is a standard azimuth: 0 faces the front wall (-y), +90 faces
+    +x. This is the convention SPARTA's studio draws and the one the renderer
+    rotates the Ambisonic field by.
+    """
+
+    position_m: tuple[float, float, float] = (3.0, 4.0, 1.6)
+    facing_deg: float = Field(default=0.0, ge=-180.0, le=180.0)
+
+
+class StageActor(BaseModel):
+    """One speaker's position in a scene.
+
+    `direct` blends the spatialised render against a centred dry copy of the
+    same clip: 1.0 is fully in the room, 0.0 is dry and centred. Narration
+    usually wants a low value so the voice stays in front of the scene.
+    """
+
+    speaker: str
+    position_m: tuple[float, float, float]
+    facing_deg: float = Field(default=0.0, ge=-180.0, le=180.0)
+    gain_db: float = Field(default=0.0, ge=-48.0, le=12.0)
+    direct: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class StagePath(BaseModel):
+    """Motion for one speaker: absolute-time keyframes, interpolated linearly.
+
+    Times are seconds on the project timeline (the same clock the Cut board
+    uses), not bars.
+    """
+
+    speaker: str
+    keys: list[tuple[float, float, float, float]] = Field(default_factory=list)
+
+    @field_validator("keys")
+    @classmethod
+    def keys_sorted(cls, value: list[tuple[float, float, float, float]]) -> list[tuple[float, float, float, float]]:
+        times = [key[0] for key in value]
+        if times != sorted(times):
+            raise ValueError("path keyframes must be in ascending time order")
+        return value
+
+
+class SceneStage(BaseModel):
+    """The full staging of one scene: room, listener, cast and motion."""
+
+    room: StageRoom = Field(default_factory=StageRoom)
+    listener: StageListener = Field(default_factory=StageListener)
+    actors: list[StageActor] = Field(default_factory=list)
+    paths: list[StagePath] = Field(default_factory=list)
+
+    @field_validator("actors")
+    @classmethod
+    def actors_valid(cls, value: list[StageActor], info) -> list[StageActor]:
+        if len(value) > 16:
+            # ROOM_SIM_MAX_NUM_SOURCES in the DSP.
+            raise ValueError("a scene supports at most 16 staged sources")
+        speakers = [actor.speaker for actor in value]
+        if len(set(speakers)) != len(speakers):
+            raise ValueError("a speaker may occupy only one position per scene")
+        room = info.data.get("room")
+        for actor in value:
+            limits = room.dims_m if room is not None else (20.0, 20.0, 6.0)
+            for axis, limit in zip(actor.position_m, limits):
+                if axis < 0.0 or axis > limit:
+                    raise ValueError(f"{actor.speaker}: position must be inside the room")
+        return value
+
+    @field_validator("listener")
+    @classmethod
+    def listener_inside_room(cls, value: StageListener, info) -> StageListener:
+        room = info.data.get("room")
+        if room is not None:
+            for axis, limit in zip(value.position_m, room.dims_m):
+                if axis < 0.0 or axis > limit:
+                    raise ValueError("listener must be inside the room")
+        return value
+
+
+class StageProject(BaseModel):
+    """Spatial staging of a project: one SceneStage per scene id.
+
+    Scenes with no entry render dry, so enabling spatial mixing on a project
+    never changes the output until a scene is actually staged.
+    """
+
+    version: int = 1
+    enabled: bool = False
+    # Ambisonic order of the render: 1 = 4 channels, 3 = 16 channels.
+    order: Literal[1, 3] = 3
+    # Write mix/master_ambisonic.wav alongside the stereo master. This is a
+    # large file (16ch 48k PCM-24 is ~2.3 MB per second), so it is opt-in.
+    export_ambisonic: bool = False
+    # Seconds of silence appended to each scene so the room tail rings out.
+    # Capped by the renderer's circular buffer (see spatial.MAX_TAIL_S).
+    tail_s: float = Field(default=0.6, ge=0.0, le=2.0)
+    default_room: StageRoom = Field(default_factory=StageRoom)
+    scenes: dict[str, SceneStage] = Field(default_factory=dict)
+
+
 class SunoTrack(BaseModel):
     clip_id: str
     title: str
@@ -142,6 +291,11 @@ class MixResult(BaseModel):
     line_count: int
     cue_count: int
     warnings: list[str] = Field(default_factory=list)
+    # True when the master was rendered through the spatial stage rather than
+    # the dry mono sum. Absent on mixes saved before staging existed.
+    spatial: bool = False
+    # mix/master_ambisonic.wav when an Ambisonic master was exported.
+    ambisonic: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -153,6 +307,9 @@ class ProjectSettings(BaseModel):
     exclude_sfx_dirs: list[str] = Field(
         default_factory=lambda: ["juli", "miller", "projects", "snippets"]
     )
+    # Spatial rendering runs on the CPU at ~8x faster than real time, so it
+    # never needs the GPU serialisation the TTS engines do.
+    spatial_sample_rate: Literal[24000, 48000] = 48000
 
 
 class Project(BaseModel):
@@ -167,6 +324,8 @@ class Project(BaseModel):
     alignments: dict[str, AlignmentResult] = Field(default_factory=dict)
     cues: list[Cue] = Field(default_factory=list)
     suno: list[SunoTrack] = Field(default_factory=list)
+    # Per-scene spatial staging. None or enabled=False keeps the dry mono mix.
+    stage: StageProject | None = None
     mix: MixResult | None = None
     # True when cuts/takes changed since the last mix render.
     mix_stale: bool = False
@@ -201,6 +360,8 @@ class ReferenceResult(BaseModel):
     duration_s: float
     sample_rate: int
     f0_hz: float | None = None
+    f0_range_hz: tuple[float, float] | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class Take(BaseModel):

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from drama_studio.api import create_app
 from drama_studio.audio import read_mono, write_mono
 from drama_studio.llm import LLMError
-from drama_studio.models import AlignedLine, AlignmentResult, Take
+from drama_studio.models import AlignedLine, AlignmentResult, RefVoice, Take
 
 
 class FailingLLM:
@@ -467,3 +467,202 @@ def test_changing_project_engine_updates_default_stems(tmp_path):
     ).json()
     assert updated["default_engine"] == "suno"
     assert all("engine" not in stem for stem in updated["stems"])
+
+
+def _sample_wav_bytes(tmp_path, seconds=8.0):
+    import io
+
+    import soundfile as sf
+
+    sr = 24000
+    data = np.zeros(int(seconds * sr), dtype=np.float32)
+    buffer = io.BytesIO()
+    sf.write(buffer, data, sr, format="WAV", subtype="PCM_16")
+    return buffer.getvalue()
+
+
+def test_reference_generate_queues_job(tmp_path, monkeypatch):
+    import drama_studio.refvoice as refvoice_module
+
+    app, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "API Test", "language": "en", "script_text": SCRIPT},
+    ).json()
+    monkeypatch.setattr(refvoice_module, "probe_duration", lambda path: 8.0)
+
+    response = client.post(
+        f"/api/projects/{project['id']}/characters/MARA/reference/generate",
+        files={
+            "file": (
+                "sample.wav",
+                _sample_wav_bytes(tmp_path),
+                "audio/wav",
+            )
+        },
+        data={"name": "Sample 1", "make_default": "true"},
+    )
+    assert response.status_code == 202, response.text
+    job = response.json()
+    assert job["type"] == "reference.generate"
+    assert job["payload"]["speaker"] == "MARA"
+    assert job["payload"]["make_default"] is True
+    assert job["payload"]["input_path"].startswith("refs/.uploads/")
+
+    duplicate = client.post(
+        f"/api/projects/{project['id']}/characters/MARA/reference/generate",
+        files={
+            "file": (
+                "sample.wav",
+                _sample_wav_bytes(tmp_path),
+                "audio/wav",
+            )
+        },
+    )
+    assert duplicate.status_code == 202
+    assert duplicate.json()["id"] == job["id"]
+
+
+def test_reference_generate_rejects_short_clip(tmp_path, monkeypatch):
+    import drama_studio.refvoice as refvoice_module
+
+    _, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "API Test", "language": "en", "script_text": SCRIPT},
+    ).json()
+    monkeypatch.setattr(refvoice_module, "probe_duration", lambda path: 3.0)
+
+    response = client.post(
+        f"/api/projects/{project['id']}/characters/MARA/reference/generate",
+        files={
+            "file": (
+                "sample.wav",
+                _sample_wav_bytes(tmp_path),
+                "audio/wav",
+            )
+        },
+    )
+    assert response.status_code == 400
+    assert "at least 6" in response.json()["detail"]
+
+
+def test_reference_generate_accepts_long_clip(tmp_path, monkeypatch):
+    import drama_studio.refvoice as refvoice_module
+
+    _, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "API Test", "language": "en", "script_text": SCRIPT},
+    ).json()
+    monkeypatch.setattr(refvoice_module, "probe_duration", lambda path: 120.0)
+
+    response = client.post(
+        f"/api/projects/{project['id']}/characters/MARA/reference/generate",
+        files={
+            "file": (
+                "sample.wav",
+                _sample_wav_bytes(tmp_path),
+                "audio/wav",
+            )
+        },
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["type"] == "reference.generate"
+
+
+def test_reference_generate_rejects_native_clone_engine(tmp_path, monkeypatch):
+    app, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "API Test",
+            "language": "en",
+            "default_engine": "chatterbox",
+            "script_text": SCRIPT,
+        },
+    ).json()
+    response = client.post(
+        f"/api/projects/{project['id']}/characters/MARA/reference/generate",
+        files={
+            "file": (
+                "sample.wav",
+                _sample_wav_bytes(tmp_path),
+                "audio/wav",
+            )
+        },
+    )
+    assert response.status_code == 400
+    assert "chatterbox" in response.json()["detail"].lower()
+
+
+def test_reference_patch_updates_transcript_and_default(tmp_path):
+    app, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "API Test", "language": "en", "script_text": SCRIPT},
+    ).json()
+    stored = app.state.store.get(project["id"])
+    character = stored.script.characters["MARA"]
+    character.references = [
+        RefVoice(
+            id="sample-1",
+            name="Sample 1",
+            file="refs/mara-sample-1.wav",
+            ref_text="old text",
+            source="generated",
+            transcript_confidence=0.7,
+        )
+    ]
+    app.state.store.save(stored)
+
+    response = client.patch(
+        f"/api/projects/{project['id']}/characters/MARA/references/sample-1",
+        json={
+            "name": "Studio sample",
+            "ref_text": "new exact text",
+            "make_default": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    reference = body["reference"]
+    assert reference["name"] == "Studio sample"
+    assert reference["ref_text"] == "new exact text"
+    assert reference["transcript_source"] == "edited"
+    assert reference["transcript_confidence"] is None
+
+    updated = body["project"]
+    character = updated["script"]["characters"]["MARA"]
+    assert character["ref_file"] == "refs/mara-sample-1.wav"
+    assert character["ref_text"] == "new exact text"
+
+
+def test_reference_patch_updates_default_transcript(tmp_path):
+    app, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "API Test", "language": "en", "script_text": SCRIPT},
+    ).json()
+    stored = app.state.store.get(project["id"])
+    character = stored.script.characters["MARA"]
+    character.ref_file = "refs/mara-sample-1.wav"
+    character.ref_text = "old default text"
+    character.references = [
+        RefVoice(
+            id="sample-1",
+            name="Sample 1",
+            file="refs/mara-sample-1.wav",
+            ref_text="old default text",
+            source="generated",
+        )
+    ]
+    app.state.store.save(stored)
+
+    response = client.patch(
+        f"/api/projects/{project['id']}/characters/MARA/references/sample-1",
+        json={"ref_text": "corrected default text"},
+    )
+    assert response.status_code == 200, response.text
+    character = response.json()["project"]["script"]["characters"]["MARA"]
+    assert character["ref_text"] == "corrected default text"

@@ -36,6 +36,18 @@ class FakeManager:
         return self._engine
 
 
+class CapturingEngine(FakeEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[StemRenderRequest] = []
+
+    def render_stem(self, request, *, progress=None, cancelled=None):
+        self.requests.append(request)
+        return super().render_stem(
+            request, progress=progress, cancelled=cancelled
+        )
+
+
 def test_ref_voice_model_defaults():
     character = Character(id="MARA", name="Mara")
     assert character.references == []
@@ -138,7 +150,12 @@ def _named_voice_project(tmp_path):
     character.ref_text = "You're late."
     character.ref_instruction = "Cold."
     character.references = [
-        RefVoice(id="raspy", name="Raspy", file="refs/mara-raspy.wav")
+        RefVoice(
+            id="raspy",
+            name="Raspy",
+            file="refs/mara-raspy.wav",
+            ref_text="You're late.",
+        )
     ]
     store.save(project)
     return store, project
@@ -175,6 +192,72 @@ def test_render_uses_named_ref_voice(tmp_path):
     updated = _run_render(tmp_path, store, project, {"ref_voice_id": "raspy"})
     stem = next(item for item in updated.stems if item.id == "s1-mara")
     assert len(stem.takes) == 1
+
+
+def test_render_uses_named_ref_transcript(tmp_path):
+    store, project = _named_voice_project(tmp_path)
+    stored = store.get(project.id)
+    stored.script.characters["MARA"].references[0].ref_text = (
+        "Raspy generated transcript."
+    )
+    store.save(stored)
+
+    import unittest.mock as mock
+
+    engine = CapturingEngine()
+    with mock.patch.object(handler_module, "_STORE", store), mock.patch.object(
+        handler_module, "_MANAGER", FakeManager(engine)
+    ), mock.patch.object(handler_module, "_require_gpu", lambda name: None):
+        queue = JobQueue(tmp_path / "jobs.sqlite3")
+        job = queue.enqueue(
+            "stem.render",
+            {
+                "project_id": project.id,
+                "stem_id": "s1-mara",
+                "candidates": 1,
+                "align": False,
+                "engine": "breeze",
+                "ref_voice_id": "raspy",
+            },
+        )
+        Worker(
+            queue, {"stem.render": handler_module.render_stem}, worker_id="test"
+        ).run_once()
+        assert queue.get(job.id).status == "succeeded"
+
+    assert engine.requests
+    assert engine.requests[0].ref_text == "Raspy generated transcript."
+
+
+def test_render_named_ref_without_transcript_fails(tmp_path):
+    store, project = _named_voice_project(tmp_path)
+    stored = store.get(project.id)
+    stored.script.characters["MARA"].references[0].ref_text = None
+    store.save(stored)
+
+    import unittest.mock as mock
+
+    with mock.patch.object(handler_module, "_STORE", store), mock.patch.object(
+        handler_module, "_MANAGER", FakeManager(FakeEngine())
+    ), mock.patch.object(handler_module, "_require_gpu", lambda name: None):
+        queue = JobQueue(tmp_path / "jobs.sqlite3")
+        job = queue.enqueue(
+            "stem.render",
+            {
+                "project_id": project.id,
+                "stem_id": "s1-mara",
+                "candidates": 1,
+                "align": False,
+                "engine": "breeze",
+                "ref_voice_id": "raspy",
+            },
+        )
+        Worker(
+            queue, {"stem.render": handler_module.render_stem}, worker_id="test"
+        ).run_once()
+        finished = queue.get(job.id)
+        assert finished.status == "failed"
+        assert "transcript" in (finished.error or "").lower()
 
 
 def test_render_unknown_ref_voice_fails(tmp_path):
@@ -233,6 +316,8 @@ def test_design_reference_with_name_appends(tmp_path):
     assert character.ref_file is not None
     assert [item.name for item in character.references] == ["Raspy"]
     assert character.references[0].file.endswith(".wav")
+    assert character.references[0].source == "designed"
+    assert character.references[0].duration_s is not None
 
 
 def make_client(tmp_path):

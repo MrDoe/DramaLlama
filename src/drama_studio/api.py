@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__
+from . import __version__, spatial
 from .config import DB_PATH, PROJECTS_DIR, SUNO_BRIDGE_URL, WEB_DIST
 from .engines import ENGINES, all_engine_info
 
@@ -50,6 +50,8 @@ from .models import (
     ProjectSettings,
     RefVoice,
     Script,
+    StageProject,
+    utcnow,
 )
 from .settings import preview_llm, resolve_llm, resolve_suno, write_llm, write_suno
 from .sfx import SfxLibrary
@@ -103,6 +105,12 @@ class ReferenceBody(BaseModel):
     # Optional display name: stores the design as an additional named voice
     # instead of only replacing the character default.
     name: str | None = None
+
+
+class ReferenceUpdate(BaseModel):
+    name: str | None = None
+    ref_text: str | None = None
+    make_default: bool | None = None
 
 
 class RenderBody(BaseModel):
@@ -169,6 +177,16 @@ class SunoGenerate(BaseModel):
     duration: int | None = None
     lyrics: str | None = None
     vocal_gender: str | None = None
+
+
+class StageUpdate(BaseModel):
+    """The whole stage for a project, replaced atomically."""
+
+    stage: StageProject
+
+
+class StageLayoutRequest(BaseModel):
+    scene: int
 
 
 class CueCreate(BaseModel):
@@ -697,7 +715,12 @@ def create_app(
         project = store.save(project)
         return project.model_dump(mode="json")
 
-    def active_job(project_id: str, job_type: str, stem_id: str | None = None):
+    def active_job(
+        project_id: str,
+        job_type: str,
+        stem_id: str | None = None,
+        speaker: str | None = None,
+    ):
         for status in ("queued", "running"):
             for existing in queue.list_jobs(status, 200):
                 if existing.type != job_type:
@@ -705,6 +728,8 @@ def create_app(
                 if existing.payload.get("project_id") != project_id:
                     continue
                 if stem_id is not None and existing.payload.get("stem_id") != stem_id:
+                    continue
+                if speaker is not None and existing.payload.get("speaker") != speaker:
                     continue
                 return existing
         return None
@@ -800,6 +825,12 @@ def create_app(
             return project.model_dump(mode="json")
 
         # Named reference voice: append to character.references.
+        try:
+            from .audio import duration_s as _duration_s
+
+            measured = _duration_s(destination)
+        except Exception:
+            measured = None
         character.references = [
             item for item in character.references if item.id != ref_id
         ] + [
@@ -810,6 +841,9 @@ def create_app(
                 ref_text=character.ref_text,
                 ref_instruction=character.ref_instruction,
                 f0_hz=character.f0_hz,
+                source="uploaded",
+                duration_s=measured,
+                created_at=utcnow(),
             )
         ]
         if character.ref_file is None:
@@ -1268,7 +1302,7 @@ def create_app(
         character = project.script.characters.get(speaker)
         if character is None:
             raise HTTPException(status_code=404, detail="character not found")
-        existing = active_job(project_id, "reference.design")
+        existing = active_job(project_id, "reference.design", speaker=speaker)
         if existing is not None:
             return existing.model_dump(mode="json")
         job = queue.enqueue(
@@ -1285,6 +1319,174 @@ def create_app(
             priority=5,
         )
         return job.model_dump(mode="json")
+
+    @app.post(
+        "/api/projects/{project_id}/characters/{speaker}/reference/generate",
+        status_code=202,
+    )
+    def generate_character_reference(
+        project_id: str,
+        speaker: str,
+        file: UploadFile = File(...),
+        name: str | None = Form(default=None),
+        make_default: bool = Form(default=False),
+    ) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        character = project.script.characters.get(speaker)
+        if character is None:
+            raise HTTPException(status_code=404, detail="character not found")
+
+        engine_name = project.default_engine or (
+            "breeze" if project.language == "en" else "chatterbox"
+        )
+        if engine_name not in {"breeze", "breeze-de", "fake"}:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{engine_name} does not use prepared Breeze reference "
+                    "voices; use its native sample flow instead"
+                ),
+            )
+        expected_language = {"breeze": "en", "breeze-de": "de"}.get(engine_name)
+        if expected_language and project.language != expected_language:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{engine_name} does not support project language "
+                    f"{project.language!r}"
+                ),
+            )
+
+        suffix = Path(file.filename or "sample.wav").suffix.lower()
+        if suffix not in {".wav", ".mp3", ".m4a", ".flac", ".ogg"}:
+            raise HTTPException(status_code=400, detail="unsupported audio format")
+
+        directory = store.project_dir(project.id)
+        upload_dir = directory / "refs" / ".uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        temp = upload_dir / f"{uuid.uuid4().hex}{suffix}"
+        max_bytes = 50 * 1024 * 1024
+        total = 0
+        try:
+            with temp.open("wb") as handle:
+                while chunk := file.file.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail="audio file is larger than 50 MB",
+                        )
+                    handle.write(chunk)
+            if total == 0:
+                raise HTTPException(status_code=400, detail="empty audio file")
+
+            from .refvoice import (
+                MAX_INPUT_S,
+                MIN_INPUT_S,
+                ReferencePreparationError,
+                probe_duration,
+            )
+
+            try:
+                duration = probe_duration(temp)
+            except ReferencePreparationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if duration < MIN_INPUT_S:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"the clip is {duration:.1f} s; upload a sample of at "
+                        f"least {MIN_INPUT_S:.0f} s"
+                    ),
+                )
+            if duration > MAX_INPUT_S:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"the clip is {duration / 60:.1f} minutes; the automatic "
+                        "cutter accepts at most 10 minutes"
+                    ),
+                )
+
+            existing = active_job(
+                project.id, "reference.generate", speaker=speaker
+            )
+            if existing is not None:
+                temp.unlink(missing_ok=True)
+                return existing.model_dump(mode="json")
+
+            job = queue.enqueue(
+                "reference.generate",
+                {
+                    "project_id": project.id,
+                    "speaker": speaker,
+                    "input_path": str(temp.relative_to(directory)),
+                    "name": (name or "").strip() or None,
+                    "make_default": bool(make_default),
+                },
+                priority=5,
+            )
+            return job.model_dump(mode="json")
+        except HTTPException:
+            temp.unlink(missing_ok=True)
+            raise
+        except Exception:
+            temp.unlink(missing_ok=True)
+            raise
+
+    @app.patch(
+        "/api/projects/{project_id}/characters/{speaker}/references/{ref_id}"
+    )
+    def update_character_reference(
+        project_id: str,
+        speaker: str,
+        ref_id: str,
+        body: ReferenceUpdate,
+    ) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        character = project.script.characters.get(speaker)
+        if character is None:
+            raise HTTPException(status_code=404, detail="character not found")
+        entry = next(
+            (item for item in character.references if item.id == ref_id), None
+        )
+        if entry is None:
+            raise HTTPException(status_code=404, detail="reference voice not found")
+
+        if body.name is not None:
+            new_name = body.name.strip()
+            if not new_name:
+                raise HTTPException(status_code=400, detail="name must not be blank")
+            entry.name = new_name
+        if body.ref_text is not None:
+            new_text = body.ref_text.strip()
+            if not new_text:
+                raise HTTPException(
+                    status_code=400, detail="transcript must not be blank"
+                )
+            entry.ref_text = new_text
+            entry.transcript_source = "edited"
+            entry.transcript_confidence = None
+            entry.warnings = [
+                warning
+                for warning in entry.warnings
+                if "confidence" not in warning.lower()
+            ]
+            if character.ref_file == entry.file:
+                character.ref_text = new_text
+        if body.make_default:
+            character.ref_file = entry.file
+            character.ref_text = entry.ref_text
+            character.ref_instruction = entry.ref_instruction
+            character.f0_hz = entry.f0_hz
+        project = store.save(project)
+        updated = next(
+            item for item in character.references if item.id == ref_id
+        )
+        return {
+            "project": project.model_dump(mode="json"),
+            "reference": updated.model_dump(mode="json"),
+        }
 
     @app.post("/api/projects/{project_id}/stems/{stem_id}/render", status_code=202)
     def render_project_stem(
@@ -1573,6 +1775,80 @@ def create_app(
             "mix.render",
             {"project_id": project.id},
             priority=20,
+        )
+        return job.model_dump(mode="json")
+
+    @app.get("/api/stage/capabilities")
+    def stage_capabilities() -> dict[str, Any]:
+        """What the spatial renderer can do on this machine, plus room presets.
+
+        The UI gates the Stage step on `available` so a machine without the
+        native library never offers a control that cannot render.
+        """
+        return {
+            "available": spatial.available(),
+            "library": str(spatial.library_path()) if spatial.library_path() else None,
+            "max_sources": spatial.MAX_SOURCES,
+            "orders": [1, 3],
+            "presets": [dict(preset) for preset in spatial.ROOM_PRESETS],
+            "max_tail_s": {
+                "24000": round(spatial.max_tail_s(24000), 3),
+                "48000": round(spatial.max_tail_s(48000), 3),
+            },
+        }
+
+    @app.get("/api/projects/{project_id}/stage")
+    def get_stage(project_id: str) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        stage = project.stage or StageProject()
+        speakers = {scene.id: sorted({line.speaker for line in scene.lines}) for scene in project.script.scenes}
+        return {
+            "stage": stage.model_dump(mode="json"),
+            "scene_speakers": {str(key): value for key, value in speakers.items()},
+            "available": spatial.available(),
+        }
+
+    @app.put("/api/projects/{project_id}/stage")
+    def put_stage(project_id: str, body: StageUpdate) -> dict[str, Any]:
+        project = project_or_404(project_id)
+        stage = body.stage
+        known = set(project.script.characters) | {line.speaker for line in project.script.iter_lines()}
+        for scene_id, scene_stage in stage.scenes.items():
+            if scene_id.isdigit() and int(scene_id) not in {scene.id for scene in project.script.scenes}:
+                raise HTTPException(status_code=400, detail=f"unknown scene {scene_id}")
+            for actor in scene_stage.actors:
+                if actor.speaker not in known:
+                    raise HTTPException(status_code=400, detail=f"unknown speaker {actor.speaker}")
+        project.stage = stage
+        # Staging changes the master, so the current mix is no longer current.
+        project.mix_stale = True
+        project = store.save(project)
+        return project.stage.model_dump(mode="json")
+
+    @app.post("/api/projects/{project_id}/stage/layout")
+    def layout_stage(project_id: str, body: StageLayoutRequest) -> dict[str, Any]:
+        """A deterministic first-pass staging of one scene (no LLM, no GPU)."""
+        project = project_or_404(project_id)
+        scene = next((item for item in project.script.scenes if item.id == body.scene), None)
+        if scene is None:
+            raise HTTPException(status_code=404, detail="scene not found")
+        speakers = sorted({line.speaker for line in scene.lines})
+        stage = project.stage or StageProject()
+        return spatial.layout_scene(stage, body.scene, speakers).model_dump(mode="json")
+
+    @app.post("/api/projects/{project_id}/stage/preview", status_code=202)
+    def preview_stage(project_id: str, body: StageLayoutRequest) -> dict[str, Any]:
+        """Render one staged scene to a stereo preview file."""
+        project = project_or_404(project_id)
+        if not spatial.available():
+            raise HTTPException(status_code=409, detail="spatial renderer is not installed")
+        existing = active_job(project_id, "mix.preview_scene")
+        if existing is not None:
+            return existing.model_dump(mode="json")
+        job = queue.enqueue(
+            "mix.preview_scene",
+            {"project_id": project.id, "scene": body.scene},
+            priority=18,
         )
         return job.model_dump(mode="json")
 

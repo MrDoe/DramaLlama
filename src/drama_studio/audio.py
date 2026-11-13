@@ -8,13 +8,19 @@ import numpy as np
 import soundfile as sf
 
 
-def write_mono(path: str | Path, samples: np.ndarray, sample_rate: int) -> Path:
+def write_mono(
+    path: str | Path,
+    samples: np.ndarray,
+    sample_rate: int,
+    *,
+    subtype: str = "PCM_24",
+) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = np.asarray(samples, dtype=np.float32)
     if data.ndim > 1:
         data = data.mean(axis=1)
-    sf.write(str(path), np.clip(data, -1.0, 1.0), sample_rate, subtype="PCM_24")
+    sf.write(str(path), np.clip(data, -1.0, 1.0), sample_rate, subtype=subtype)
     return path
 
 

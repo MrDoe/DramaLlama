@@ -47,6 +47,32 @@ export interface RefVoice {
   ref_text?: string | null;
   ref_instruction?: string | null;
   f0_hz?: number | null;
+  f0_range_hz?: [number, number] | null;
+  source: "unknown" | "designed" | "generated" | "uploaded";
+  duration_s?: number | null;
+  transcript_confidence?: number | null;
+  transcript_source?: "whisper" | "edited" | null;
+  window_start_s?: number | null;
+  window_end_s?: number | null;
+  warnings?: string[];
+  created_at?: string | null;
+}
+
+export interface GeneratedReferenceResult {
+  speaker: string;
+  ref_voice_id: string;
+  ref_file: string;
+  is_default: boolean;
+  ref_text: string;
+  duration_s: number;
+  sample_rate: number;
+  f0_hz?: number | null;
+  f0_range_hz?: [number, number] | null;
+  transcript_confidence?: number | null;
+  window_start_s?: number | null;
+  window_end_s?: number | null;
+  warnings: string[];
+  reference: RefVoice;
 }
 
 export interface Line {
@@ -134,6 +160,74 @@ export interface SunoTrack {
   created_at: string;
 }
 
+export interface StageRoom {
+  dims_m: [number, number, number];
+  /** +x, -x, +y, -y, +z, -z */
+  absorption: [number, number, number, number, number, number];
+  reflections: number;
+}
+
+export interface StageListener {
+  position_m: [number, number, number];
+  /** azimuth: 0 faces the front wall, +90 faces +x (the listener's left) */
+  facing_deg: number;
+}
+
+export interface StageActor {
+  speaker: string;
+  position_m: [number, number, number];
+  facing_deg: number;
+  gain_db: number;
+  /** 1 = fully in the room, 0 = dry and centred */
+  direct: number;
+}
+
+export interface StagePath {
+  speaker: string;
+  /** [time_s, x, y, z] */
+  keys: [number, number, number, number][];
+}
+
+export interface SceneStage {
+  room: StageRoom;
+  listener: StageListener;
+  actors: StageActor[];
+  paths: StagePath[];
+}
+
+export interface StageProject {
+  version: number;
+  enabled: boolean;
+  order: 1 | 3;
+  export_ambisonic: boolean;
+  tail_s: number;
+  default_room: StageRoom;
+  scenes: Record<string, SceneStage>;
+}
+
+export interface RoomPreset {
+  key: string;
+  label: string;
+  dims_m: [number, number, number];
+  absorption: number[];
+  reflections: number;
+}
+
+export interface StageCapabilities {
+  available: boolean;
+  library: string | null;
+  max_sources: number;
+  orders: number[];
+  presets: RoomPreset[];
+  max_tail_s: Record<string, number>;
+}
+
+export interface StageResponse {
+  stage: StageProject;
+  scene_speakers: Record<string, string[]>;
+  available: boolean;
+}
+
 export interface MixResult {
   file: string;
   mp3?: string | null;
@@ -142,6 +236,8 @@ export interface MixResult {
   line_count: number;
   cue_count: number;
   warnings: string[];
+  spatial?: boolean;
+  ambisonic?: string | null;
   created_at: string;
 }
 
@@ -251,6 +347,7 @@ export interface Project {
   alignments: Record<string, AlignmentResult>;
   cues: Cue[];
   suno: SunoTrack[];
+  stage?: StageProject | null;
   mix?: MixResult | null;
   mix_stale?: boolean;
   settings: ProjectSettings;

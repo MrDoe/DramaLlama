@@ -10,6 +10,7 @@ import {
   ListChecks,
   MagicWand,
   MagnifyingGlass,
+  MapPin,
   MusicNotes,
   Pause,
   Play,
@@ -24,6 +25,8 @@ import {
 } from "@phosphor-icons/react";
 import { api, waitForJob } from "../api";
 import { MultiTrackEditor } from "../components/MultiTrackEditor";
+import { StageBoard } from "../components/StageBoard";
+import { VoicesBoard } from "../components/VoicesBoard";
 import type {
   Character,
   Cue,
@@ -47,9 +50,11 @@ import {
 
 const STEPS = [
   { id: "script", label: "Script", icon: FileText },
+  { id: "voices", label: "Voices", icon: SpeakerHigh },
   { id: "stems", label: "Stems", icon: Waveform },
   { id: "cut", label: "Cut", icon: Scissors },
   { id: "sound", label: "Sound", icon: MusicNotes },
+  { id: "stage", label: "Stage", icon: MapPin },
   { id: "mix", label: "Mix", icon: SlidersHorizontal },
 ] as const;
 
@@ -743,11 +748,13 @@ function CastPanel({
   jobs,
   onDesign,
   onUpload,
+  onOpenVoices,
 }: {
   project: Project;
   jobs: Record<string, Job>;
   onDesign: (speaker: string, opts?: { name?: string; seed?: number }) => void;
   onUpload: (speaker: string, file: File, name?: string) => void;
+  onOpenVoices: (speaker: string) => void;
 }) {
   const lines = project.script.scenes.flatMap((scene) => scene.lines);
   const cast = useMemo(
@@ -778,11 +785,17 @@ function CastPanel({
         ) : (
           cast.map((character) => {
             const job = jobs[`char:${character.id}`];
-            const busy = job?.status === "queued" || job?.status === "running";
+            const generateJob = jobs[`char:${character.id}:generate`];
+            const busy =
+              job?.status === "queued" ||
+              job?.status === "running" ||
+              generateJob?.status === "queued" ||
+              generateJob?.status === "running";
             const engine = projectEngine(project);
             const isSuno = engine === "suno";
             const isChatterbox = engine === "chatterbox";
-            const isBreeze = engine === "breeze" || engine === "breeze-de";
+            const isBreeze =
+              engine === "breeze" || engine === "breeze-de" || engine === "fake";
             return (
               <div className="cast-card" key={character.id}>
                 <span className="avatar" style={speakerStyle(character.id)}>
@@ -842,7 +855,12 @@ function CastPanel({
                       <button
                         type="button"
                         className="button button-secondary button-sm"
-                        onClick={() => onDesign(character.id)}
+                        onClick={() =>
+                          onDesign(character.id, {
+                            name: `Voice ${(character.references?.length ?? 0) + 1}`,
+                            seed: 42 + (character.references?.length ?? 0),
+                          })
+                        }
                         disabled={busy}
                       >
                         {busy ? <span className="spinner" /> : <Waveform size={12} />}
@@ -863,6 +881,20 @@ function CastPanel({
                         title="Design an additional named voice for per-stem selection in Render"
                       >
                         Add voice
+                      </button>
+                    ) : null}
+                    {isBreeze || isChatterbox ? (
+                      <button
+                        type="button"
+                        className="button button-ghost button-sm"
+                        onClick={() => onOpenVoices(character.id)}
+                        title="Open the voice list and generation tools"
+                      >
+                        <SpeakerHigh size={12} />
+                        Voices
+                        {character.references?.length
+                          ? ` (${character.references.length})`
+                          : ""}
                       </button>
                     ) : null}
                   </div>
@@ -1934,6 +1966,12 @@ function MixBoard({
                 <span>cues</span>
                 <strong>{mix.cue_count}</strong>
               </div>
+              {mix.spatial ? (
+                <div className="mix-metric">
+                  <span>staging</span>
+                  <strong>spatial</strong>
+                </div>
+              ) : null}
             </>
           ) : (
             <div className="empty-list">
@@ -1967,6 +2005,17 @@ function MixBoard({
                 <DownloadSimple size={13} />
                 WAV
               </a>
+              {mix.ambisonic ? (
+                <a
+                  className="button button-secondary button-sm"
+                  href={api.fileUrl(project.id, mix.ambisonic)}
+                  download
+                  title="ACN/SN3D Ambisonic master, pre-loudness"
+                >
+                  <DownloadSimple size={13} />
+                  Ambisonic
+                </a>
+              ) : null}
               {mix.mp3 ? (
                 <a
                   className="button button-secondary button-sm"
@@ -2009,9 +2058,10 @@ export function ProjectPage() {
   const [llmOutput, setLlmOutput] = useState("");
   const [buildingStems, setBuildingStems] = useState(false);
   const [activeStep, setActiveStep] = useState<
-    "script" | "stems" | "cut" | "sound" | "mix"
+    "script" | "voices" | "stems" | "cut" | "sound" | "stage" | "mix"
   >("script");
   const [jobs, setJobs] = useState<Record<string, Job>>({});
+  const [voicesSpeaker, setVoicesSpeaker] = useState<string | null>(null);
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [sunoPlan, setSunoPlan] = useState<"free" | "pro">("free");
   const [error, setError] = useState("");
@@ -2459,6 +2509,33 @@ export function ProjectPage() {
     [project, trackJob],
   );
 
+  const generateVoice = useCallback(
+    async (
+      speaker: string,
+      file: File,
+      opts: { name?: string; makeDefault?: boolean },
+    ) => {
+      if (!project) return;
+      setError("");
+      const job = await api.generateReference(project.id, speaker, file, opts);
+      trackJob(`char:${speaker}:generate`, job);
+    },
+    [project, trackJob],
+  );
+
+  const saveVoiceReference = useCallback(
+    async (
+      speaker: string,
+      refId: string,
+      patch: { name?: string; ref_text?: string; make_default?: boolean },
+    ) => {
+      if (!project) return;
+      const result = await api.updateReference(project.id, speaker, refId, patch);
+      setProject(result.project);
+    },
+    [project],
+  );
+
   const renderMix = useCallback(async () => {
     if (!project) return;
     setError("");
@@ -2576,9 +2653,10 @@ export function ProjectPage() {
     (sum, scene) => sum + scene.lines.length,
     0,
   );
+  const characterCount = Object.keys(project.script.characters).length;
 
   return (
-    <div className="page">
+    <div className={`page${activeStep === "cut" ? " page--cut" : ""}`}>
       <Link to="/" className="back-link">
         <ArrowLeft size={13} />
         Projects
@@ -2652,9 +2730,10 @@ export function ProjectPage() {
           const Icon = step.icon;
           const available =
             step.id === "script" ||
+            (step.id === "voices" && characterCount > 0) ||
             (step.id === "stems" && lineCount > 0) ||
             (step.id === "cut" && project.stems.length > 0) ||
-            ((step.id === "sound" || step.id === "mix") &&
+            ((step.id === "sound" || step.id === "mix" || step.id === "stage") &&
               project.stems.length > 0);
           const active = step.id === activeStep;
           return (
@@ -2666,6 +2745,8 @@ export function ProjectPage() {
               onClick={() => {
                 if (step.id === "script") {
                   setActiveStep("script");
+                } else if (step.id === "voices") {
+                  setActiveStep("voices");
                 } else if (step.id === "stems") {
                   if (project.stems.length === 0) {
                     void buildStems();
@@ -2683,11 +2764,13 @@ export function ProjectPage() {
                   ? step.id === "stems" && project.stems.length === 0
                     ? "Build stems from the parsed script"
                     : undefined
-                  : step.id === "stems"
-                    ? "Parse a script with lines first"
-                    : step.id === "cut"
-                      ? "Render stems first"
-                      : "Next milestone"
+                  : step.id === "voices"
+                    ? "Parse a script with characters first"
+                    : step.id === "stems"
+                      ? "Parse a script with lines first"
+                      : step.id === "cut"
+                        ? "Render stems first"
+                        : "Next milestone"
               }
             >
               <span className="step-num">{String(index + 1).padStart(2, "0")}</span>
@@ -2876,9 +2959,24 @@ export function ProjectPage() {
             jobs={jobs}
             onDesign={designVoice}
             onUpload={(speaker, file) => void uploadVoice(speaker, file)}
+            onOpenVoices={(speaker) => {
+              setVoicesSpeaker(speaker);
+              setActiveStep("voices");
+            }}
           />
         </div>
         </div>
+      ) : activeStep === "voices" ? (
+        <VoicesBoard
+          project={project}
+          jobs={jobs}
+          speaker={voicesSpeaker}
+          onSpeaker={setVoicesSpeaker}
+          onGenerate={generateVoice}
+          onSaveReference={saveVoiceReference}
+          onDesign={designVoice}
+          onUpload={(speaker, file, name) => void uploadVoice(speaker, file, name)}
+        />
       ) : activeStep === "cut" ? (
         <MultiTrackEditor
           project={project}
@@ -2917,6 +3015,8 @@ export function ProjectPage() {
           onTrackJob={trackJob}
           onError={setError}
         />
+      ) : activeStep === "stage" ? (
+        <StageBoard project={project} onRefresh={() => void refreshProject()} />
       ) : (
         <MixBoard
           project={project}

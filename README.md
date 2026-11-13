@@ -2,7 +2,7 @@
 
 [![Drama Llama mascot](web/public/llogo.png)](web/public/llogo.png)
 
-Drama Llama is a local-first web app that turns a pasted script into a finished audio drama. You paste in your script, and the app splits it into scenes and dialogue lines, voices each character with a text-to-speech engine of your choice — local Breeze/Chatterbox clones, or Suno for TTS audio generation with no GPU needed — and aligns the generated speech to the text. You then fine-tune the timing on a multitrack timeline and let the app mix dialogue, sound effects and music into a loudness-normalised WAV or MP3 master. Apart from the optional hosted LLM and Suno, everything runs on your own machine.
+Drama Llama is a local-first web app that turns a pasted script into a finished audio drama. You paste in your script, and the app splits it into scenes and dialogue lines, voices each character with a text-to-speech engine of your choice — local Breeze/Chatterbox clones, or Suno for TTS audio generation with no GPU needed — and aligns the generated speech to the text. You then fine-tune the timing on a multitrack timeline, place your cast in a room on the Stage page, and let the app mix dialogue, sound effects and music into a loudness-normalised WAV or MP3 master — spatialised through a real room-acoustic model, and optionally as an Ambisonic master. Apart from the optional hosted LLM and Suno, everything runs on your own machine.
 
 ## How it works
 
@@ -16,7 +16,7 @@ The **Projects** page lists every drama on the machine and shows the engine stac
 
 [![Projects](docs/screenshots/01-projects.png)](docs/screenshots/01-projects.png)
 
-On the **Script** page you paste your script, choose whether to parse it deterministically or with the LLM, and inspect the detected cast.
+On the **Script** page you paste your script, choose whether to parse it deterministically or with the LLM, and inspect the detected cast. The **Voices** page is a separate workflow step for each character: design a voice from text, generate one from a speech sample (at least 6 s; long clips are cut automatically), preview references, edit transcripts and choose the default voice.
 
 [![Script](docs/screenshots/02-script.png)](docs/screenshots/02-script.png)
 
@@ -28,7 +28,9 @@ The **Cut** page is a shared multitrack timeline that shows every line at its sc
 
 [![Cut board](docs/screenshots/04-cutboard.png)](docs/screenshots/04-cutboard.png)
 
-The **Mix** page assembles the dialogue with ducked sound effects and offers the loudness-normalised master as a WAV or MP3 download.
+The **Stage** page places your cast in a shoebox room. Drag speakers around a top-down plan, aim the listener, pick a room preset, and the mix renders through a real image-source acoustic model into stereo or a third-order Ambisonic master.
+
+The **Mix** page assembles the dialogue with ducked sound effects and offers the loudness-normalised master as a WAV or MP3 download, plus the Ambisonic master when staging exports one.
 
 [![Mix](docs/screenshots/05-mix.png)](docs/screenshots/05-mix.png)
 
@@ -43,6 +45,8 @@ Rendering follows the pipeline described above: a Breeze reference voice is desi
 The German path uses Chatterbox Multilingual 0.5B through its local HTTP server, with per-character voice samples and exaggeration and cfg settings per take. It has been verified end to end with a 20.7-second stem, seven of seven line cuts and a 46.8-second test mix.
 
 Suno dialogue and music have been validated through a real BetterSuno extension connection with WAV download.
+
+Spatial staging renders a scene through SAF's shoebox image-source model and has been verified against physics: a click 3.43 m away arrives at 10.00 ms, a source straight ahead decodes exactly centred, side sources pan to their own side, and rotating the listener recentres them. A staged master measures differently in the left and right channels, which is the point. Order 3 with six moving sources renders at roughly 0.2 seconds of CPU per second of audio, so staging needs no GPU and a ten-minute play costs about two minutes of mix time.
 
 Native installers wrap all of this in a PySide6 wizard over a stdlib-only installer core that is shared with a headless CLI. The same core produces an AppImage on Linux and an Inno Setup installer on Windows, with a per-user layout, GPU auto-detection with `--cpu`/`--gpu` overrides, and opt-in Breeze English, Breeze German and Chatterbox using pinned wheels, models and Docker image digests. See [`INSTALL.md`](INSTALL.md).
 
@@ -150,13 +154,21 @@ Trim every line on one shared timeline that follows script order and mixer spaci
 
 Search `~/Sounds` (plus `data/sfx` and your uploads), preview the results and attach beds, one-shots or music to specific lines. Alternatively, generate a Suno music cue (see Suno bridge) and add the returned track as a cue.
 
-### 5. Mix
+### 5. Stage
 
-The mixer assembles the line clips, ducks the beds under speech, filters telephone lines and normalises the loudness to either podcast level (−16 LUFS) or broadcast level (−23 LUFS). You can then download the result as WAV or MP3.
+Optional. Place each scene's cast in a room: drag speakers on a top-down plan, set the listener's position and facing, and choose from room presets (living room, kitchen, corridor, car interior, concrete stairwell, outdoors). The renderer is a shoebox image-source model with per-wall absorption, so distance attenuation, early reflections and the direction a voice arrives from are all physical rather than faked.
+
+"Spread the cast" gives a scene a sensible first pass — the speakers who actually talk in it, evenly spaced on a shallow arc and turned towards the listener. "Audition scene" renders just that scene through the same code path the master uses. A speaker's **in room** slider blends them from fully spatialised towards dry and centred, which is what narration usually wants.
+
+Staging needs the native renderer, built with `python scripts/build_spatial.py` against a checkout of the [Spatial Audio Framework](https://github.com/LeoPM/Spatial_Audio_Framework) (ISC-licensed). Without it the Stage page says so and the mix stays exactly as it was. Because the room sim convolves from a fixed 32768-sample buffer, the renderable tail is at most 0.68 s — intimate rooms sound right, but a cathedral will not ring.
+
+### 6. Mix
+
+The mixer assembles the line clips, ducks the beds under speech, filters telephone lines and normalises the loudness to either podcast level (−16 LUFS) or broadcast level (−23 LUFS). You can then download the result as WAV or MP3. A staged project renders its dialogue at 48 kHz through the room model and reports a `spatial` master; enable **Ambisonic master** to also get `mix/master_ambisonic.wav` (ACN/SN3D, order 1 or 3) for 360° video or a DAW.
 
 ## Engines
 
-For English, Drama Llama uses Breeze TTS 2. You design a 6-11 second reference voice for each character, and the engine clones it for every scene stem. For German there is an optional Breeze-TTS-2.cpp sidecar that runs a community finetune called Articulatio-DE and supports both voice design and cloning. Its weights and outputs are for research and non-commercial use only.
+For English, Drama Llama uses Breeze TTS 2. You design a 6-11 second reference voice for each character, and the engine clones it for every scene stem. You can also upload a speech sample on the character card (at least 6 seconds; longer files are cut automatically to the best 6-11 second window): Drama Llama decodes it to 24 kHz mono, picks the best 6-11 second window, trims and normalises it, transcribes the final clip on the CPU, and stores it as a named reference voice. The transcript is editable, because Breeze needs it to match the audio word-for-word. Generated voices are selectable per stem in Render and can be set as the character default. For German there is an optional Breeze-TTS-2.cpp sidecar that runs a community finetune called Articulatio-DE and supports both voice design and cloning. Its weights and outputs are for research and non-commercial use only.
 
 Chatterbox Multilingual 0.5B covers both English and German. It clones a voice from an uploaded sample and falls back to its default voice when no sample is provided. Drama Llama expects the Chatterbox model server at `http://127.0.0.1:4123`. You can start it independently, and it keeps the model warm between requests. Drama Llama only sends text and an optional voice sample over HTTP.
 
@@ -177,9 +189,9 @@ The sidecar owns the GPU, and Drama Llama serialises GPU jobs, so stop the sidec
 
 ## Project layout
 
-The backend lives in `src/drama_studio/`, which contains the FastAPI app, the job queue, the worker, the parser, the engines and the mixer. The engine adapters for Breeze, Breeze-DE, Chatterbox, Suno and Fake are in its `engines/` subfolder, and the shared take-aware cut logic (freezing, remapping and validating cuts) is in `cuts.py`. The pinned Breeze stem renderer and Whisper aligner are vendored under `vendor/breeze_stems/`.
+The backend lives in `src/drama_studio/`, which contains the FastAPI app, the job queue, the worker, the parser, the engines and the mixer. The engine adapters for Breeze, Breeze-DE, Chatterbox, Suno and Fake are in its `engines/` subfolder, and the shared take-aware cut logic (freezing, remapping and validating cuts) is in `cuts.py`. Spatial staging is `spatial.py` plus the C shim and CMakeLists in `spatial/`. The pinned Breeze stem renderer and Whisper aligner are vendored under `vendor/breeze_stems/`.
 
-The Suno bridge in `suno-bridge/` is a small Node HTTP sidecar built on the installed `bettersuno-mcp` modules. The frontend in `web/` is written in React, Vite and TypeScript, and the Drama Llama mascot sits in `web/public/`. The tour screenshots are in `docs/screenshots/`. At runtime, each project's JSON, references, takes, line clips and mix are stored in `data/projects/<id>/`, and the job queue is an SQLite database in WAL mode at `data/jobs.sqlite3`. The `installer/` folder at the repository root holds the PySide6 wizard and the stdlib-only installer core, with its PyInstaller spec, Inno Setup script and AppImage builder under `installer/packaging/`; `scripts/build_installer.py` drives the build. The `tests/` folder holds 236 tests, none of which require a GPU.
+The Suno bridge in `suno-bridge/` is a small Node HTTP sidecar built on the installed `bettersuno-mcp` modules. The frontend in `web/` is written in React, Vite and TypeScript, and the Drama Llama mascot sits in `web/public/`. The tour screenshots are in `docs/screenshots/`. At runtime, each project's JSON, references, takes, line clips and mix are stored in `data/projects/<id>/`, and the job queue is an SQLite database in WAL mode at `data/jobs.sqlite3`. The `installer/` folder at the repository root holds the PySide6 wizard and the stdlib-only installer core, with its PyInstaller spec, Inno Setup script and AppImage builder under `installer/packaging/`; `scripts/build_installer.py` drives the build. The `tests/` folder holds 334 tests, none of which require a GPU. The spatial rendering tests self-skip when the native renderer has not been built.
 
 The Python package keeps its `drama_studio` import name. Only the product, the CLI and the UI were renamed.
 
@@ -230,6 +242,14 @@ Run the test suite and the frontend build with:
 cd web && npm run build
 ```
 
+The spatial tests that actually render self-skip when the native library is
+missing, so a checkout without a C toolchain still runs green. To exercise them,
+build the renderer first (`python scripts/build_spatial.py`, which needs `cmake`,
+a C compiler, OpenBLAS/LAPACKE headers and a Spatial Audio Framework checkout)
+and confirm with `python scripts/spike_spatial.py` — it asserts the direct-path
+arrival time, centring, side panning and listener rotation against physics.
+`python scripts/bench_spatial.py` reports render cost.
+
 Smoke tests against the real models are opt-in:
 
 ```
@@ -238,4 +258,6 @@ Smoke tests against the real models are opt-in:
 
 ## Known gaps
 
-Chatterbox voice samples are uploaded per character, but the app has no recorder or trimmer yet, so characters without a sample get the server's default voice. Suno still needs the BetterSuno extension, a live `suno.com` tab, and exclusive ownership of port 9423 (see Suno bridge). Cue timing is anchored to lines, so sound effects cannot yet be dragged on the Cut timeline. Finally, LLM parsing requires Ollama and is deliberately serialised against Breeze on GPU.
+Chatterbox voice samples are uploaded per character, but the app has no recorder or trimmer for that native clone path yet, so characters without a sample get the server's default voice. (Breeze reference clips do get automatic trim/normalise and transcription.) Suno still needs the BetterSuno extension, a live `suno.com` tab, and exclusive ownership of port 9423 (see Suno bridge). Cue timing is anchored to lines, so sound effects cannot yet be dragged on the Cut timeline. Finally, LLM parsing requires Ollama and is deliberately serialised against Breeze on GPU.
+
+Staging covers dialogue only: sound beds and one-shots are still mixed to the centre rather than placed in the room, so a staged scene has spatialised voices over a non-spatial bed. Staging is one static position per speaker per scene — the data model has motion paths, but the Stage UI cannot draw or edit keyframes yet. The room is a shoebox: no doorways, no L-shaped rooms, and no tail beyond about 0.68 s. There is no binaural master (it needs an HRIR set), no automatic staging from the stage directions, and no round-trip of a `.stage.json` with SPARTA's own 3D studio. The renderer is built by hand today; the installer does not yet ship prebuilt binaries for it.
