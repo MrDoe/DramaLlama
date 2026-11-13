@@ -16,6 +16,9 @@ on:
     paths:
       - "installer/**"
       - "scripts/build_installer.py"
+      - "scripts/build_spatial.py"
+      - "src/drama_studio/spatial/**"
+      - "MANIFEST.in"
       - "pyproject.toml"
       - ".github/workflows/installer.yml"
 
@@ -139,6 +142,70 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
 
+  spatial:
+    name: Native spatial renderer (Linux)
+    needs: test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          # CBLAS backend only. ubuntu-22.04 matches the AppImage job's glibc
+          # baseline so the asset also loads on older user distros.
+          sudo apt-get install -y cmake libopenblas-dev liblapacke-dev
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Check out the pinned Spatial_Audio_Framework
+        # SAF is ISC-licensed and lives outside this repository. The commit is
+        # pinned in installer/pins.json — never resolved to a moving branch.
+        # Only the framework and the ambi_roomsim example are compiled; nothing
+        # from SPARTA's GPLv3 plug-in tree is fetched or built.
+        run: |
+          set -euo pipefail
+          sha="$(python -c "import json;print(json.load(open('installer/pins.json'))['spatial']['saf_commit'])")"
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/leomccormack/Spatial_Audio_Framework third_party/Spatial_Audio_Framework
+          git -C third_party/Spatial_Audio_Framework fetch --depth 1 origin "$sha"
+          git -C third_party/Spatial_Audio_Framework checkout --quiet FETCH_HEAD
+          test -f third_party/Spatial_Audio_Framework/framework/include/saf.h
+      - name: Build the shim
+        run: |
+          python scripts/build_spatial.py \
+            --saf third_party/Spatial_Audio_Framework \
+            --output dist/spatial
+      - name: Verify the asset is loadable and physically correct
+        # The M0 spike asserts the direct-path arrival time, the decode pan
+        # law and the listener-rotation behaviour, so a published binary that
+        # merely loads but renders nonsense cannot reach a release.
+        env:
+          DRAMA_LLAMA_SPATIAL_LIB: ${{ github.workspace }}/build/spatial/libdrama_llama_spatial.so
+        run: |
+          python scripts/spike_spatial.py
+          python -m pytest tests/test_spatial.py -q
+      - name: Package the artifact
+        run: |
+          set -euo pipefail
+          saf="third_party/Spatial_Audio_Framework"
+          # ISC requires the licence to travel with the derived binary.
+          cp "$saf/LICENSE.md" dist/spatial/SAF-LICENSE.md
+          tar -C dist/spatial -czf dist/dramallama-spatial-linux-x86_64.tar.gz \
+            libdrama_llama_spatial.so SAF-LICENSE.md
+          sha256sum dist/dramallama-spatial-linux-x86_64.tar.gz > dist/dramallama-spatial-linux-x86_64.tar.gz.sha256
+          cat dist/dramallama-spatial-linux-x86_64.tar.gz.sha256
+          tar tzf dist/dramallama-spatial-linux-x86_64.tar.gz
+      - name: Upload spatial artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dramallama-spatial-linux
+          path: |
+            dist/dramallama-spatial-linux-x86_64.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
   windows:
     name: Windows installer
     needs: test
@@ -186,7 +253,7 @@ jobs:
   release:
     name: Attach artifacts to the release
     if: github.ref_type == 'tag'
-    needs: [linux, windows]
+    needs: [linux, windows, spatial]
     runs-on: ubuntu-latest
     permissions:
       contents: write

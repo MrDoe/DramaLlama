@@ -20,7 +20,7 @@ CLI alias are intentionally unchanged.
   Voices workflow step.
 - SFX index over `~/Sounds`, cue sheet, mixer with ducking/EQ/loudnorm.
 - React UI: projects, script/parse, stems, render, sound, mix.
-- 334 backend tests (spatial ones skip without the native renderer), web build green.
+- 344 backend tests (spatial ones skip without the native renderer), web build green.
 - English Breeze path validated on one real scene; German Chatterbox path
   validated end-to-end (20.7 s ANNA stem, 7/7 cuts). Suno music generation and
   WAV download validated through the BetterSuno bridge.
@@ -72,6 +72,14 @@ CLI alias are intentionally unchanged.
 - **Pin everything in `installer/pins.json`** — uv/Node versions, wheel
   channels, HF revisions, Breeze repo commit and Docker image digests. Never
   resolve `latest` at install time.
+- **The spatial renderer is published, never fetched from a moving tag.**
+  `.github/workflows/installer.yml`'s `spatial` job builds it from
+  `spatial.saf_commit` and attaches `dramallama-spatial-linux-x86_64.tar.gz`
+  (+ `.sha256`) to the release. `ensure_spatial` downloads an asset only when
+  `pins.json` has both `url` and `sha256` for the platform; an empty `assets`
+  map means "skip with a warning", never a failed install, because a mix
+  without staging is supported. Fill in the hash from `dist/*.sha256` after the
+  first release that carries the asset.
 - **A GUI launch failure returns exit code 2**; never fall through to a
   headless install, which would start multi-GB downloads without consent.
 - **Suno needs the BetterSuno extension** and a live `suno.com` tab. The

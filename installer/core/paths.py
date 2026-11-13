@@ -121,6 +121,11 @@ class InstallPaths:
         return self.prefix / "bin"
 
     @property
+    def lib(self) -> Path:
+        """Native libraries. `drama_studio.spatial` searches here."""
+        return self.prefix / "lib"
+
+    @property
     def cache(self) -> Path:
         return self.prefix / "cache"
 

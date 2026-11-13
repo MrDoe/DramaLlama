@@ -5,6 +5,11 @@ sourceRefs:
   - src/drama_studio/spatial.py
   - src/drama_studio/spatial/spatial_shim.c
   - src/drama_studio/spatial/CMakeLists.txt
+  - scripts/build_spatial.py
+  - .github/workflows/installer.yml
+  - installer/pins.json
+  - installer/core/runtimes.py
+  - MANIFEST.in
   - src/drama_studio/mixer.py
   - src/drama_studio/models.py
   - web/src/components/StageBoard.tsx
@@ -136,12 +141,26 @@ detects the cheap case so the default costs nothing.
 `scripts/build_spatial.py` configures `src/drama_studio/spatial` against a SAF
 checkout (auto-detected at `../SPARTA/SDKs/Spatial_Audio_Framework`, overridable
 with `--saf` or `DRAMA_LLAMA_SAF_DIR`). It adds only `framework/` and
-`examples/`, with `saf_example_list` narrowed to `ambi_roomsim`.
-`spatial.py` then probes `DRAMA_LLAMA_SPATIAL_LIB`, `build/spatial/`, an in-tree
-build, the venv's `lib/drama-llama/`, and the per-user installer prefix.
+`examples/`, with `saf_example_list` narrowed to `ambi_roomsim`. `--output DIR`
+stages the built library for CI. The directory has no `__init__.py` on purpose —
+a package of that name would shadow the `drama_studio.spatial` module beside it
+— so it is not Python package data; `MANIFEST.in` grafts it into the sdist
+instead, and the installer payload copies `src/` verbatim.
 
-Not yet done: prebuilt binaries in CI and `installer/pins.json`, so staging is a
-build-it-yourself feature. That is the main packaging gap.
+`spatial.py` probes `DRAMA_LLAMA_SPATIAL_LIB`, `build/spatial/`, an in-tree
+build, the venv's `lib/drama-llama/`, and `<prefix>/lib/` for every prefix rule
+the installer uses (`_install_prefixes()` mirrors
+`installer.core.paths.default_prefix`; the two agree by convention because the
+installer must not import the app).
+
+CI builds the library in the `spatial` job of
+`.github/workflows/installer.yml`, from the commit pinned as
+`spatial.saf_commit`, and publishes `dramallama-spatial-linux-x86_64.tar.gz`
+carrying the ISC `SAF-LICENSE.md`. `ensure_spatial()` installs it into
+`<prefix>/lib` and `dlopen()`s it as a gate — an asset that fails to load
+aborts the step rather than leaving a silently dry mixer. An empty
+`pins.json` `assets` map is a warning, not an error, because a mix without
+staging is supported. Windows and macOS have no asset yet.
 
 ## Verification
 

@@ -537,3 +537,31 @@ Practical notes for the next browser session: firefox-devtools is configured but
 mcp-lazy keeps it disconnected (`tools.mcp.load` first), it has no console tools,
 `saveTo` is sandboxed, `evaluate_script` has no `setTimeout`, and UIDs go stale
 after any re-render. Scratch project deleted afterwards; 8 projects remain.
+
+## [2026-11-13] ingest | Shipping the native room renderer
+
+Closed the packaging gap that kept staging build-it-yourself.
+
+`src/drama_studio/spatial/` cannot become a package: a directory named `spatial`
+would shadow the `drama_studio.spatial` module next to it, so setuptools never
+saw it and the shim sources reached neither the sdist nor the wheel — verified by
+building both and inspecting them. `MANIFEST.in` fixes the sdist; the installer
+payload already copies `src/` verbatim, and wheel users get a binary instead.
+
+`installer.yml` gained a `spatial` job: it checks out SAF at the commit pinned as
+`spatial.saf_commit`, builds, then gates the artifact on `spike_spatial.py` plus
+`tests/test_spatial.py` so a binary that loads but renders wrong physics cannot
+reach a release. It publishes a 476 KB tar with the ISC licence beside it, which
+the existing release job uploads unchanged. Linux x86-64 only: an MSVC + OpenBLAS
+build is real work, and a workflow that fails on every tag is worse than none.
+
+`ensure_spatial()` fetches that asset into `<prefix>/lib` and `dlopen()`s it,
+because a library that will not load is worse than no library — the mixer falls
+back silently and the user hears a dry mix they asked not to get. Empty
+`pins.json` assets mean "warn and skip", never a failed install. Discovery had a
+latent bug fixed on the way: the app searched only the Linux default prefix, so an
+installed renderer on Windows, macOS or a custom `DRAMA_LLAMA_PREFIX` would have
+been invisible; `_install_prefixes()` now mirrors every installer prefix rule.
+
+Deliberately not done: the SHA-256 stays empty until CI publishes the first real
+asset. Any hash written now would be invented.

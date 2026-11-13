@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import ssl
 import sys
 import tarfile
@@ -707,6 +708,123 @@ def test_build_steps_respects_selection_and_optionality() -> None:
     assert optional == {plan.BREEZE_EN, plan.BREEZE_DE, plan.CHATTERBOX}
     # Launchers and verification run last, after optional components.
     assert [step.id for step in full][-2:] == ["launchers", "verify"]
+
+
+# ------------------------------------------------------------------ spatial renderer
+
+
+def make_spatial_archive(path: Path, member: str, payload: bytes) -> None:
+    """A tar.gz holding one file, shaped like the CI artifact."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    info = tarfile.TarInfo(member)
+    info.size = len(payload)
+    with tarfile.open(path, "w:gz") as tar:
+        tar.addfile(info, io.BytesIO(payload))
+
+
+def spatial_pins(archive: Path) -> dict:
+    return {
+        "spatial": {
+            "abi": 1,
+            "assets": {
+                "linux-x86_64": {
+                    "url": "https://example.invalid/dramallama-spatial-linux.tar.gz",
+                    "sha256": sha256_file(archive),
+                    "size": archive.stat().st_size,
+                }
+            },
+        }
+    }
+
+
+def copy_over_url(_url: str, target: Path, archive: Path, **_kwargs: object) -> Path:
+    # Stands in for download(): the asset is not published yet, so the test
+    # serves the locally built archive instead.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(archive, target)
+    return target
+
+
+def test_spatial_step_is_planned_for_core() -> None:
+    # Staging is a core capability, not an engine, so it is not a component the
+    # wizard can decline; the step itself decides whether anything to install
+    # exists. It must run before verify so the report reflects it.
+    ids = [
+        step.id
+        for step in plan.build_steps(
+            Selection(components=frozenset({plan.CORE})), load_pins(), make_system()
+        )
+    ]
+    assert "spatial" in ids
+    assert ids.index("spatial") < ids.index("verify")
+    assert not any(step.id == "spatial" and step.optional for step in
+                   plan.build_steps(Selection(components=frozenset({plan.CORE})),
+                                    load_pins(), make_system()))
+
+
+def test_ensure_spatial_skips_when_nothing_is_published(tmp_path: Path) -> None:
+    from installer.core import runtimes
+
+    paths = InstallPaths(prefix=tmp_path / "prefix").ensure()
+    logs: list[str] = []
+
+    result = runtimes.ensure_spatial(
+        paths, load_pins(), make_system(), Progress(on_log=logs.append)
+    )
+
+    assert result is None
+    assert not (paths.lib / "libdrama_llama_spatial.so").exists()
+    assert any("no pinned spatial asset" in line for line in logs)
+
+
+def test_ensure_spatial_skips_on_a_platform_without_an_asset(tmp_path: Path) -> None:
+    from installer.core import runtimes
+
+    archive = tmp_path / "asset.tar.gz"
+    make_spatial_archive(archive, "libdrama_llama_spatial.so", b"x")
+    paths = InstallPaths(prefix=tmp_path / "prefix").ensure()
+    macos = make_system(os_name="darwin", platform_key="macos-arm64")
+
+    assert runtimes.ensure_spatial(paths, spatial_pins(archive), macos, Progress()) is None
+
+
+def test_ensure_spatial_installs_and_loads_the_asset(tmp_path: Path, monkeypatch) -> None:
+    from drama_studio import spatial
+    from installer.core import runtimes
+
+    library = spatial.library_path()
+    if library is None:  # self-skip, as in tests/test_spatial.py
+        pytest.skip("native spatial renderer not built")
+    archive = tmp_path / "asset.tar.gz"
+    make_spatial_archive(archive, "libdrama_llama_spatial.so", library.read_bytes())
+    paths = InstallPaths(prefix=tmp_path / "prefix").ensure()
+    monkeypatch.setattr(
+        runtimes, "download", lambda url, dest, **kw: copy_over_url(url, dest, archive)
+    )
+
+    installed = runtimes.ensure_spatial(
+        paths, spatial_pins(archive), make_system(), Progress()
+    )
+
+    assert installed == paths.lib / "libdrama_llama_spatial.so"
+    assert installed.is_file()
+    assert installed.stat().st_mode & 0o111, "must be executable for dlopen"
+
+
+def test_ensure_spatial_rejects_a_library_that_does_not_load(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from installer.core import runtimes
+
+    archive = tmp_path / "asset.tar.gz"
+    make_spatial_archive(archive, "libdrama_llama_spatial.so", b"not a shared object")
+    paths = InstallPaths(prefix=tmp_path / "prefix").ensure()
+    monkeypatch.setattr(
+        runtimes, "download", lambda url, dest, **kw: copy_over_url(url, dest, archive)
+    )
+
+    with pytest.raises(InstallerError, match="does not load"):
+        runtimes.ensure_spatial(paths, spatial_pins(archive), make_system(), Progress())
 
 
 def test_estimates_grow_with_components() -> None:

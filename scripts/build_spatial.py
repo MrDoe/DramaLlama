@@ -59,6 +59,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--saf", help="path to a Spatial_Audio_Framework checkout")
     parser.add_argument("--clean", action="store_true", help="discard the build directory first")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    parser.add_argument(
+        "--output",
+        help="copy the built library into this directory (CI artifact staging)",
+    )
     args = parser.parse_args(argv)
 
     if shutil.which("cmake") is None:
@@ -93,6 +97,14 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"SAF:     {saf}")
     print(f"library: {library.relative_to(ROOT)}")
+
+    if args.output:
+        # CI stages the artifact here before uploading it.
+        out = Path(args.output).expanduser().resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        staged = out / library.name
+        shutil.copy2(library, staged)
+        print(f"staged:  {staged}")
     return 0
 
 

@@ -58,6 +58,30 @@ class SpatialUnavailable(RuntimeError):
 # --------------------------------------------------------------- library load
 
 
+def _install_prefixes() -> list[Path]:
+    """Per-user install roots, mirroring ``installer.core.paths.default_prefix``.
+
+    Kept as a local copy on purpose: the installer core must not import torch
+    or the app, and the app must not import the installer, so the two agree by
+    convention. AGENTS.md treats these locations as fixed for that reason.
+    """
+    out: list[Path] = []
+    override = os.environ.get("DRAMA_LLAMA_PREFIX")
+    if override:
+        out.append(Path(override).expanduser())
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        base = Path(local) if local else Path.home() / "AppData" / "Local"
+        out.append(base / "DramaLlama")
+    elif sys.platform == "darwin":
+        out.append(Path.home() / "Library" / "Application Support" / "DramaLlama")
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME")
+        base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+        out.append(base / "drama-llama")
+    return out
+
+
 def _candidate_paths() -> list[Path]:
     """Places the shim library may live, most explicit first."""
     paths: list[Path] = []
@@ -79,8 +103,9 @@ def _candidate_paths() -> list[Path]:
     # Virtualenv install (the installer puts engines beside the package).
     for base in (Path(sys.prefix), Path(sys.base_prefix)):
         paths.extend(base / "lib" / "drama-llama" / name for name in _LIB_NAMES)
-    # Per-user installer prefix.
-    paths.extend(Path.home() / ".local" / "share" / "drama-llama" / "lib" / name for name in _LIB_NAMES)
+    # Installed by the installer: <prefix>/lib/, see installer.core.paths.
+    for prefix in _install_prefixes():
+        paths.extend(prefix / "lib" / name for name in _LIB_NAMES)
     return paths
 
 

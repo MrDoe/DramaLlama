@@ -33,7 +33,8 @@ COMPONENTS: dict[str, ComponentSpec] = {
         title="Drama Llama core",
         description=(
             "App and web UI, Python 3.12 + Node 22 runtimes, PyTorch, Whisper "
-            "large-v3 alignment, ffmpeg, the Suno bridge and the Breeze repo code."
+            "large-v3 alignment, ffmpeg, the Suno bridge, the Breeze repo code "
+            "and the native room renderer when one is published."
         ),
         required=True,
         licence="Drama Llama is provided as-is. Bundled third-party notices are in NOTICE.md.",
@@ -278,6 +279,13 @@ def build_steps(selection: Selection, pins: dict, system: SystemInfo) -> list[St
         )),
         Step("ffmpeg", "Prepare ffmpeg", CORE, 2, download_bytes=int(
             pins.get("install_sizes", {}).get("ffmpeg", 0)
+        )),
+        # Tolerant by design: skips with a warning when no asset is published
+        # yet, because a mix without staging is a supported configuration.
+        Step("spatial", "Install the spatial renderer", CORE, 1, download_bytes=int(
+            (pins.get("spatial", {}).get("assets") or {})
+            .get(system.platform_key, {})
+            .get("size", 0)
         )),
         Step("breeze-repo", "Install the Breeze repo code", CORE, 1, download_bytes=int(
             pins.get("install_sizes", {}).get("breeze_repo", 0)

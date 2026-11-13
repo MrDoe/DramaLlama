@@ -384,6 +384,11 @@ export function VoiceStudio({
     () => character?.references ?? [],
     [character?.references],
   );
+  // Legacy fallback: a character with `ref_file` that no reference list entry
+  // points at. Adoption in `normalize_references` only runs for the
+  // Breeze family, so a stray ref on a Chatterbox or Suno project still lands
+  // here rather than disappearing from the UI. Do not delete without making
+  // adoption engine-agnostic first.
   const legacyDefault =
     character?.ref_file &&
     !references.some((entry) => entry.file === character.ref_file)

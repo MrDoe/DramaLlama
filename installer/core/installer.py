@@ -31,7 +31,7 @@ from .plan import (
 )
 from .progress import Progress
 from .python_stack import install_stack
-from .runtimes import ensure_ffmpeg, ensure_runtimes
+from .runtimes import ensure_ffmpeg, ensure_runtimes, ensure_spatial
 from .state import (
     add_created_path,
     load_state,
@@ -181,6 +181,19 @@ def run_install(
                         add_created_path(state, snapshot)
                 elif step.id == "ffmpeg":
                     ensure_ffmpeg(paths, system, progress)
+                elif step.id == "spatial":
+                    installed = ensure_spatial(paths, pins, system, progress)
+                    if installed is not None:
+                        add_created_path(state, installed)
+                        state["spatial_lib"] = str(installed)
+                    else:
+                        warnings_by_step.append(
+                            "Native room staging is not installed yet: the "
+                            "Stage step and the Ambisonic master stay disabled. "
+                            "Re-run the installer once a spatial build is "
+                            "published, or compile it with "
+                            "scripts/build_spatial.py."
+                        )
                 elif step.id == "breeze-repo":
                     repo, created = install_breeze_repo(paths, pins, progress)
                     if created:

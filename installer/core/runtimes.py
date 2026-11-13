@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import shutil
 import stat
@@ -255,6 +256,87 @@ def ensure_ffmpeg(
         raise InstallerError("the bundled ffmpeg does not run")
     progress.update("ffmpeg", 1.0, f"ffmpeg ready ({human_bytes(paths.ffmpeg.stat().st_size)})")
     return paths.ffmpeg
+
+
+def ensure_spatial(
+    paths: InstallPaths,
+    pins: dict,
+    system: SystemInfo,
+    progress: Progress,
+) -> Path | None:
+    """Install the prebuilt native spatial renderer, if one is published.
+
+    Staging scenes needs a compiled SAF binary; most users will not build it
+    from source. The asset is pinned by commit and SHA-256 like everything
+    else, so a missing entry means "not published for this platform yet" and
+    the step is skipped with a warning — never a failure. A mix without staging
+    is a supported configuration, so this must not abort an install.
+    """
+    entry = pins.get("spatial") or {}
+    asset = (entry.get("assets") or {}).get(system.platform_key)
+    if not asset or not asset.get("url") or not asset.get("sha256"):
+        progress.update(
+            "spatial",
+            1.0,
+            "Spatial renderer not published for this platform; "
+            "room staging will be unavailable",
+        )
+        progress.log(
+            "no pinned spatial asset for "
+            f"{system.platform_key}; build it with scripts/build_spatial.py "
+            "or set DRAMA_LLAMA_SPATIAL_LIB to a compiled library"
+        )
+        return None
+
+    archive = paths.cache / "downloads" / Path(str(asset["url"])).name
+    download(
+        str(asset["url"]),
+        archive,
+        sha256=str(asset["sha256"]),
+        size=asset.get("size"),
+        label="spatial renderer",
+        progress=lambda item: progress.download("spatial", item),
+        cancel=progress.cancelled,
+    )
+    progress.update("spatial", 0.7, "Installing the spatial renderer…")
+    names = tuple(
+        "drama_llama_spatial.dll"
+        if is_windows(system.os_name)
+        else ("libdrama_llama_spatial.so", "libdrama_llama_spatial.dylib")
+    )
+    staging = temp_dir("drama-spatial-")
+    try:
+        extract_archive(archive, staging)
+        binary = find_file(staging, names)
+        if binary is None:
+            raise InstallerError("spatial archive did not contain the renderer library")
+        ensure_dir(paths.lib)
+        target = paths.lib / binary.name
+        shutil.copy2(binary, target)
+        if not is_windows(system.os_name):
+            target.chmod(0o755)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    # Load it for real: a library that dlopen()s badly is worse than none, and
+    # the app would silently fall back to a dry mix.
+    try:
+        library = ctypes.CDLL(str(target))
+        library.dl_abi_version.restype = ctypes.c_int
+        abi = library.dl_abi_version()
+    except OSError as exc:
+        raise InstallerError(
+            f"the spatial renderer was installed but does not load ({exc}); "
+            "the system BLAS/LAPACKE runtime libraries are probably missing"
+        ) from exc
+    if abi != 1:
+        raise InstallerError(
+            f"spatial renderer ABI is {abi}, this build expects 1"
+        )
+    progress.update(
+        "spatial", 1.0, f"Spatial renderer ready ({human_bytes(target.stat().st_size)})"
+    )
+    return target
 
 
 def uv_pip_install(

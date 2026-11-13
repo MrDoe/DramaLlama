@@ -1,0 +1,9 @@
+# The C shim and its build description are not Python package data:
+# `src/drama_studio/spatial/` deliberately has no __init__.py, because a
+# package directory of that name would shadow the `drama_studio.spatial`
+# module next to it. Without this file the sources reach neither the sdist nor
+# the wheel, so `pip install .` from a published archive could not build the
+# spatial renderer at all. The installer payload copies `src/` verbatim and is
+# unaffected; wheel users get a prebuilt binary from the installer instead.
+include scripts/build_spatial.py
+graft src/drama_studio/spatial

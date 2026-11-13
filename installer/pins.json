@@ -61,6 +61,13 @@
     "pip_package": "imageio-ffmpeg==0.7.0",
     "minimum_system_major": 5
   },
+  "spatial": {
+    "saf_repo": "leomccormack/Spatial_Audio_Framework",
+    "saf_commit": "18fd5aba46e20787b51f28f7197a68506c965c07",
+    "abi": 1,
+    "note": "Native room renderer (Ambisonic Stage step). Built by the Installers workflow, spatial job, from this exact SAF commit; assets are attached to the release. The installer downloads <asset>/libdrama_llama_spatial.* into <prefix>/lib and skips with a warning while 'assets' is empty for a platform. Fill in url/sha256/size from dist/*.sha256 after the first release that carries the asset; never resolve a moving tag.",
+    "assets": {}
+  },
   "whisper": {
     "repo": "Systran/faster-whisper-large-v3",
     "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
