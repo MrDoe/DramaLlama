@@ -224,8 +224,13 @@ export function StageBoard({ project, onRefresh }: Props) {
       return;
     }
     try {
-      const layout = await api.layoutScene(project.id, Number(sceneKey));
-      patchScene(sceneKey, () => layout);
+      // Send the room on screen: it may be a preset the user picked seconds ago
+      // and never saved, and the server cannot know about it. Keeping the room
+      // on the way back in is belt and braces for the same promise — spreading
+      // is a decision about people, not about architecture.
+      const room = scene?.room ?? stage.scenes[sceneKey]?.room;
+      const layout = await api.layoutScene(project.id, Number(sceneKey), room);
+      patchScene(sceneKey, () => ({ ...layout, room: room ?? layout.room }));
       setSelected(speakers[0]);
     } catch {
       setError("could not lay out this scene");

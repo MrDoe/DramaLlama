@@ -51,6 +51,7 @@ from .models import (
     RefVoice,
     Script,
     StageProject,
+    StageRoom,
     utcnow,
 )
 from .settings import preview_llm, resolve_llm, resolve_suno, write_llm, write_suno
@@ -187,6 +188,10 @@ class StageUpdate(BaseModel):
 
 class StageLayoutRequest(BaseModel):
     scene: int
+    # The room on screen, saved or not. The button re-places the cast inside
+    # whatever the user is looking at; omit it and the saved scene's room (or
+    # the project default) is used.
+    room: StageRoom | None = None
 
 
 class CueCreate(BaseModel):
@@ -1914,6 +1919,7 @@ def create_app(
             speakers,
             lines=scene.lines,
             timing=_speaker_windows(project, body.scene, speakers),
+            room=body.room,
         )
         return layout.model_dump(mode="json")
 

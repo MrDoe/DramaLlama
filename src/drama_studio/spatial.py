@@ -345,13 +345,17 @@ def plan_path(
     else:
         return None
 
+    # Same ceiling rule as `layout_scene`: a source cannot stand taller than the
+    # room it walks through, or the path fails validation on save.
+    mouth_z = min(1.5, max(0.5, room.dims_m[2] * 0.75))
+
     def key(time_s: float, point: tuple[float, float]):
         # 2-D points here; the standing height is the same for every source.
         return (
             round(time_s, 3),
             round(float(np.clip(point[0], 0.05, room.dims_m[0] - 0.05)), 2),
             round(float(np.clip(point[1], 0.05, room.dims_m[1] - 0.05)), 2),
-            1.5,
+            round(mouth_z, 2),
         )
 
     path = StagePath(speaker=speaker, keys=[key(t0, begin), key(t1, end)])
@@ -387,6 +391,7 @@ def layout_scene(
     *,
     lines: list[Any] | None = None,
     timing: dict[str, tuple[float, float]] | None = None,
+    room: StageRoom | None = None,
 ) -> SceneStage:
     """A first-pass staging for a scene: cast spread on an arc, facing inward.
 
@@ -399,10 +404,23 @@ def layout_scene(
     window in `timing` in which they actually speak. A mover's resting position
     is where the move ends, so the board shows the resolved spot, not the start.
     Without `lines` the layout is exactly the old geometric arc.
+
+    A scene that is already staged keeps its room: the button re-places the
+    cast, and resetting a 2 m corridor to the default library would edit the
+    architecture behind the user's back. `room` overrides even that — the UI
+    passes the room on screen, which may be an unsaved preset the user picked a
+    second ago and the server has never heard of.
     """
-    room = stage.default_room
-    width, depth = room.dims_m[0], room.dims_m[1]
-    listener = StageListener(position_m=(width / 2.0, depth * 0.82, 1.6), facing_deg=0.0)
+    existing = stage.scenes.get(str(scene_id))
+    room = room or (existing.room if existing is not None else None) or stage.default_room
+    width, depth, height = room.dims_m
+    # Ear and mouth height come from the room. 1.6 m is a standing adult in a
+    # living room; a 1.4 m car roof makes that illegal and the scene model
+    # rejects a listener outside its own walls, which used to surface as a 500
+    # from the layout endpoint every time someone staged the car preset.
+    ear_z = min(1.6, max(0.6, height * 0.8))
+    mouth_z = min(1.5, max(0.5, height * 0.75))
+    listener = StageListener(position_m=(width / 2.0, depth * 0.82, ear_z), facing_deg=0.0)
 
     chosen = speakers[:MAX_SOURCES]
     cues = speaker_cues(lines, chosen)
@@ -432,7 +450,7 @@ def layout_scene(
         actors.append(
             StageActor(
                 speaker=speaker,
-                position_m=(round(rest[0], 2), round(rest[1], 2), 1.5),
+                position_m=(round(rest[0], 2), round(rest[1], 2), round(mouth_z, 2)),
                 facing_deg=round(float(np.clip(facing, -180.0, 180.0)), 1),
             )
         )

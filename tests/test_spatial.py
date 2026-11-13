@@ -495,6 +495,64 @@ def _lines(*pairs: tuple[str, str]) -> list[Line]:
     ]
 
 
+def test_reshaping_a_staged_scene_keeps_the_room_the_user_picked():
+    """"Spread the cast" is about people, not architecture.
+
+    A scene already on the stage has a room the user chose — a corridor, a car.
+    Re-spreading after new alignments land must re-place the cast inside that
+    room, not reset the scene to the project default; silently turning a 2 m
+    corridor into a 6 m library changes the mix the user just approved.
+    """
+    corridor = StageRoom(dims_m=(2.0, 9.0, 2.4))
+    existing = SceneStage(
+        room=corridor,
+        listener=StageListener(position_m=(1.0, 8.0, 1.6)),
+        actors=[StageActor(speaker="MERIAN", position_m=(1.0, 4.0, 1.5))],
+    )
+    stage = StageProject(
+        scenes={"3": existing},
+        default_room=StageRoom(dims_m=(6.0, 5.0, 3.0)),
+    )
+    laid_out = spatial.layout_scene(
+        stage, 3, ["MERIAN"], lines=_lines(("MERIAN", "through the hatch")),
+        timing={"MERIAN": (7.6, 11.9)},
+    )
+    assert laid_out.room.dims_m == (2.0, 9.0, 2.4)
+    # And the geometry honours it: everything stays inside the narrow walls.
+    for actor in laid_out.actors:
+        assert actor.position_m[0] <= 2.0
+    for path in laid_out.paths:
+        for _t, x, y, _z in path.keys:
+            assert x <= 2.0 + 1e-6
+
+
+def test_layout_of_a_room_lower_than_a_standing_adult_is_still_valid():
+    """The car preset is 1.4 m. A 1.6 m listener does not fit in it.
+
+    The height was hard-coded, so staging the smallest preset raised a
+    ValidationError from the model's own "inside the room" check and the layout
+    endpoint answered 500 — the one preset that most needs a low source, because
+    everyone in a car is sitting down.
+    """
+    car = StageRoom(dims_m=(1.8, 3.4, 1.4), absorption=(0.75,) * 4 + (0.85, 0.6), reflections=1)
+    stage = spatial.layout_scene(
+        StageProject(default_room=car),
+        1,
+        ["VOGEL", "SANDT"],
+        lines=_lines(("VOGEL", "at the door"), ("SANDT", "uneasy")),
+        timing={"VOGEL": (0.0, 38.0)},
+    )
+    assert stage.listener.position_m[2] < car.dims_m[2]
+    for actor in stage.actors:
+        assert actor.position_m[2] < car.dims_m[2]
+    for path in stage.paths:
+        for key in path.keys:
+            assert key[3] < car.dims_m[2]
+    # A normal room still gets the normal ear height.
+    tall = spatial.layout_scene(StageProject(), 1, ["A"])
+    assert tall.listener.position_m[2] == pytest.approx(1.6)
+
+
 def test_layout_ignores_stage_directions_when_none_are_given():
     """The old geometric arc is still what a scriptless caller gets."""
     stage = spatial.layout_scene(StageProject(), 1, ["A", "B"])

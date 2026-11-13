@@ -14,6 +14,7 @@ import type {
   StageCapabilities,
   StageProject,
   StageResponse,
+  StageRoom,
   SunoLibraryClip,
   SunoPersona,
 } from "./types";
@@ -357,10 +358,10 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ stage }),
     }),
-  layoutScene: (projectId: string, scene: number) =>
+  layoutScene: (projectId: string, scene: number, room?: StageRoom) =>
     request<SceneStage>(`/projects/${projectId}/stage/layout`, {
       method: "POST",
-      body: JSON.stringify({ scene }),
+      body: JSON.stringify({ scene, room }),
     }),
   previewScene: (projectId: string, scene: number) =>
     request<Job>(`/projects/${projectId}/stage/preview`, {

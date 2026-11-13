@@ -264,6 +264,32 @@ def test_layout_of_unknown_scene_is_404(tmp_path):
     assert client.post(f"/api/projects/{project_id}/stage/layout", json={"scene": 77}).status_code == 404
 
 
+def test_layout_uses_the_room_from_the_request(tmp_path):
+    """The board sends the room on screen, which may never have been saved.
+
+    A preset picked a second ago exists only in the browser; planning the cast
+    inside the stale saved room would drop the speaker through a wall the user
+    can see.
+    """
+    _, client, _ = make_client(tmp_path)
+    project_id = make_project(client)
+    corridor = {"dims_m": [2.0, 9.0, 2.4], "absorption": [0.2] * 6, "reflections": 2}
+    layout = client.post(
+        f"/api/projects/{project_id}/stage/layout",
+        json={"scene": 1, "room": corridor},
+    ).json()
+    assert layout["room"]["dims_m"] == [2.0, 9.0, 2.4]
+    for actor in layout["actors"]:
+        assert actor["position_m"][0] <= 2.0
+        assert actor["position_m"][1] <= 9.0
+    # Without the field the behaviour is the old one: the scene is unstaged, so
+    # the project default room is what gets planned.
+    plain = client.post(
+        f"/api/projects/{project_id}/stage/layout", json={"scene": 1}
+    ).json()
+    assert plain["room"]["dims_m"] == [6.0, 5.0, 3.0]
+
+
 def test_preview_without_renderer_is_refused(tmp_path, monkeypatch):
     from drama_studio import spatial
 
