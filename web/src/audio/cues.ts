@@ -10,19 +10,30 @@ export type CueLane = "music" | "sfx";
 export interface CueSpan {
   cue: Cue;
   lane: CueLane;
-  /** Anchor-line slot start + cue.offset_s, before clipping to the timeline. */
+  /** Intended start — `position_s`, or the anchor slot + offset — before clipping. */
   anchor: number;
   /** Visible clip bounds on the global timeline. */
   start: number;
   end: number;
   /** Decoded source length (0 until the file is loaded or when it is missing). */
   sourceDuration: number;
-  /** Beds/music repeat their source up to the scene end. */
+  /** Beds/music repeat their source until their end. */
   loops: boolean;
+  /** True when the cue carries its own `position_s` instead of a line anchor. */
+  freeform: boolean;
+  /** True when it sits outside the dialogue-derived timeline entirely. */
+  offTimeline: boolean;
 }
 
 /** Placeholder width for a cue whose source has not decoded yet. */
 const UNKNOWN_SOURCE_S = 1.5;
+
+/**
+ * Width of the pinned stub an off-the-play cue is drawn as. Deliberately a few
+ * seconds rather than the placeholder 1.5: at a whole-play zoom that is under ten
+ * pixels, and a block you cannot click is a cue you cannot bring back.
+ */
+const OFF_PLAY_STUB_S = 3;
 
 export function cueLaneOf(kind: Cue["kind"]): CueLane {
   return kind === "music" ? "music" : "sfx";
@@ -31,11 +42,15 @@ export function cueLaneOf(kind: Cue["kind"]): CueLane {
 /**
  * Mirror `mixer.py::build_mix` cue placement.
  *
- * The anchor is the line's global slot start plus `offset_s`. A one-shot runs
- * for its source length. Beds and music run to the end of the anchored scene;
- * without `loop` they stop at the source length, and with `loop` the mixer
- * repeats the source. Everything is clipped to the dialogue-derived timeline,
- * exactly like `_place()` clips into the effects buffer.
+ * A cue with `position_s` is freeform: it starts there, a bed or score runs to
+ * `end_s` or the end of the timeline, and no scene has anything to say about it.
+ * A cue without one is anchored: the line's global slot start plus `offset_s`,
+ * and beds and music clipped to the end of the anchored scene. A one-shot runs
+ * for its source length either way.
+ *
+ * Spans are clamped to the timeline rather than dropped. A cue the user pushed
+ * past the end still has to show up, or they cannot drag it back — the mixer
+ * says it skipped such a cue, and the board should agree about the reason.
  */
 export function computeCueSpans(
   project: Project,
@@ -67,44 +82,66 @@ export function computeCueSpans(
 
   const spans: CueSpan[] = [];
   for (const cue of cues) {
-    const anchorBase =
-      lineStarts?.get(cue.anchor_line_id) ??
-      (() => {
-        let first: number | null = null;
-        for (const slot of slots.values()) {
-          if (slot.lineId !== cue.anchor_line_id) continue;
-          if (first == null || slot.start < first) first = slot.start;
-        }
-        return first ?? 0;
-      })();
-    const anchor = anchorBase + cue.offset_s;
     const sourceDuration = Math.max(0, sourceDurations[cue.sfx_id] ?? 0);
-    const unknown = sourceDuration <= 0;
-    const fallback = unknown ? UNKNOWN_SOURCE_S : sourceDuration;
-    let end = anchor + fallback;
+    const fallback = sourceDuration <= 0 ? UNKNOWN_SOURCE_S : sourceDuration;
+    const freeform = cue.position_s != null;
 
-    if (cue.kind !== "one_shot") {
-      const scene = sceneByLine.get(cue.anchor_line_id);
-      const sceneLimit = scene != null ? (sceneEnd.get(scene) ?? total) : total;
-      if (cue.loop) {
-        end = sceneLimit;
+    let start: number;
+    let end: number;
+    if (freeform) {
+      start = cue.position_s ?? 0;
+      if (cue.kind === "one_shot") {
+        end = start + fallback;
       } else {
-        // Non-loop cue: shorter of source and the rest of the scene.
-        end = anchor + Math.min(fallback, Math.max(0, sceneLimit - anchor));
+        // A score that owns its slot keeps it: no scene boundary clips it, and
+        // without an explicit end it underlines the rest of the play.
+        end = cue.end_s ?? total;
+      }
+    } else {
+      start =
+        (lineStarts?.get(cue.anchor_line_id ?? "") ??
+          (() => {
+            let first: number | null = null;
+            for (const slot of slots.values()) {
+              if (slot.lineId !== cue.anchor_line_id) continue;
+              if (first == null || slot.start < first) first = slot.start;
+            }
+            return first ?? 0;
+          })()) + cue.offset_s;
+      end = start + fallback;
+      if (cue.kind !== "one_shot") {
+        const scene = cue.anchor_line_id != null ? sceneByLine.get(cue.anchor_line_id) : undefined;
+        const sceneLimit = scene != null ? (sceneEnd.get(scene) ?? total) : total;
+        end = cue.loop
+          ? sceneLimit
+          : start + Math.min(fallback, Math.max(0, sceneLimit - start));
       }
     }
 
-    const start = Math.max(0, anchor);
-    end = Math.min(total, Math.max(start, end));
-    if (end - start <= 0.001) continue;
+    // Two ways a cue has nowhere to play, drawn differently because they are in
+    // different places: past the end of the play it is pinned to the right edge
+    // (its own slot would be off-canvas), while a cue squeezed out by its scene
+    // limit sits where the user put it, short. Either way it is drawn at a fixed
+    // stub width and marked, never hidden: a block you cannot see is a cue you
+    // cannot recover, and a full-width block implies it is playing when it is not.
+    const pastEnd = start > total - 0.05 || end <= 0;
+    const noRoom = end - start <= 0.001;
+    const offTimeline = pastEnd || noRoom;
+    let drawn = Math.max(0, start);
+    if (pastEnd) drawn = Math.max(0, total - OFF_PLAY_STUB_S);
+    const width = offTimeline ? OFF_PLAY_STUB_S : end - start;
+    const clippedEnd = Math.min(total, drawn + width);
+    if (clippedEnd - drawn <= 0.001) continue;
     spans.push({
       cue,
       lane: cueLaneOf(cue.kind),
-      anchor,
-      start,
-      end,
+      anchor: start,
+      start: drawn,
+      end: clippedEnd,
       sourceDuration,
       loops: cue.kind !== "one_shot" && cue.loop,
+      freeform,
+      offTimeline,
     });
   }
 

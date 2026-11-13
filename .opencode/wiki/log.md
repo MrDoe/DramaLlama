@@ -720,3 +720,29 @@ points at the concurrency page rather than leaving that page one link deep. Two
 pages were re-read and left unchanged (`cut-region-effects`, `cut-cues-lanes`) —
 their `position_s` claims are consistent with the new contract, so the freshness
 bump records a check rather than an edit.
+
+## [2026-11-13] update | Music and beds moved onto the timeline
+`concepts/cut-cues-lanes` gained a placement section. Reported as "music is not
+movable in cut editor", and the cause was worse than the symptom.
+
+A cue's anchor line decided two things: where it starts and how long it may run.
+For a footstep both are right. For a score, clipping the bed to the scene its
+anchor line happens to live in means a theme cannot score more than one scene —
+and dragging it out of that scene made `build_mix` measure a non-positive length
+and skip it. The mix job reported `succeeded` with `warnings: []`, so the cue
+disappeared between one reload and the next, and the board had already dropped
+the span, so there was nothing left to grab.
+
+`Cue` now carries `position_s` / `end_s` and `anchor_line_id` is optional; the
+mixer branches on `position_s` and reports `cue X is not in the mix: it starts at
+101.3s, past the end of the scene it is anchored to (23.2s)` instead of staying
+quiet. Dragging splits by kind: music and beds write `position_s` and drop the
+anchor, one-shots keep dragging by `offset_s` so they follow their line. The Sound
+step and the board's insert bar create new music cues freeform at the playhead.
+A cue that cannot play is drawn as a dashed 3-second stub, pinned to the right
+edge when it is past the end of the play — invisible was the bug, so the board
+keeps it grabbable and marks it.
+
+Verified live on `strata-second-pass-12ea69`: the cue stranded at offset 101.26
+came back as `position_s 53.52`, the mix placed 3 of 3 with no warnings, and an
+anchored cue still shows its offset field.

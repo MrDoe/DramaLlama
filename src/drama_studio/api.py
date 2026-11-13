@@ -198,8 +198,10 @@ class CueCreate(BaseModel):
     kind: str = "one_shot"
     sfx_id: str
     name: str
-    anchor_line_id: str
+    anchor_line_id: str | None = None
     offset_s: float = 0.0
+    position_s: float | None = None
+    end_s: float | None = None
     gain_db: float = -12.0
     fade_in_s: float = 0.0
     fade_out_s: float = 0.0
@@ -209,13 +211,19 @@ class CueCreate(BaseModel):
 
 
 class CueUpdate(BaseModel):
-    """Partial cue edit; unset fields keep their stored value."""
+    """Partial cue edit; unset fields keep their stored value.
+
+    `anchor_line_id: null` detaches a cue from its line; `position_s: null` puts
+    it back under script order.
+    """
 
     kind: Literal["bed", "one_shot", "music"] | None = None
     sfx_id: str | None = None
     name: str | None = None
     anchor_line_id: str | None = None
     offset_s: float | None = None
+    position_s: float | None = None
+    end_s: float | None = None
     gain_db: float | None = None
     fade_in_s: float | None = None
     fade_out_s: float | None = None
@@ -1465,7 +1473,7 @@ def create_app(
                     status_code=400,
                     detail=(
                         f"the clip is {duration / 60:.1f} minutes; the automatic "
-                        "cutter accepts at most 10 minutes"
+                        "cutter accepts at most 2 minutes"
                     ),
                 )
 
@@ -1996,8 +2004,15 @@ def create_app(
     def create_cue(project_id: str, body: CueCreate) -> dict[str, Any]:
         project = project_or_404(project_id)
         line_ids = {line.id for line in project.script.iter_lines()}
-        if body.anchor_line_id not in line_ids:
+        if body.anchor_line_id is not None and body.anchor_line_id not in line_ids:
             raise HTTPException(status_code=400, detail="anchor line not found")
+        if body.anchor_line_id is None and body.position_s is None:
+            # Nothing says where it goes: the mixer would read line None as t=0
+            # and the user would see a cue at the top they never put there.
+            raise HTTPException(
+                status_code=400,
+                detail="a cue needs an anchor line or a timeline position",
+            )
         if sfx.get(body.sfx_id) is None:
             raise HTTPException(status_code=404, detail="sfx not found")
         try:
@@ -2008,6 +2023,8 @@ def create_app(
                 name=body.name,
                 anchor_line_id=body.anchor_line_id,
                 offset_s=body.offset_s,
+                position_s=body.position_s,
+                end_s=body.end_s,
                 gain_db=body.gain_db,
                 fade_in_s=body.fade_in_s,
                 fade_out_s=body.fade_out_s,
@@ -2032,7 +2049,7 @@ def create_app(
         if cue is None:
             raise HTTPException(status_code=404, detail="cue not found")
         updates = body.model_dump(exclude_unset=True)
-        if "anchor_line_id" in updates:
+        if updates.get("anchor_line_id") is not None:
             line_ids = {line.id for line in project.script.iter_lines()}
             if updates["anchor_line_id"] not in line_ids:
                 raise HTTPException(status_code=400, detail="anchor line not found")

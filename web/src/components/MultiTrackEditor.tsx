@@ -112,6 +112,14 @@ interface CueDragState {
   grabGlobal: number;
   /** Cue offset before the drag. */
   origOffset: number;
+  /** Intended start before the drag, for moving a freeform cue. */
+  origStart: number;
+  /** Explicit end before the drag, if the cue had one. */
+  origEnd: number | null;
+  /** Move `position_s` (a cue on the timeline) instead of `offset_s` (a cue on a line). */
+  byPosition: boolean;
+  /** Distance from the block's start to where it was grabbed, so it does not jump. */
+  grabOffset: number;
 }
 
 export function MultiTrackEditor({
@@ -454,12 +462,17 @@ export function MultiTrackEditor({
     if (!anchor) return;
     setInserting(true);
     try {
+      // Music goes in at the playhead as a timeline cue: it belongs to the piece,
+      // not to whichever word happens to be under the cursor. Effects stay
+      // anchored so they keep following the dialogue when it moves.
+      const freeform = insertKind === "music";
       await api.addCue(project.id, {
         kind: insertKind,
         sfx_id: item.id,
         name: item.name,
-        anchor_line_id: anchor,
-        offset_s: round2(Math.max(0, t - anchorStart)),
+        anchor_line_id: freeform ? null : anchor,
+        position_s: freeform ? round2(Math.max(0, t)) : undefined,
+        offset_s: freeform ? undefined : round2(Math.max(0, t - anchorStart)),
         gain_db: insertKind === "music" ? -18 : -12,
         loop: insertKind !== "one_shot",
         duck: true,
@@ -894,7 +907,8 @@ export function MultiTrackEditor({
       }
 
       if ("cueLane" in kind) {
-        // Cue lanes: anchored clips, dragged horizontally to change offset.
+        // Cue lanes: music and beds move on the timeline, one-shots move around
+        // the line they are anchored to.
         const laneSpans = cueSpans.filter((item) => item.lane === kind.cueLane);
         const mid = h / 2;
         if (laneSpans.length === 0) {
@@ -922,6 +936,17 @@ export function MultiTrackEditor({
               ? "rgba(168, 85, 247, 0.24)"
               : "rgba(34, 211, 238, 0.16)";
           ctx.fillRect(x0, 0, wpx, h);
+          if (item.offTimeline) {
+            // Outside the play, pinned here so it can be dragged back. Marked,
+            // because a silent block that looks like a cue is a lie: the mixer
+            // says so in its warnings and the board should agree in public.
+            ctx.save();
+            ctx.setLineDash([4, 3]);
+            ctx.strokeStyle = "rgba(248, 113, 113, 0.95)";
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x0 + 0.75, 0.75, Math.max(2, wpx - 1.5), h - 1.5);
+            ctx.restore();
+          }
 
           if (info && info.peaks.length > 0 && item.sourceDuration > 0) {
             ctx.save();
@@ -1345,10 +1370,22 @@ export function MultiTrackEditor({
       setSelection(null);
       selectionRef.current = null;
       pushHistory();
+      // Beds and music are not events that happen *at* a word, so dragging one
+      // puts it on the timeline: the move writes `position_s` and drops the line
+      // anchor. One-shots keep dragging by offset, because a footstep should
+      // still follow its line when the dialogue reflows.
+      const byPosition = item.freeform || item.cue.kind !== "one_shot";
       cueDragRef.current = {
         cueId: item.cue.id,
         grabGlobal: globalT,
         origOffset: item.cue.offset_s,
+        // An off-timeline cue is drawn pinned to the edge; grab it from there,
+        // so dragging left pulls it back into the play instead of throwing it
+        // further out by its real (invisible) offset.
+        origStart: item.offTimeline ? item.start : item.anchor,
+        origEnd: item.cue.end_s ?? null,
+        byPosition,
+        grabOffset: Math.max(0, globalT - item.start),
       };
       canvas.style.cursor = "grabbing";
       return;
@@ -1363,10 +1400,23 @@ export function MultiTrackEditor({
     const drag = cueDragRef.current;
     if (drag) {
       const delta = toGlobal(canvas, e.clientX) - drag.grabGlobal;
-      const raw = drag.origOffset + delta;
-      // Shift snaps to quarter-seconds for musical placement.
-      const next = e.shiftKey ? Math.round(raw * 4) / 4 : round2(raw);
-      updateCueLocal(drag.cueId, { offset_s: next });
+      if (drag.byPosition) {
+        const raw = drag.origStart + delta;
+        // Shift snaps to quarter-seconds for musical placement.
+        const next = e.shiftKey ? Math.round(raw * 4) / 4 : round2(raw);
+        const patch: Partial<Omit<Cue, "id">> = {
+          position_s: Math.max(0, next),
+          anchor_line_id: null,
+        };
+        // A cue with a stated end keeps its length; one without runs to the end
+        // of the play wherever it is put, which is what a bed is for.
+        if (drag.origEnd != null) patch.end_s = Math.max(0.05, round2(drag.origEnd + delta));
+        updateCueLocal(drag.cueId, patch);
+      } else {
+        const raw = drag.origOffset + delta;
+        const next = e.shiftKey ? Math.round(raw * 4) / 4 : round2(raw);
+        updateCueLocal(drag.cueId, { offset_s: next });
+      }
       canvas.style.cursor = "grabbing";
       return;
     }
@@ -3149,10 +3199,21 @@ export function MultiTrackEditor({
               <label>
                 <span>anchor</span>
                 <select
-                  value={selCue.anchor_line_id}
-                  onChange={(e) => updateCueLocal(selCue.id, { anchor_line_id: e.target.value })}
-                  title="Which script line this cue is anchored to"
+                  value={selCue.anchor_line_id ?? ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    // Picking the timeline detaches the cue; picking a line puts
+                    // it back under script order.
+                    updateCueLocal(
+                      selCue.id,
+                      value === ""
+                        ? { anchor_line_id: null, position_s: round2(selCueSpan?.anchor ?? 0) }
+                        : { anchor_line_id: value, position_s: null, end_s: null },
+                    );
+                  }}
+                  title="A line anchor ties the cue to that line's slot; 'on the timeline' lets it sit anywhere"
                 >
+                  <option value="">on the timeline</option>
                   {allLines.map((line) => (
                     <option key={line.id} value={line.id}>
                       {line.id} · {line.speaker}
@@ -3160,18 +3221,56 @@ export function MultiTrackEditor({
                   ))}
                 </select>
               </label>
-              <label>
-                <span>offset</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={Number(selCue.offset_s.toFixed(2))}
-                  onChange={(e) =>
-                    updateCueLocal(selCue.id, { offset_s: Number(e.target.value) || 0 })
-                  }
-                  title="Seconds after the anchor line starts (drag the clip or edit here)"
-                />
-              </label>
+              {selCue.position_s != null ? (
+                <>
+                  <label>
+                    <span>start</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={Number((selCue.position_s ?? 0).toFixed(2))}
+                      onChange={(e) =>
+                        updateCueLocal(selCue.id, {
+                          position_s: Math.max(0, Number(e.target.value) || 0),
+                        })
+                      }
+                      title="Global timeline position in seconds (drag the clip or edit here)"
+                    />
+                  </label>
+                  {selCue.kind !== "one_shot" ? (
+                    <label>
+                      <span>end</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="auto"
+                        value={selCue.end_s == null ? "" : Number(selCue.end_s.toFixed(2))}
+                        onChange={(e) =>
+                          updateCueLocal(selCue.id, {
+                            end_s: e.target.value === "" ? null : Math.max(0.05, Number(e.target.value) || 0),
+                          })
+                        }
+                        title="Leave empty to run to the end of the play"
+                      />
+                    </label>
+                  ) : null}
+                </>
+              ) : (
+                <label>
+                  <span>offset</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={Number(selCue.offset_s.toFixed(2))}
+                    onChange={(e) =>
+                      updateCueLocal(selCue.id, { offset_s: Number(e.target.value) || 0 })
+                    }
+                    title="Seconds after the anchor line starts (drag the clip or edit here)"
+                  />
+                </label>
+              )}
               <label>
                 <span>gain</span>
                 <input
@@ -3193,7 +3292,7 @@ export function MultiTrackEditor({
                   onChange={(e) =>
                     updateCueLocal(selCue.id, { kind: e.target.value as Cue["kind"] })
                   }
-                  title="bed/music run to the scene end, one-shots play once"
+                  title="beds and music run until their end, one-shots play once"
                 >
                   <option value="one_shot">one-shot</option>
                   <option value="bed">bed</option>
@@ -3275,8 +3374,9 @@ export function MultiTrackEditor({
             Click a clip to select it (↑/↓ cycles clips), drag its body to move
             it, edges to trim, Alt/Ctrl-drag to slip, double-click to edit. With
             no clip selected, drag on the timeline for a free range — Ctrl+E
-            deletes it and ripples the rest left. Click a music/SFX clip to edit
-            its anchor, offset and gain; click empty space to seek.
+            deletes it and ripples the rest left. Drag a music or bed clip to
+            place it anywhere on the timeline; drag a one-shot to nudge it around
+            its line. Click empty space to seek.
           </p>
         )}
       </div>

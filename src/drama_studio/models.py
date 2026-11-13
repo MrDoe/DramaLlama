@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Language = Literal["en", "de"]
 EngineName = Literal["breeze", "breeze-de", "chatterbox", "fake", "suno"]
@@ -127,14 +127,35 @@ class Cue(BaseModel):
     kind: Literal["bed", "one_shot", "music"] = "one_shot"
     sfx_id: str
     name: str
-    anchor_line_id: str
+    # Line the cue is measured from, when it is measured from a line at all.
+    # None means the cue lives on the timeline by itself (see `position_s`).
+    anchor_line_id: str | None = None
     offset_s: float = 0.0
+    # Global timeline start, the same contract as `AlignedLine.position_s`:
+    # None = derive from `anchor_line_id` + `offset_s`, a number = place here.
+    # A score is not an event that happens *at* a word; clipping a bed to the
+    # scene its anchor line belongs to means it cannot score the whole play, and
+    # dragging it out of that scene used to drop it from the mix without warning.
+    position_s: float | None = None
+    # Global timeline end for beds and music. None = run to the end of the
+    # timeline when freeform, or of the anchored scene when anchored.
+    end_s: float | None = None
     gain_db: float = -12.0
     fade_in_s: float = 0.0
     fade_out_s: float = 0.0
     loop: bool = False
     duck: bool = True
     filter: Literal["none", "telephone", "radio"] = "none"
+
+    @model_validator(mode="after")
+    def _freeform_range_is_coherent(self):
+        if (
+            self.position_s is not None
+            and self.end_s is not None
+            and self.end_s <= self.position_s
+        ):
+            raise ValueError("cue end must be after its start")
+        return self
 
 
 class StageRoom(BaseModel):

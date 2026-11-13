@@ -245,3 +245,104 @@ def test_the_self_heal_does_not_rescan_on_every_miss(tmp_path):
     created = worker_view.find_by_path(root / "suno-two.wav")
     api_view._healed_at = time.monotonic()  # healed a moment ago
     assert api_view.get(created.id) is None
+
+
+def test_music_cue_can_live_on_the_timeline_without_a_line(tmp_path):
+    """A score is not an event at a word.
+
+    Music used to require `anchor_line_id`, which also decided the scene it was
+    clipped to — so it could not score more than one scene, and dragging it out
+    of that one dropped it from the mix.
+    """
+    _, client, _ = make_client(tmp_path)
+    project = client.post(
+        "/api/projects", json={"title": "Test", "language": "en", "script_text": SCRIPT}
+    ).json()
+    sfx_item = client.get("/api/sfx").json()[0]
+
+    created = client.post(
+        f"/api/projects/{project['id']}/cues",
+        json={
+            "kind": "music",
+            "sfx_id": sfx_item["id"],
+            "name": "Score",
+            "anchor_line_id": None,
+            "position_s": 12.5,
+            "end_s": 40.0,
+            "loop": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    cue = created.json()["cues"][0]
+    assert cue["anchor_line_id"] is None
+    assert cue["position_s"] == 12.5
+    assert cue["end_s"] == 40.0
+
+
+def test_cue_needs_either_an_anchor_or_a_position(tmp_path):
+    """No anchor and no position is not "at zero", it is a mistake."""
+    _, client, _ = make_client(tmp_path)
+    project = client.post(
+        "/api/projects", json={"title": "Test", "language": "en", "script_text": SCRIPT}
+    ).json()
+    sfx_item = client.get("/api/sfx").json()[0]
+    refused = client.post(
+        f"/api/projects/{project['id']}/cues",
+        json={"kind": "music", "sfx_id": sfx_item["id"], "name": "Nowhere"},
+    )
+    assert refused.status_code == 400
+    assert "position" in refused.json()["detail"]
+
+
+def test_cue_can_be_detached_and_reanchored(tmp_path):
+    _, client, _ = make_client(tmp_path)
+    project = client.post(
+        "/api/projects", json={"title": "Test", "language": "en", "script_text": SCRIPT}
+    ).json()
+    lines = project["script"]["scenes"][0]["lines"]
+    sfx_item = client.get("/api/sfx").json()[0]
+    cue_id = client.post(
+        f"/api/projects/{project['id']}/cues",
+        json={
+            "kind": "one_shot",
+            "sfx_id": sfx_item["id"],
+            "name": "Door",
+            "anchor_line_id": lines[1]["id"],
+        },
+    ).json()["cues"][0]["id"]
+
+    detached = client.patch(
+        f"/api/projects/{project['id']}/cues/{cue_id}",
+        json={"anchor_line_id": None, "position_s": 3.25},
+    ).json()["cues"][0]
+    assert detached["anchor_line_id"] is None
+    assert detached["position_s"] == 3.25
+
+    reanchored = client.patch(
+        f"/api/projects/{project['id']}/cues/{cue_id}",
+        json={"anchor_line_id": lines[0]["id"], "position_s": None, "end_s": None},
+    ).json()["cues"][0]
+    assert reanchored["anchor_line_id"] == lines[0]["id"]
+    assert reanchored["position_s"] is None
+
+
+def test_cue_end_before_its_start_is_refused(tmp_path):
+    _, client, _ = make_client(tmp_path)
+    project = client.post(
+        "/api/projects", json={"title": "Test", "language": "en", "script_text": SCRIPT}
+    ).json()
+    sfx_item = client.get("/api/sfx").json()[0]
+    cue_id = client.post(
+        f"/api/projects/{project['id']}/cues",
+        json={
+            "kind": "music",
+            "sfx_id": sfx_item["id"],
+            "name": "Score",
+            "anchor_line_id": None,
+            "position_s": 5.0,
+        },
+    ).json()["cues"][0]["id"]
+    bad = client.patch(
+        f"/api/projects/{project['id']}/cues/{cue_id}", json={"end_s": 4.0}
+    )
+    assert bad.status_code == 400

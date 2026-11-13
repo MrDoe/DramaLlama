@@ -478,19 +478,39 @@ def build_mix(
             warnings.append(f"could not decode {cue.name}: {exc}")
             continue
 
-        anchor = line_starts.get(cue.anchor_line_id, 0.0) + cue.offset_s
-        if cue.kind == "one_shot":
-            needed = len(source)
+        if cue.position_s is not None:
+            # Freeform: the cue's own slot, bounded by its own end or the
+            # timeline. No scene is involved, so a score can span the play and a
+            # bed dragged to the last scene stays where it was put.
+            anchor = float(cue.position_s)
+            limit = total_s if cue.end_s is None else min(total_s, float(cue.end_s))
         else:
-            end = scene_end.get(
+            anchor = line_starts.get(cue.anchor_line_id, 0.0) + cue.offset_s
+            limit = scene_end.get(
                 next(
                     (line.scene for line in lines if line.id == cue.anchor_line_id),
                     project.script.scenes[-1].id if project.script.scenes else 0,
                 ),
                 total_s,
             )
-            needed = max(0, int((min(total_s, end) - anchor) * sr))
-        if needed <= 0:
+        if cue.kind == "one_shot":
+            needed = len(source)
+        else:
+            needed = max(0, int((limit - anchor) * sr))
+        if needed <= 0 or anchor >= total_s:
+            # Say so, and say why: a cue that cannot be heard is a mistake the
+            # user made, and this used to report a successful mix. The two cases
+            # read differently — past the end of the play, versus past the end of
+            # the range the cue is allowed to occupy (its scene, when anchored).
+            if anchor >= total_s:
+                reason = f"it starts at {anchor:.1f}s, after the end of the mix ({total_s:.1f}s)"
+            else:
+                reason = (
+                    f"it starts at {anchor:.1f}s, past the end of the "
+                    f"{'scene it is anchored to' if cue.position_s is None else 'range it was given'}"
+                    f" ({limit:.1f}s)"
+                )
+            warnings.append(f"cue {cue.name} is not in the mix: {reason}")
             continue
         if cue.kind != "one_shot":
             if cue.loop:

@@ -47,6 +47,39 @@ scene gaps, writing `position_s`. `POST …/alignments/align-script` exposes
 it; mixer falls back to it when `position_s` is `None`. LMB body-drag moves a
 selected section (`position_s`); edge drag trims; `Alt`+drag slips the window.
 
+## Music and beds live on the timeline
+
+A cue has two placement modes, and which one it is in is visible in the
+inspector:
+
+| | set | start | extent |
+|---|---|---|---|
+| **freeform** | `position_s` | that number | `end_s`, or the end of the play |
+| **anchored** | `anchor_line_id` | the line's slot + `offset_s` | clipped to the anchor's scene |
+
+`Cue.anchor_line_id` is optional and `position_s: null` / `anchor_line_id: null`
+switch between the two, so a cue can be detached and re-anchored.
+
+Anchoring is right for a footstep: it happens *at* a word and should follow that
+word when the dialogue reflows. It is wrong for a score. Clipping music to the
+scene its anchor line belongs to meant a theme could not score more than one
+scene, and dragging it out of that scene made the mixer measure a non-positive
+length and skip it — reported as a successful mix with no warning. The Cut board
+dropped the span too, so the clip simply vanished on the next reload. That is the
+bug behind "music is not movable".
+
+Dragging now splits by kind: **music and beds write `position_s` and drop their
+anchor**, so a drag places them anywhere and they run to the end; **one-shots keep
+dragging by `offset_s`** so they stay glued to their line. The Sound step and the
+board's insert bar create new music cues freeform at the playhead, never anchored.
+
+A cue that cannot play is drawn as a 3-second dashed stub — pinned to the right
+edge if it is past the end of the play, otherwise at its own start — so it stays
+possible to drag back, and the mix says `cue X is not in the mix: it starts at
+101.3s, past
+the end of the scene it is anchored to (23.2s)`. A silent, invisible cue is the
+failure mode; both now speak up.
+
 ## Playback
 
 `SyncEngine` gained per-clip `gain` (linear amplitude from `gain_db`) and

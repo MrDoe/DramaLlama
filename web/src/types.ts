@@ -140,8 +140,13 @@ export interface Cue {
   kind: "bed" | "one_shot" | "music";
   sfx_id: string;
   name: string;
-  anchor_line_id: string;
+  /** Line the cue is measured from, or null when it lives on the timeline. */
+  anchor_line_id: string | null;
   offset_s: number;
+  /** Global start; null = derive from anchor + offset (script order). */
+  position_s?: number | null;
+  /** Global end for beds and music; null = run to the timeline end. */
+  end_s?: number | null;
   gain_db: number;
   fade_in_s: number;
   fade_out_s: number;

@@ -1513,7 +1513,12 @@ function SoundBoard({
   }
 
   async function addCue(item: SfxItem) {
-    if (!anchorLineId) {
+    // Music is not an event that happens at a word: a new music cue lands at the
+    // top of the timeline and runs to the end, where the Cut board can drag it
+    // anywhere. One-shots and beds keep the line anchor, so they still follow
+    // the dialogue when it reflows.
+    const freeform = kind === "music";
+    if (!freeform && !anchorLineId) {
       onError("Choose a line to anchor the cue to.");
       return;
     }
@@ -1522,9 +1527,10 @@ function SoundBoard({
         kind,
         sfx_id: item.id,
         name: item.name,
-        anchor_line_id: anchorLineId,
+        anchor_line_id: freeform ? null : anchorLineId,
+        position_s: freeform ? 0 : undefined,
         gain_db: gain,
-        loop: kind === "bed",
+        loop: kind === "bed" || kind === "music",
         duck: true,
       });
       onProject(updated);
@@ -1553,16 +1559,16 @@ function SoundBoard({
   }
 
   async function addSunoCue(track: Project["suno"][number]) {
-    if (!anchorLineId) {
-      onError("Choose a line to anchor the music to.");
-      return;
-    }
     try {
       const updated = await api.addCue(project.id, {
         kind: "music",
         sfx_id: track.sfx_id,
         name: track.title,
-        anchor_line_id: anchorLineId,
+        // Freeform from the start: a generated theme should score the play, not
+        // one scene, and an anchored bed that leaves its scene used to vanish
+        // from the mix.
+        anchor_line_id: null,
+        position_s: 0,
         gain_db: -18,
         loop: true,
         duck: true,
@@ -1583,7 +1589,8 @@ function SoundBoard({
     }
   }
 
-  const lineLabel = (lineId: string) => {
+  const lineLabel = (lineId: string | null) => {
+    if (!lineId) return "on the timeline";
     const line = lines.find((item) => item.id === lineId);
     return line ? `${line.speaker}: ${line.text.slice(0, 46)}` : lineId;
   };
@@ -1715,7 +1722,7 @@ function SoundBoard({
             ) : null}
             {project.suno.length === 0 ? (
               <div className="empty-list">
-                No Suno tracks yet. Generate a cue and add it to the scene.
+                No Suno tracks yet. Generate a theme, then add it as music.
               </div>
             ) : (
               project.suno.map((track) => (
@@ -1828,7 +1835,7 @@ function SoundBoard({
               <MusicNotes size={15} weight="fill" />
               Cue sheet
             </h2>
-            <p className="panel-sub">{project.cues.length} cues anchored to lines</p>
+            <p className="panel-sub">{project.cues.length} cues · music sits on the timeline, effects on their lines</p>
           </div>
         </div>
 
@@ -1883,7 +1890,10 @@ function SoundBoard({
                 <div className="cue-body">
                   <strong>{cue.name}</strong>
                   <span>
-                    {lineLabel(cue.anchor_line_id)} · {cue.gain_db} dB
+                    {cue.position_s != null
+                      ? `timeline · ${cue.position_s.toFixed(1)}s${cue.end_s != null ? `–${cue.end_s.toFixed(1)}s` : " → end"}`
+                      : lineLabel(cue.anchor_line_id)}{" "}
+                    · {cue.gain_db} dB
                   </span>
                 </div>
                 <button

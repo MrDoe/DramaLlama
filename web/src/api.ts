@@ -240,8 +240,10 @@ export const api = {
       kind: string;
       sfx_id: string;
       name: string;
-      anchor_line_id: string;
+      anchor_line_id?: string | null;
       offset_s?: number;
+      position_s?: number | null;
+      end_s?: number | null;
       gain_db?: number;
       fade_in_s?: number;
       fade_out_s?: number;
