@@ -5,7 +5,7 @@ sourceRefs:
   - suno-bridge/server.mjs
   - src/drama_studio/suno.py
   - src/drama_studio/handlers.py
-lastReviewed: 2026-10-30
+lastReviewed: 2026-11-13
 ---
 
 # Suno music bridge
@@ -32,6 +32,7 @@ Drama Llama (Python)
 | `POST /generate` | `inspire_song`/`create_song`; returns clip IDs |
 | `GET /clip/{id}` | poll generation status |
 | `POST /download` | download WAV into a project/SFX folder |
+| `GET /library?limit=` | newest own clips, for the import picker |
 
 Drama Llama enqueues `suno.generate`, polls the clip, downloads **WAV** (the
 M4A path can return an undecodable stream), indexes it in `SfxLibrary`, and
@@ -43,6 +44,11 @@ as a `music` cue.
 - Only one process can own `ws://127.0.0.1:9423`; stop other
   `bettersuno-mcp` instances.
 - The extension and an open `suno.com` tab are required.
+- Upstream `list_library` refuses more than **100** clips. The bridge used to
+  forward the picker's `limit=500`, upstream answered "Limit exceeds maximum of
+  100", the bridge turned that into a 502 and the Sound step showed an empty
+  panel. Both sides clamp to 100 now; the REST route still accepts a larger
+  `limit` and returns a page of 100.
 - Generation is serialised and captcha-gated; failures usually mean the
   extension is disconnected or Turnstile needs a human click.
 - After a Suno account switch (logout/login), downloads fail until the

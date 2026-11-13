@@ -195,3 +195,5 @@ Scratch project with a 12 s take A and 14 s take B, one manual sheet:
 - [[entities/suno-engine]]
 - [[concepts/script-to-stem-pipeline]]
 - [[concepts/engine-selection]]
+- [[concepts/project-json-concurrency]] — a re-render writes back only the stem
+  and alignment it owns, so a cue typed mid-render survives it

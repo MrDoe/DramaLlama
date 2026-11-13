@@ -695,3 +695,28 @@ line on each side of the seam; verified live, 100 clips returned.
 
 The pass-1 scratch project and an old probe project were deleted afterwards; the
 second-pass project stays so the master can be listened to.
+
+## [2026-11-13] lint | 27 pages, no orphans; two had drifted
+
+Checked every page for inbound links, for `sourceRefs` that no longer exist, and —
+rather than trusting the git dates, which flag anything touching `api.py` — for
+claims today's changes actually contradicted.
+
+No orphans: all 27 pages have at least one inbound link, and no source reference
+points at a missing file. Two pages were genuinely stale, both about a contract
+changed the same day:
+
+- `entities/job-worker` still described lease recovery as something that happens
+  when a worker starts. It is periodic now, which only works because the worker
+  beats for a job that is silent inside a long engine call. Rewritten with the
+  symptom (a queue wedged behind a `running` job nobody owns) and the reason the
+  keep-alive is not optional.
+- `entities/suno-bridge` did not list `/library` at all, so the failure had no
+  home. Added the endpoint and the 100-clip ceiling, with the shape of the bug:
+  upstream's refusal became a 502 became an empty panel.
+
+`entities/drama-llama-app` had no Stage step in its lifecycle; added, and it now
+points at the concurrency page rather than leaving that page one link deep. Two
+pages were re-read and left unchanged (`cut-region-effects`, `cut-cues-lanes`) —
+their `position_s` claims are consistent with the new contract, so the freshness
+bump records a check rather than an edit.

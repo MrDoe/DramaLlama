@@ -42,3 +42,5 @@ default. Search is filename/tag based; playback streams through
 
 - [[entities/drama-llama-app]]
 - [[concepts/script-to-stem-pipeline]]
+- [[concepts/project-json-concurrency]] — why a track the worker just downloaded
+  can answer "sfx not found" from the API's own copy of the index

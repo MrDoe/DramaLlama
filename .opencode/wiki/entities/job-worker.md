@@ -6,7 +6,7 @@ sourceRefs:
   - src/drama_studio/worker.py
   - src/drama_studio/api.py
   - src/drama_studio/cli.py
-lastReviewed: 2026-10-30
+lastReviewed: 2026-11-13
 ---
 
 # Job worker
@@ -18,6 +18,19 @@ lastReviewed: 2026-10-30
 `BEGIN IMMEDIATE` transaction; priority is descending, then FIFO. Failed jobs
 retry until `max_attempts`, then stay failed. `recover_stale()` requeues
 running jobs whose heartbeat is older than the lease.
+
+Recovery runs **periodically** (`recovery_interval_s`, default 60 s), not once at
+worker startup. A job orphaned by a crash or restart is seconds old when the
+worker begins, so a single startup pass skips it and the queue — serialised on
+one GPU — stays wedged behind a `running` job nobody is executing until the next
+restart, which nothing in the browser can trigger. That is only safe because the
+worker also refreshes the lease itself on a timer while a handler runs
+(`Worker._keep_lease`): `ctx.progress()` already beats, but a single engine call
+longer than the stale timeout does not, and a long Breeze take is exactly that.
+Without the keep-alive, periodic recovery would steal healthy renders. The suite
+pins both directions — an orphan is reclaimed without a restart, and a silent but
+live job is not. See [[concepts/project-json-concurrency]] and
+[[concepts/gpu-serialization]].
 
 ## Worker
 

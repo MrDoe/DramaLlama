@@ -11,7 +11,7 @@ sourceRefs:
   - web/src/components/MultiTrackEditor.tsx
   - web/src/pages/ProjectPage.tsx
   - web/src/types.ts
-lastReviewed: 2026-11-04
+lastReviewed: 2026-11-13
 ---
 
 # Per-region effects on the Cut board

@@ -7,7 +7,7 @@ sourceRefs:
   - web/src/App.tsx
   - web/src/pages/ProjectPage.tsx
   - web/index.html
-lastReviewed: 2026-10-30
+lastReviewed: 2026-11-13
 ---
 
 # Drama Llama app
@@ -31,10 +31,15 @@ alias next to the new `drama-llama` entry point. See
 6. `POST /api/projects/{id}/stems/{stem_id}/render` queues a GPU render +
    CPU alignment.
 7. `POST /api/projects/{id}/cues` anchors SFX to lines.
-8. `POST /api/projects/{id}/mix` assembles and masters the final audio.
+8. `POST /api/projects/{id}/stage/layout` proposes a staging for one scene — cast
+   spread, motion derived from the stage directions. It returns a proposal and
+   stores nothing; `PUT /api/projects/{id}/stage` is the explicit save.
+9. `POST /api/projects/{id}/mix` assembles and masters the final audio.
 
 Project content is JSON (`project.json`) plus `refs/`, `audio/takes/`,
-`lines/`, and `mix/`. SQLite (`data/jobs.sqlite3`) is only the job queue.
+`lines/`, and `mix/`. SQLite (`data/jobs.sqlite3`) is only the job queue. One
+JSON file and long-running jobs is the sharpest edge in the design — see
+[[concepts/project-json-concurrency]].
 
 ## UI
 

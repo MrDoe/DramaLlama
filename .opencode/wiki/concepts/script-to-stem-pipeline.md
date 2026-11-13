@@ -7,7 +7,7 @@ sourceRefs:
   - src/drama_studio/stems.py
   - src/drama_studio/aligner.py
   - src/drama_studio/handlers.py
-lastReviewed: 2026-10-31
+lastReviewed: 2026-11-13
 ---
 
 # Script-to-stem pipeline
