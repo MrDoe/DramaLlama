@@ -75,9 +75,9 @@ N = (4800 // fs) * fs
 
 def render(src_xyz, facing=0.0):
     """Feed one click, return the decoded stereo block."""
-    lbuf, lptr = fp(LISTENER)
+    _lbuf, lptr = fp(LISTENER)
     lib.dl_set_listener(h, lptr, ctypes.c_float(facing))
-    sbuf, sptr = fp(src_xyz)
+    _sbuf, sptr = fp(src_xyz)
     lib.dl_set_sources(h, 1, sptr, None)
 
     inbuf = np.zeros((1, N), dtype=np.float32)
