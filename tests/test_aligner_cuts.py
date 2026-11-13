@@ -58,6 +58,26 @@ def test_silence_after_the_phrase_is_not_carried():
     assert end < 2.3, f"the cut swallowed {end - 2.0:.2f}s of dead air"
 
 
+def test_a_dip_inside_the_phrase_does_not_end_the_cut():
+    # Voiced, a plosive gap, then the phrase goes on loudly: the old
+    # stop-at-the-first-dip rule ended the cut in the middle of the word.
+    samples = _take([(1.0, 1.5, 0.4), (1.72, 2.35, 0.35)])
+    env = envelope(samples, RATE)
+    _start, end = padded_window(
+        env, 1.0, 1.5, lead_limit=0.9, tail_limit=2.6, floor=_floor(env)
+    )
+    assert end > 2.2, f"the cut stopped at the dip, losing the rest of the line ({end})"
+
+
+def test_the_lead_starts_at_the_first_sound_not_the_first_dip():
+    samples = _take([(0.62, 0.8, 0.25), (0.98, 2.0, 0.4)])
+    env = envelope(samples, RATE)
+    start, _end = padded_window(
+        env, 1.0, 2.0, lead_limit=0.5, tail_limit=2.4, floor=_floor(env)
+    )
+    assert start < 0.7, f"the breath before the first word was cut off ({start})"
+
+
 def test_the_allowance_never_shortens_a_cut():
     silence = np.zeros(4 * RATE, dtype=np.float32)
     env = envelope(silence, RATE)
