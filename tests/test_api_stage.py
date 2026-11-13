@@ -198,6 +198,66 @@ def test_layout_spreads_the_cast_and_saves_round_trip(tmp_path):
     assert client.get(f"/api/projects/{project_id}/stage").json()["stage"]["scenes"] == {}
 
 
+def test_layout_windows_are_scene_relative_and_speakers_keep_their_order(tmp_path):
+    """Motion timing must come from the script, not from each stem's own clock.
+
+    Every stem's first line sits at 0 on its own timeline, so reading
+    `position_s` directly would start two speakers' walks at the same instant
+    and put a walk-in at the top of the scene even when that speaker talks
+    last. The windows the layout receives are therefore relative to the scene's
+    first sound, with the order between speakers preserved.
+    """
+    from drama_studio.aligner import WhisperAligner  # noqa: F401  (documents the source of cuts)
+    from drama_studio.api import _speaker_windows
+    from drama_studio.models import AlignedLine, AlignmentResult
+    from drama_studio.store import ProjectStore
+
+    _, client, tmp = make_client(tmp_path)
+    project_id = make_project(client)
+    store = ProjectStore(tmp / "projects")
+    project = store.get(project_id)
+
+    def align(stem_id: str, entries: list[tuple[str, float]]) -> AlignmentResult:
+        return AlignmentResult(
+            stem_id=stem_id,
+            aligner="whisper-large-v3",
+            lines=[
+                AlignedLine(
+                    id=line_id,
+                    line_id=line_id,
+                    take_id=f"take-{line_id}",
+                    start_s=0.0,
+                    end_s=end,
+                    position_s=None,
+                )
+                for line_id, end in entries
+            ],
+        )
+
+    lines = {line.id: line for line in project.script.iter_lines()}
+    mara_1 = next(i for i, line in lines.items() if line.speaker == "MARA" and line.scene == 1)
+    elias_1 = next(i for i, line in lines.items() if line.speaker == "ELIAS" and line.scene == 1)
+    mara_2 = next(i for i, line in lines.items() if line.speaker == "MARA" and line.scene == 2)
+    project.alignments = {
+        "s1-elias": align("s1-elias", [(elias_1, 1.0)]),
+        "s1-mara": align("s1-mara", [(mara_1, 2.0)]),
+        "s2-mara": align("s2-mara", [(mara_2, 1.5)]),
+    }
+    store.save(project)
+    project = store.get(project_id)
+
+    scene_1 = _speaker_windows(project, 1, ["ELIAS", "MARA"])
+    scene_2 = _speaker_windows(project, 2, ["MARA"])
+    # MARA opens scene 1, so her window starts at the scene's first sound and
+    # ELIAS's walk begins after her line and the pause — not both at zero.
+    assert scene_1["MARA"][0] == 0.0
+    assert scene_1["ELIAS"][0] > 0.0
+    # A scene of one speaker always starts at its own first sound.
+    assert scene_2["MARA"][0] == 0.0
+    # Durations are the cut's own length, not the cursor to the next line.
+    assert scene_1["MARA"][1] - scene_1["MARA"][0] == 2.0
+
+
 def test_layout_of_unknown_scene_is_404(tmp_path):
     _, client, _ = make_client(tmp_path)
     project_id = make_project(client)

@@ -292,6 +292,48 @@ def test_a_followed_source_moves_over_time():
 
 
 @needs_native
+def test_motion_is_scene_relative_whatever_the_scene_offset():
+    """A scene later in the drama must still move.
+
+    `render_scene` is handed the scene's absolute start so it can label its
+    blocks, but the keyframes are scene-relative because that is the only clock
+    a stem has. Reading them at project time left every staged scene after the
+    first one sitting at its last keyframe: the walk was in the file and out of
+    the mix.
+
+    Two assertions, because each one alone passes for the wrong reason. The bed
+    may not depend on the offset, and it must depend on the path — a scene that
+    simply ignored its keyframes everywhere would satisfy the first.
+    """
+    scene = SceneStage(
+        room=room(dims_m=(10.0, 8.0, 3.0)),
+        listener=StageListener(position_m=(5.0, 6.0, 1.6)),
+        actors=[StageActor(speaker="MARA", position_m=(5.0, 6.0, 1.5))],
+        paths=[StagePath(speaker="MARA", keys=[(0.0, 2.0, 6.0, 1.5), (2.0, 8.0, 6.0, 1.5)])],
+    )
+    static = SceneStage(
+        room=scene.room,
+        listener=scene.listener,
+        actors=[StageActor(speaker="MARA", position_m=(2.0, 6.0, 1.5))],
+    )
+    tone = (0.3 * np.sin(2 * np.pi * 220 * np.arange(2 * SR) / SR)).astype(np.float32)
+
+    def render(target: SceneStage, start_s: float) -> np.ndarray:
+        with spatial.RoomSimulator(target, SR, 1) as sim:
+            bed, _dry = spatial.render_scene(sim, target, tone[None, :], ["MARA"], start_s)
+        return bed
+
+    at_zero = render(scene, 0.0)
+    at_ten_minutes = render(scene, 600.0)
+    assert np.allclose(at_zero, at_ten_minutes, atol=1e-4), (
+        "the same walk produced different audio at a different scene offset"
+    )
+    assert not np.allclose(at_zero, render(static, 0.0), atol=1e-3), (
+        "nothing moved at all, so the offset check above proves nothing"
+    )
+
+
+@needs_native
 def test_unstaged_speaker_row_is_left_silent_instead_of_mispitched():
     scene = SceneStage(
         room=room(),

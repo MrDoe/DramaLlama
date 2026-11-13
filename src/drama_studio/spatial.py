@@ -698,6 +698,15 @@ def render_scene(
     rate, laid out so sample 0 is `start_s` on the project timeline. Motion
     paths are re-evaluated every MOTION_GRID_S seconds.
 
+    Path keyframe times are **scene-relative**, not project-absolute: a stem is
+    one speaker's continuous performance inside one scene, and the mixer places
+    every stem of a scene at that scene's first sound, so the position of a line
+    inside its stem *is* its position inside the scene. Keyframe `t = 0` is
+    therefore sample 0 of `sources`, which is why the lookup below subtracts
+    `start_s`. Querying the keys at project time instead made every staged
+    scene after the first one sit still at its last keyframe — and the first
+    scene only ever looked correct by coincidence.
+
     Returns (ambisonic bed, dry centred mono):
       bed  (n_sh, n_samples + tail)  ACN/N3D
       dry  (n_samples + tail,)       the `direct` portion, pre-summed
@@ -726,7 +735,7 @@ def render_scene(
 
     for start in range(0, n_samples, block):
         stop = min(start + block, n_samples)
-        mid_s = start_s + ((start + stop) * 0.5) / sim.sample_rate
+        mid_s = ((start + stop) * 0.5) / sim.sample_rate
 
         positions, gains, direct = source_state_at(scene, mid_s)
         window = np.zeros((len(actors), stop - start), dtype=np.float32)

@@ -282,30 +282,74 @@ class ConfigUpdate(BaseModel):
 def _speaker_windows(
     project, scene_id: int, speakers: list[str]
 ) -> dict[str, tuple[float, float]]:
-    """When each speaker actually occupies the timeline in one scene.
+    """When each speaker occupies the scene, in **scene-relative** seconds.
 
     Auto-staging needs this to place motion: "(approaching)" should walk the
     speaker across the seconds they speak, not across the whole scene. Built
     from the alignments, so a project that has not been rendered and aligned yet
     yields no windows — and therefore no paths. An invented timing would be
     worse than none, because the user would drag a move they cannot hear.
+
+    The times are relative to the scene's first sound, which is the frame
+    `render_scene` uses: it gets the scene's audio with sample 0 at the scene
+    start, so a keyframe at `t` must mean `t` after that. A segment's stored
+    `position_s` is not usable directly — it is per-stem, so every stem's first
+    line sits at 0 and two speakers of the same scene would both start their
+    move at the top. Positions therefore come from the same script-order layout
+    the mixer places with, minus the scene's own start.
     """
-    windows: dict[str, tuple[float, float]] = {}
-    for stem in project.stems:
-        if stem.scene != scene_id or stem.speaker not in speakers:
-            continue
-        alignment = project.alignments.get(stem.id)
-        if alignment is None:
-            continue
+    from copy import deepcopy
+
+    from .cuts import layout_script_order
+
+    placed = deepcopy(project)
+    script_lines = {line.id: line for line in placed.script.iter_lines()}
+
+    def in_scene(alignment) -> bool:
         for cut in alignment.lines:
-            if not cut.enabled:
+            line = script_lines.get(cut.line_id)
+            if line is not None and line.scene == scene_id:
+                return True
+        return False
+
+    # Are the stored positions a shared timeline, or each stem's own cursor?
+    # The aligner counts from zero inside a stem, so two speakers of one scene
+    # both opening at 0.0 means those numbers cannot be placed as they stand —
+    # and the mix would overlap them too, which it does not, because it lays the
+    # script out itself. Rebuild from script order in that case; keep a cut
+    # sheet the user actually arranged when it is already a global timeline.
+    at_zero = sum(
+        1
+        for alignment in placed.alignments.values()
+        if in_scene(alignment)
+        and alignment.lines
+        and float(alignment.lines[0].position_s or 0.0) == 0.0
+    )
+    layout_script_order(placed, overwrite_positions=at_zero > 1)
+
+    # Global start and end of every enabled segment in this scene.
+    spans: list[tuple[str, float, float]] = []
+    for alignment in placed.alignments.values():
+        for cut in alignment.lines:
+            if not cut.enabled or cut.position_s is None:
                 continue
-            start = float(cut.position_s or 0.0)
-            end = start + max(0.4, float(cut.end_s) - float(cut.start_s))
-            known = windows.get(stem.speaker)
-            windows[stem.speaker] = (
-                (start, end) if known is None else (min(known[0], start), max(known[1], end))
-            )
+            line = script_lines.get(cut.line_id)
+            if line is None or line.scene != scene_id or line.speaker not in speakers:
+                continue
+            start = float(cut.position_s)
+            spans.append((line.speaker, start, start + max(0.4, float(cut.end_s) - float(cut.start_s))))
+    if not spans:
+        return {}
+
+    origin = min(start for _speaker, start, _end in spans)
+    windows: dict[str, tuple[float, float]] = {}
+    for speaker, start, end in spans:
+        known = windows.get(speaker)
+        start -= origin
+        end -= origin
+        windows[speaker] = (
+            (start, end) if known is None else (min(known[0], start), max(known[1], end))
+        )
     return windows
 
 
