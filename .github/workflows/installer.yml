@@ -156,7 +156,9 @@ jobs:
           sudo apt-get update -qq
           # CBLAS backend only. ubuntu-22.04 matches the AppImage job's glibc
           # baseline so the asset also loads on older user distros.
-          sudo apt-get install -y cmake libopenblas-dev liblapacke-dev
+          # ffmpeg is for tests/test_spatial.py: the mix tests run build_mix,
+          # which loudness-normalises through the ffmpeg CLI.
+          sudo apt-get install -y cmake libopenblas-dev liblapacke-dev ffmpeg
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
       - name: Check out the pinned Spatial_Audio_Framework
