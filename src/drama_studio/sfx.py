@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,10 @@ class SfxLibrary:
         self._lock = threading.RLock()
         self._items: dict[str, SfxItem] = {}
         self._loaded = False
+        # Rate limit for the self-heal in get(): one re-read per couple of
+        # seconds, so cues pointing at deleted files cannot trigger a rescan
+        # apiece.
+        self._healed_at = 0.0
 
     def scan(self, force: bool = False) -> int:
         with self._lock:
@@ -125,7 +130,17 @@ class SfxLibrary:
     def get(self, sfx_id: str) -> SfxItem | None:
         if not self._loaded:
             self.scan()
-        return self._items.get(sfx_id)
+        item = self._items.get(sfx_id)
+        now = time.monotonic()
+        if item is None and now - self._healed_at > 2.0:
+            # The worker writes into a root we index — a downloaded Suno track,
+            # say — and it has its own copy of this index. Without the re-read
+            # the API answers "sfx not found" about a file that exists, and
+            # adding that track as a music cue fails in the browser.
+            self._healed_at = now
+            self.scan()
+            item = self._items.get(sfx_id)
+        return item
 
     def find_by_path(self, path: str | Path) -> SfxItem | None:
         if not self._loaded:

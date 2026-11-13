@@ -197,3 +197,51 @@ def test_cue_patch_keeps_missing_sfx_id(tmp_path):
         == 404
     )
 
+
+
+def _two_views(tmp_path):
+    import time as _time
+
+    root = tmp_path / "sfx"
+    root.mkdir()
+    sf.write(root / "bed-a.wav", np.zeros(12000, dtype=np.float32), 24000)
+    api_view = SfxLibrary(
+        roots=[root],
+        cache_path=tmp_path / "idx.json",
+        excludes=set(),
+        upload_root=root,
+    )
+    api_view.scan()
+    worker_view = SfxLibrary(
+        roots=[root],
+        cache_path=tmp_path / "idx.json",
+        excludes=set(),
+        upload_root=root,
+    )
+    return root, api_view, worker_view
+
+
+def test_get_finds_a_file_the_worker_indexed_after_us(tmp_path):
+    """Two processes, one folder: a Suno download must not look like a 404.
+
+    The worker indexes what it downloads and keeps its own copy of the index.
+    The API's copy predates the file, so answering straight from it tells the
+    browser that the track it just created does not exist.
+    """
+    root, api_view, worker_view = _two_views(tmp_path)
+    sf.write(root / "suno-theme.wav", np.zeros(24000, dtype=np.float32), 24000)
+    created = worker_view.find_by_path(root / "suno-theme.wav")
+    assert created is not None, "the worker's own scan should see the file"
+    assert api_view.get(created.id) is not None
+    assert api_view.get(created.id).name == "suno-theme"
+
+
+def test_the_self_heal_does_not_rescan_on_every_miss(tmp_path):
+    """A deleted cue must not turn into a folder walk, once per cue."""
+    import time
+
+    root, api_view, worker_view = _two_views(tmp_path)
+    sf.write(root / "suno-two.wav", np.zeros(12000, dtype=np.float32), 24000)
+    created = worker_view.find_by_path(root / "suno-two.wav")
+    api_view._healed_at = time.monotonic()  # healed a moment ago
+    assert api_view.get(created.id) is None
