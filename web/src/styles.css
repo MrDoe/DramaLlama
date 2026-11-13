@@ -3937,6 +3937,33 @@ body.mt-fs-active .page {
   letter-spacing: 0.06em;
 }
 
+/* Derived motion: a polyline from the first keyframe to the last, in the
+   speaker's colour. The dot marks where the walk starts, so the arrow a face
+   already gives is not the only cue for direction of travel. */
+.stage-path polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 5 4;
+  opacity: 0.55;
+}
+
+.stage-path__start {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  opacity: 0.8;
+}
+
+.stage-actor--moves .stage-actor__dot {
+  stroke-width: 3;
+}
+
+.stage-readout--motion {
+  color: var(--teal);
+}
+
 .stage-actor {
   cursor: grab;
 }

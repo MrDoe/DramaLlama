@@ -14,6 +14,7 @@ import type {
   SceneStage,
   StageActor,
   StageCapabilities,
+  StagePath,
   StageProject,
 } from "../types";
 import { speakerColor } from "../utils";
@@ -414,6 +415,28 @@ export function StageBoard({ project, onRefresh }: Props) {
                 height={roomDims[1] * scale}
                 className="stage-room"
               />
+              {/* Where a speaker walks. Auto-staging derives these from the
+                  stage directions, so a move the user did not draw is at least
+                  visible — otherwise motion is something that happens to the
+                  mix and never appears on the board. */}
+              {scene.paths
+                .filter((path) => path.keys.length > 1)
+                .map((path) => {
+                  const points = path.keys.map(
+                    (key) => toPx([key[1], key[2], key[3]]).join(","),
+                  );
+                  const first = toPx([path.keys[0][1], path.keys[0][2], path.keys[0][3]]);
+                  return (
+                    <g
+                      key={`path-${path.speaker}`}
+                      className="stage-path"
+                      style={{ color: speakerColor(path.speaker) }}
+                    >
+                      <polyline points={points.join(" ")} />
+                      <circle cx={first[0]} cy={first[1]} r={4} className="stage-path__start" />
+                    </g>
+                  );
+                })}
               {[1, 2, 3, 4, 5, 6].map((metre) => {
                 const radius = metre * scale;
                 const [cx, cy] = toPx(scene.listener.position_m);
@@ -432,16 +455,26 @@ export function StageBoard({ project, onRefresh }: Props) {
               {scene.actors.map((actor) => {
                 const [cx, cy] = toPx(actor.position_m);
                 const distance = planDistance(actor.position_m, scene.listener.position_m);
+                const motion = scene.paths.find(
+                  (path) => path.speaker === actor.speaker && path.keys.length > 1,
+                );
                 return (
                   <g
                     key={actor.speaker}
-                    className={selected === actor.speaker ? "stage-actor stage-actor--on" : "stage-actor"}
+                    className={
+                      "stage-actor" +
+                      (motion ? " stage-actor--moves" : "") +
+                      (selected === actor.speaker ? " stage-actor--on" : "")
+                    }
                     style={{ color: speakerColor(actor.speaker) }}
                     transform={`translate(${cx} ${cy})`}
                     onPointerDown={(event) => onPointerDown(event, actor.speaker)}
                     tabIndex={0}
                     role="button"
-                    aria-label={`${actor.speaker}, ${distance.toFixed(1)} metres`}
+                    aria-label={
+                      `${actor.speaker}, ${distance.toFixed(1)} metres` +
+                      (motion ? `, walks ${pathLength(motion)} m` : "")
+                    }
                     onKeyDown={(event) => {
                       // Keyboard nudging keeps the stage operable without a
                       // pointer; a focused chip is otherwise unreachable.
@@ -530,6 +563,9 @@ export function StageBoard({ project, onRefresh }: Props) {
             {selectedActor ? (
               <ActorPanel
                 actor={selectedActor}
+                path={scene.paths.find(
+                  (item) => item.speaker === selectedActor.speaker && item.keys.length > 1,
+                )}
                 listener={scene.listener.position_m}
                 room={scene.room.dims_m}
                 onChange={(changes) => patchActor(selectedActor.speaker, changes)}
@@ -732,12 +768,14 @@ function RoomPanel({
 
 function ActorPanel({
   actor,
+  path,
   listener,
   room,
   onChange,
   onRemove,
 }: {
   actor: StageActor;
+  path?: StagePath;
   listener: Vec3;
   room: Vec3;
   onChange: (changes: Partial<StageActor>) => void;
@@ -753,6 +791,12 @@ function ActorPanel({
       <p className="stage-readout">
         {distance.toFixed(2)} m away, {bearing}° {Math.abs(bearing) < 12 ? "ahead" : bearing > 0 ? "left" : "right"}
       </p>
+      {path ? (
+        <p className="stage-readout stage-readout--motion">
+          walks {pathLength(path)} m, {path.keys[0][0].toFixed(1)} s →{" "}
+          {path.keys[path.keys.length - 1][0].toFixed(1)} s
+        </p>
+      ) : null}
       <div className="stage-num-row">
         <NumberField
           label="x"
@@ -880,6 +924,18 @@ function ListenerPanel({ scene, onChange }: { scene: SceneStage; onChange: (next
       <p className="stage-hint">Everything the mix renders is heard from here.</p>
     </div>
   );
+}
+
+/** Total walked distance of a motion path, in metres, rounded for a label. */
+function pathLength(path: StagePath): number {
+  let total = 0;
+  for (let index = 1; index < path.keys.length; index += 1) {
+    total += Math.hypot(
+      path.keys[index][1] - path.keys[index - 1][1],
+      path.keys[index][2] - path.keys[index - 1][2],
+    );
+  }
+  return Math.round(total * 10) / 10;
 }
 
 /** Stage azimuth of `from` as seen by a listener at `to`: 0 ahead, +90 left. */
