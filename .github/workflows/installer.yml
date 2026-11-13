@@ -252,7 +252,11 @@ jobs:
 
   release:
     name: Attach artifacts to the release
-    if: github.ref_type == 'tag'
+    # The spatial renderer is optional (staging falls back to a dry mix and
+    # ships disabled while installer/pins.json has no asset hash), so publish
+    # the installers even when its verification fails; attach its artifact when
+    # it succeeded.
+    if: always() && github.ref_type == 'tag' && needs.linux.result == 'success' && needs.windows.result == 'success'
     needs: [linux, windows, spatial]
     runs-on: ubuntu-latest
     permissions:
@@ -267,6 +271,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          shopt -s nullglob
+          assets=(artifacts/*)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "no artifacts to publish" >&2
+            exit 1
+          fi
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
             gh release create "${GITHUB_REF_NAME}" --title "Drama Llama ${GITHUB_REF_NAME#v}" --generate-notes
-          gh release upload "${GITHUB_REF_NAME}" artifacts/* --clobber
+          gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
