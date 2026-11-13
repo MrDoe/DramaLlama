@@ -20,7 +20,7 @@ CLI alias are intentionally unchanged.
   Voices workflow step.
 - SFX index over `~/Sounds`, cue sheet, mixer with ducking/EQ/loudnorm.
 - React UI: projects, script/parse, stems, render, sound, mix.
-- 387 backend tests (spatial ones skip without the native renderer), web build green.
+- 389 backend tests (spatial ones skip without the native renderer), web build green.
 - English Breeze path validated on one real scene; German Chatterbox path
   validated end-to-end (20.7 s ANNA stem, 7/7 cuts). Suno music generation and
   WAV download validated through the BetterSuno bridge.
@@ -213,7 +213,7 @@ observable behavior, not just DOM presence.
 - Uploaded generation inputs live in `refs/.uploads/` and are deleted by the
   job; generated voices use unique ids and never overwrite an existing ref.
   Inputs longer than 6 s are accepted and automatically cut to the best 6–11 s
-  window; the hard guard is 10 minutes.
+  window; the hard guard is 2 minutes, with a warning above 60 s.
 - `.page` has a fill-mode animation with a transform, which makes `position:
   fixed` children behave like they belong to the page. Render true full-screen
   dialogs through a React portal; Voices is a workflow step, not a modal.

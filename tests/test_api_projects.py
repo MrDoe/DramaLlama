@@ -571,6 +571,30 @@ def test_reference_generate_accepts_long_clip(tmp_path, monkeypatch):
     assert response.json()["type"] == "reference.generate"
 
 
+def test_reference_generate_rejects_over_two_minutes(tmp_path, monkeypatch):
+    import drama_studio.refvoice as refvoice_module
+
+    _, client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={"title": "API Test", "language": "en", "script_text": SCRIPT},
+    ).json()
+    monkeypatch.setattr(refvoice_module, "probe_duration", lambda path: 121.0)
+
+    response = client.post(
+        f"/api/projects/{project['id']}/characters/MARA/reference/generate",
+        files={
+            "file": (
+                "sample.wav",
+                _sample_wav_bytes(tmp_path),
+                "audio/wav",
+            )
+        },
+    )
+    assert response.status_code == 400
+    assert "2 minutes" in response.json()["detail"]
+
+
 def test_reference_generate_rejects_native_clone_engine(tmp_path, monkeypatch):
     app, client = make_client(tmp_path)
     project = client.post(

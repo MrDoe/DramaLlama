@@ -16,8 +16,11 @@ from .transcriber import TranscriptResult, TranscriptWord, WhisperTranscriber
 SR = 24000
 MIN_INPUT_S = 6.0
 # Longer uploads are accepted and automatically reduced to a 6-11 s reference
-# window; this is only a guard against accidental multi-hour files.
-MAX_INPUT_S = 600.0
+# window. Two minutes keeps the CPU transcription bounded while covering most
+# interview/recording excerpts.
+MAX_INPUT_S = 120.0
+# Above this, surface a "long clip" advisory in the UI and on the voice.
+LONG_INPUT_S = 60.0
 MIN_REF_S = 6.0
 MAX_REF_S = 11.0
 TARGET_REF_S = 8.0
@@ -372,7 +375,7 @@ def prepare_reference(
     if total_duration > MAX_INPUT_S:
         raise ReferencePreparationError(
             f"the uploaded clip is {total_duration / 60:.1f} minutes; "
-            "the automatic cutter accepts at most 10 minutes"
+            "the automatic cutter accepts at most 2 minutes"
         )
 
     _check_cancel(cancelled)
@@ -443,6 +446,11 @@ def prepare_reference(
             warnings.append(
                 f"The selected window is only {duration:.1f} s; a longer clean "
                 "passage may clone better."
+            )
+        if total_duration > LONG_INPUT_S:
+            warnings.append(
+                f"The source clip is {total_duration:.0f} s long; only the best "
+                "6-11 s window was kept. Long clips take longer to transcribe."
             )
 
         _check_cancel(cancelled)

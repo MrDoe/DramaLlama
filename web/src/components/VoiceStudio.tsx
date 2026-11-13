@@ -404,6 +404,7 @@ export function VoiceStudio({
   const [editing, setEditing] = useState<RefVoice | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [fileDuration, setFileDuration] = useState<number | null>(null);
+  const [fileWarning, setFileWarning] = useState("");
   const [name, setName] = useState("");
   const [makeDefault, setMakeDefault] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -468,6 +469,7 @@ export function VoiceStudio({
   async function chooseFile(next: File | null) {
     setFile(next);
     setFileDuration(null);
+    setFileWarning("");
     setError("");
     if (!next) return;
     try {
@@ -477,9 +479,13 @@ export function VoiceStudio({
         setError(
           `This clip is ${duration.toFixed(1)} s. Choose a sample of at least 6 s.`,
         );
-      } else if (duration > 600) {
+      } else if (duration > 120) {
         setError(
-          "This clip is longer than 10 minutes. Trim it before generating.",
+          "This clip is longer than 2 minutes. Trim it before generating.",
+        );
+      } else if (duration > 60) {
+        setFileWarning(
+          "Long clip — transcription may take a while. Only the best 6–11 s window will be kept.",
         );
       }
     } catch (reason) {
@@ -492,8 +498,8 @@ export function VoiceStudio({
       setError("Choose an audio file first.");
       return;
     }
-    if (fileDuration != null && (fileDuration < 6 || fileDuration > 600)) {
-      setError("Choose a sample of at least 6 s (up to 10 minutes).");
+    if (fileDuration != null && (fileDuration < 6 || fileDuration > 120)) {
+      setError("Choose a sample of at least 6 s (up to 2 minutes).");
       return;
     }
     setStarting(true);
@@ -536,6 +542,7 @@ export function VoiceStudio({
     setMode("list");
     setFile(null);
     setFileDuration(null);
+    setFileWarning("");
     setName("");
     setMakeDefault(false);
     setNotice("Voice saved.");
@@ -781,9 +788,9 @@ export function VoiceStudio({
                 <div className="voice-generate">
                   <h3>Generate from a sample</h3>
                   <p className="panel-note">
-                    Upload one speaker with clean speech and no music. At least
-                    6 s; long clips are automatically cut to the best 6–11 s
-                    window.
+                    Upload one speaker with clean speech and no music.
+                    Recommended 15–30 s. Clips up to 2 minutes are cut
+                    automatically to the best 6–11 s window.
                   </p>
                   <label className="button button-secondary button-sm voice-file">
                     <FileAudio size={14} />
@@ -797,6 +804,11 @@ export function VoiceStudio({
                   {fileDuration != null ? (
                     <p className="voice-file-meta">
                       {formatDuration(fileDuration)} · {Math.round((file?.size ?? 0) / 1024)} KB
+                    </p>
+                  ) : null}
+                  {fileWarning ? (
+                    <p className="voice-file-warning" role="status">
+                      {fileWarning}
                     </p>
                   ) : null}
                   <label className="voice-field">

@@ -133,7 +133,7 @@ def test_prepare_reference_rejects_short_input(tmp_path):
 
 def test_prepare_reference_cuts_long_input(tmp_path, monkeypatch):
     source = tmp_path / "long.wav"
-    write_mono(source, np.concatenate([_clip_with_silence() for _ in range(4)]), 24000)
+    write_mono(source, np.concatenate([_clip_with_silence() for _ in range(6)]), 24000)
     destination = tmp_path / "out" / "ref.wav"
 
     def fake_decode(input_path, output_path, **kwargs):
@@ -150,6 +150,20 @@ def test_prepare_reference_cuts_long_input(tmp_path, monkeypatch):
     assert 6.0 <= prepared.duration_s <= 11.0
     assert prepared.window_start_s < prepared.window_end_s
     assert destination.exists()
+    assert any("source clip is" in warning for warning in prepared.warnings)
+
+
+def test_prepare_reference_rejects_over_two_minutes(tmp_path, monkeypatch):
+    source = tmp_path / "toolong.wav"
+    write_mono(source, _tone(1.0), 24000)
+    monkeypatch.setattr(refvoice, "probe_duration", lambda path: 121.0)
+    with pytest.raises(refvoice.ReferencePreparationError, match="2 minutes"):
+        refvoice.prepare_reference(
+            source,
+            tmp_path / "out.wav",
+            language="en",
+            transcriber=FakeTranscriber(),
+        )
 
 
 def test_prepare_reference_rejects_no_speech(tmp_path, monkeypatch):
