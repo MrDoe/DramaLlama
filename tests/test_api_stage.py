@@ -301,3 +301,105 @@ def test_staged_mix_over_api_produces_stereo_master(tmp_path):
     # The Ambisonic master must line up with the stereo one, or it cannot be
     # muxed against the same picture.
     assert info.frames == sf.info(str(store.project_dir(project_id) / result.file)).frames
+
+
+def test_ambisonic_master_never_outlives_the_stereo_one(tmp_path):
+    """A deep room's tail must not push the Ambisonic file past the master.
+
+    Found by driving the real UI: staging the last scene as a 2 x 9 m corridor
+    at order 3 wrote a 16-channel master 1.98 s longer than the stereo file, so
+    the two could not be muxed against the same picture. Padding covers a short
+    file; only trimming keeps the promise.
+    """
+    import pytest
+
+    from drama_studio import spatial
+
+    if not spatial.available():
+        pytest.skip("spatial renderer not built")
+
+    app, client, root = make_client(tmp_path)
+    project_id = make_project(client)
+    tone = (0.4 * np.sin(2 * np.pi * 220 * np.arange(24000) / 24000)).astype(np.float32)
+    directory = root / "projects" / project_id
+    (directory / "lines").mkdir(parents=True, exist_ok=True)
+    project = client.get(f"/api/projects/{project_id}").json()
+    for scene in project["script"]["scenes"]:
+        for line in scene["lines"]:
+            sf.write(directory / "lines" / f"{line['id']}.wav", tone, 24000)
+
+    corridor = {
+        "dims_m": [2.0, 9.0, 2.4],
+        "absorption": [0.2, 0.2, 0.25, 0.25, 0.3, 0.15],
+        "reflections": 3,
+    }
+
+    def scene_stage(*speakers: tuple[str, float]) -> dict:
+        """Stage the scene's real cast, spaced deep into the corridor."""
+        return {
+            "room": corridor,
+            "listener": {"position_m": [1.0, 7.4, 1.6], "facing_deg": 0.0},
+            "actors": [
+                {
+                    "speaker": speaker,
+                    "position_m": [1.0, depth, 1.5],
+                    "facing_deg": 0.0,
+                    "gain_db": 0.0,
+                    "direct": 1.0,
+                }
+                for speaker, depth in speakers
+            ],
+            "paths": [],
+        }
+
+    stage = {
+        "version": 1,
+        "enabled": True,
+        "order": 3,
+        "export_ambisonic": True,
+        "tail_s": 0.6,
+        "default_room": corridor,
+        # The script's real cast: MARA and ELIAS in scene 1, MARA alone in
+        # scene 2. Staging anyone else would silently leave audio out of the
+        # Ambisonic master, which is the point of the centroid check below.
+        "scenes": {
+            "1": scene_stage(("MARA", 3.0), ("ELIAS", 4.5)),
+            "2": scene_stage(("MARA", 2.0)),
+        },
+    }
+    saved = client.put(f"/api/projects/{project_id}/stage", json={"stage": stage})
+    assert saved.status_code == 200, saved.text
+
+    from drama_studio.mixer import build_mix
+
+    store = app.state.store
+    loaded = store.find(project_id)
+    result = build_mix(loaded, store.project_dir(project_id), lambda _sfx_id: None)
+    assert result.spatial is True and result.ambisonic
+
+    stereo, rate = sf.read(str(store.project_dir(project_id) / result.file), dtype="float32")
+    amb, arate = sf.read(str(store.project_dir(project_id) / result.ambisonic), dtype="float32")
+    assert (rate, arate) == (48000, 48000)
+    assert amb.shape[1] == spatial.sh_channels(3)
+    assert amb.shape[0] == stereo.shape[0], (
+        f"Ambisonic {amb.shape[0]} vs stereo {stereo.shape[0]} frames"
+    )
+
+    # Same length is not enough. The old writer stitched the beds together end
+    # to end, so a scene whose tail reached into the next one played late in the
+    # Ambisonic file while sitting correctly in the stereo mix. The two are
+    # related by a room-dependent decode and a loudness pass, so their levels
+    # differ; *when* the energy happens must not.
+    def envelope(samples: np.ndarray, hop: int = 480) -> np.ndarray:
+        track = np.abs(samples).mean(axis=1) if samples.ndim > 1 else np.abs(samples)
+        usable = track.size // hop * hop
+        return track[:usable].reshape(-1, hop).mean(axis=1)
+
+    left, right = envelope(stereo), envelope(amb[:, 0])
+    # Mean-removed, or the long silent gaps dominate and any shift looks alike.
+    correlation = np.correlate(
+        left - left.mean(), right - right.mean(), mode="full"
+    )
+    lag = int(np.argmax(correlation)) - (left.size - 1)
+    # One envelope step is 10 ms at 48 kHz / hop 480.
+    assert abs(lag) * 0.01 < 0.10, f"Ambisonic master is off by {lag * 0.01:+.2f}s"

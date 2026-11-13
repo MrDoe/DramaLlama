@@ -137,14 +137,15 @@ def _first_stage(stage):
 def _render_staged_scenes(stage, tracks, scene_bounds, sr, total, spatial_render):
     """Render every staged scene into one Ambisonic timeline.
 
-    Returns (bed, scene_beds, extra) where bed is (n_sh, total) ACN/N3D,
-    scene_beds holds each scene's own bed for the Ambisonic export, and extra is
-    the centred dry contribution of actors blended out of the room.
+    Returns (bed, extra) where bed is (n_sh, total) ACN/N3D and extra is the
+    centred dry contribution of actors blended out of the room. The bed is also
+    what the Ambisonic export writes: rebuilding it per scene for the export
+    instead would put each scene back at the end of the previous one whenever
+    two scenes' tails overlap.
     """
     order = int(stage.order)
     bed = np.zeros((spatial_render.sh_channels(order), total), dtype=np.float32)
     extra = np.zeros(total, dtype=np.float32)
-    scene_beds: list[tuple[int, float, np.ndarray]] = []
 
     for scene_id in spatial_render.staged_scenes(stage):
         scene = stage.scenes.get(str(scene_id))
@@ -174,25 +175,30 @@ def _render_staged_scenes(stage, tracks, scene_bounds, sr, total, spatial_render
             continue
         bed[:, start : start + take] += scene_bed[:, :take]
         extra[start : start + take] += scene_dry[:take]
-        scene_beds.append((scene_id, span[0], scene_bed[:, :take]))
 
-    return bed, scene_beds, extra
+    return bed, extra
 
 
-def _write_ambisonic_master(path, scene_beds, stage, sr, total, spatial_render):
-    """Write the per-scene beds back out as one ACN/SN3D (AmbiX) master.
+def _write_ambisonic_master(path, bed, stage, sr, spatial_render, block: int = 1 << 15):
+    """Write the summed Ambisonic timeline out as one ACN/SN3D (AmbiX) master.
 
-    Streamed scene by scene rather than materialising the whole timeline: a
-    10-minute third-order master is well over a gigabyte. Padded to the full
-    mix length so it lines up with the stereo master and can be muxed against
-    picture; unstaged scenes and the SFX bed have no Ambisonic representation
-    and read as silence here.
+    Takes the very array the stereo decode used, so the file is the length of
+    the mix by construction and every scene sits where the mix puts it. The
+    earlier version re-stitched the per-scene beds here and got both wrong:
+    appended end to end they landed late in the timeline whenever a tail reached
+    into the next scene, and a two-scene corridor mix came out 1.98 s longer than
+    the stereo master.
+
+    Converted and written in blocks, because N3D to SN3D needs a scratch copy and
+    a 10-minute third-order master is well over a gigabyte. Unstaged scenes and
+    the SFX bed have no Ambisonic representation and read as silence.
     """
     n_sh = spatial_render.sh_channels(stage.order)
     scene = _first_stage(stage)
-    if scene is None:
+    if scene is None or bed.shape[0] != n_sh or bed.shape[1] == 0:
         return None
 
+    total = bed.shape[1]
     try:
         with (
             spatial_render.RoomSimulator(scene, sr, int(stage.order)) as sim,
@@ -200,18 +206,10 @@ def _write_ambisonic_master(path, scene_beds, stage, sr, total, spatial_render):
                 str(path), "w", samplerate=sr, channels=n_sh, subtype="PCM_24", format="WAV"
             ) as handle,
         ):
-            cursor = 0
-            for _scene_id, start_s, bed in scene_beds:
-                start = round(start_s * sr)
-                if start > cursor:
-                    handle.write(np.zeros((start - cursor, n_sh), dtype=np.float32))
-                    cursor = start
-                chunk = sim.to_sn3d(bed).T
-                handle.write(chunk)
-                cursor += chunk.shape[0]
-                if total > cursor:
-                    # Match the stereo master's length.
-                    handle.write(np.zeros((total - cursor, n_sh), dtype=np.float32))
+            for left in range(0, total, block):
+                # to_sn3d is a static per-channel scaling, so block boundaries
+                # cannot change the result.
+                handle.write(sim.to_sn3d(bed[:, left : left + block]).T)
     except Exception:
         path.unlink(missing_ok=True)
         return None
@@ -377,7 +375,6 @@ def build_mix(
     # and written back at the scene's timeline offset.
     scene_bounds = _scene_bounds(line_by_id, segments, durations)
     bed: np.ndarray | None = None
-    scene_beds: list[tuple[int, float, np.ndarray]] = []
     dialogue = np.zeros(total, dtype=np.float32)
 
     if spatial_on:
@@ -439,14 +436,14 @@ def build_mix(
             _place(tracks[(scene, speaker)], clip, pos - span[0], sample_rate=sr)
         dialogue = _highpass(dialogue, 80.0, sr)
         try:
-            bed, scene_beds, extra = _render_staged_scenes(
+            bed, extra = _render_staged_scenes(
                 stage, tracks, scene_bounds, sr, total, spatial_render
             )
         except spatial_render.SpatialUnavailable as exc:
             # Never lose lines to a renderer failure: fold the staged tracks back
             # into the centre and mix the project dry.
             warnings.append(f"spatial render failed ({exc}); mixed dry")
-            bed, scene_beds = None, []
+            bed = None
             for (scene, _speaker), buffer in tracks.items():
                 span = scene_bounds[scene]
                 _place(dialogue, buffer, span[0], sample_rate=sr)
@@ -532,7 +529,7 @@ def build_mix(
     ambisonic_path: str | None = None
     if bed is not None and stage is not None and stage.export_ambisonic:
         ambisonic_path = _write_ambisonic_master(
-            mix_dir / f"{name}_ambisonic.wav", scene_beds, stage, sr, total, spatial_render
+            mix_dir / f"{name}_ambisonic.wav", bed, stage, sr, spatial_render
         )
         if ambisonic_path is None:
             warnings.append("could not write the Ambisonic master")
