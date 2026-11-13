@@ -30,6 +30,7 @@ from .models import (
     SceneStage,
     StageActor,
     StageListener,
+    StagePath,
     StageProject,
     StageRoom,
 )
@@ -257,40 +258,187 @@ def default_stage_room(stage: StageProject | None) -> StageRoom:
     return stage.default_room if stage is not None else StageRoom()
 
 
+# Stage directions that imply the speaker moves. Matched against the
+# parenthetical/direction/emotion text the parser already extracted, in the
+# order below, so the first cue a speaker's lines carry wins.
+MOTION_CUES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("approach", ("approach", "closer", "steps closer", "coming closer", "leans in")),
+    ("retreat", ("retreat", "backs away", "steps back", "backing", "recoils")),
+    ("leave", ("leaves", "leaving", "at the door", "as he goes", "on his way out")),
+    ("enter", ("through the hatch", "at the hatch", "from the doorway", "enters", "comes in", "outside")),
+    ("pace", ("pacing", "paces", "walks the deck", "prowls", "circles")),
+)
+
+
+def _cue_of(texts: list[str]) -> str | None:
+    """The first motion cue a speaker's stage directions carry."""
+    blob = " ".join(text.lower() for text in texts if text)
+    for cue, needles in MOTION_CUES:
+        if any(needle in blob for needle in needles):
+            return cue
+    return None
+
+
+def _arc_slot(index: int, count: int, room: StageRoom) -> tuple[float, float]:
+    """Where a static speaker stands: evenly spread on a shallow arc."""
+    width, depth = room.dims_m[0], room.dims_m[1]
+    share = (index + 1) / (max(1, count) + 1)
+    return width * share, depth * (0.30 + 0.10 * (index % 2))
+
+
+def _towards(
+    from_point: tuple[float, float], towards: tuple[float, float], distance_m: float
+) -> tuple[float, float]:
+    """A point `distance_m` short of `towards`, on the line from `from_point`."""
+    dx, dy = towards[0] - from_point[0], towards[1] - from_point[1]
+    length = float(np.hypot(dx, dy))
+    if length <= 1e-6:
+        return from_point
+    ratio = max(0.0, length - distance_m) / length
+    return from_point[0] + dx * ratio, from_point[1] + dy * ratio
+
+
+def _door_on_front_wall(x: float, room: StageRoom) -> tuple[float, float]:
+    """The threshold: front wall is y = 0, clamped so the point stays inside."""
+    return float(np.clip(x, 0.15, room.dims_m[0] - 0.15)), 0.2
+
+
+def plan_path(
+    speaker: str,
+    cue: str,
+    slot: tuple[float, float],
+    listener: tuple[float, float, float],
+    room: StageRoom,
+    window: tuple[float, float],
+) -> tuple[StagePath, tuple[float, float]] | None:
+    """One speaker's move, and where they end up standing.
+
+    The resting position is the *end* of the move for everyone who arrives
+    somewhere, and the start for everyone who departs: a speaker who walks in
+    should be shown where they now are, not hovering at the door.
+
+    Returns None when the cue is unknown or the window is not a real span — a
+    scene without alignments gets no paths rather than invented timings.
+    """
+    if len(window) != 2:
+        return None  # speaker has not been aligned yet: no invented timing
+    t0, t1 = float(window[0]), float(window[1])
+    if t1 <= t0:
+        return None
+
+    # A negative "short of" distance lands beyond the slot: away from the
+    # listener, which is where a walk-in starts and a walk-off ends.
+    away = lambda distance: _towards(listener, slot, -distance)
+    if cue == "approach":
+        begin, end, rest = away(1.8), slot, slot
+    elif cue == "enter":
+        begin, end, rest = _door_on_front_wall(slot[0], room), slot, slot
+    elif cue == "retreat":
+        begin, end, rest = slot, away(1.6), slot
+    elif cue == "leave":
+        begin, end, rest = slot, _door_on_front_wall(slot[0], room), slot
+    elif cue == "pace":
+        width = room.dims_m[0]
+        begin = (float(np.clip(slot[0] - 0.8, 0.2, width - 0.2)), slot[1])
+        end = (float(np.clip(slot[0] + 0.8, 0.2, width - 0.2)), slot[1])
+        rest = slot
+    else:
+        return None
+
+    def key(time_s: float, point: tuple[float, float]):
+        # 2-D points here; the standing height is the same for every source.
+        return (
+            round(time_s, 3),
+            round(float(np.clip(point[0], 0.05, room.dims_m[0] - 0.05)), 2),
+            round(float(np.clip(point[1], 0.05, room.dims_m[1] - 0.05)), 2),
+            1.5,
+        )
+
+    path = StagePath(speaker=speaker, keys=[key(t0, begin), key(t1, end)])
+    return path, (float(rest[0]), float(rest[1]))
+
+
+def speaker_cues(lines: list[Any] | None, speakers: list[str]) -> dict[str, str]:
+    """Motion cue per speaker, read from their stage directions."""
+    if not lines:
+        return {}
+    cues: dict[str, str] = {}
+    for speaker in speakers:
+        texts = [
+            value
+            for line in lines
+            if getattr(line, "speaker", None) == speaker
+            for value in (
+                getattr(line, "direction", "") or "",
+                getattr(line, "parenthetical", "") or "",
+                getattr(line, "emotion", "") or "",
+            )
+        ]
+        cue = _cue_of(texts)
+        if cue:
+            cues[speaker] = cue
+    return cues
+
+
 def layout_scene(
-    stage: StageProject, scene_id: int, speakers: list[str]
+    stage: StageProject,
+    scene_id: int,
+    speakers: list[str],
+    *,
+    lines: list[Any] | None = None,
+    timing: dict[str, tuple[float, float]] | None = None,
 ) -> SceneStage:
     """A first-pass staging for a scene: cast spread on an arc, facing inward.
 
     Used when a scene is newly staged so the user always starts from something
     sensible instead of everything at the origin.
+
+    When `lines` (the scene's script lines) are supplied, each speaker's stage
+    directions are read for motion cues — "(approaching)", "(through the
+    hatch)", "(pacing)" — and a speaker who moves gets a two-key path over the
+    window in `timing` in which they actually speak. A mover's resting position
+    is where the move ends, so the board shows the resolved spot, not the start.
+    Without `lines` the layout is exactly the old geometric arc.
     """
     room = stage.default_room
-    depth = room.dims_m[1]
-    width = room.dims_m[0]
+    width, depth = room.dims_m[0], room.dims_m[1]
     listener = StageListener(position_m=(width / 2.0, depth * 0.82, 1.6), facing_deg=0.0)
 
+    chosen = speakers[:MAX_SOURCES]
+    cues = speaker_cues(lines, chosen)
+    windows = timing or {}
+
     actors: list[StageActor] = []
-    count = max(1, len(speakers))
-    for index, speaker in enumerate(speakers[:MAX_SOURCES]):
-        # Evenly spaced across the room width, on a shallow arc so nobody is
-        # exactly equidistant from everyone else.
-        share = (index + 1) / (count + 1)
-        x = width * share
-        y = depth * (0.30 + 0.10 * (index % 2))
-        # Look back at the listener.
-        dx = listener.position_m[0] - x
-        dy = listener.position_m[1] - y
-        # Stage azimuth: 0 faces -y, +90 faces +x.
-        facing = float(np.degrees(np.arctan2(dx, -dy)))
+    paths: list[StagePath] = []
+    for index, speaker in enumerate(chosen):
+        x, y = _arc_slot(index, len(chosen), room)
+        cue = cues.get(speaker)
+        rest: tuple[float, float] = (x, y)
+        path = None
+        if cue:
+            planned = plan_path(speaker, cue, (x, y), listener.position_m, room, windows.get(speaker, ()))
+            if planned is not None:
+                path, rest = planned
+        # Face the listener, except someone walking off: they speak where they
+        # are going, which is the whole point of staging the exit.
+        if path is not None and cue in ("retreat", "leave"):
+            travel = (path.keys[1][1] - path.keys[0][1], path.keys[1][2] - path.keys[0][2])
+            facing = float(np.degrees(np.arctan2(travel[0], -travel[1])))
+        else:
+            dx = listener.position_m[0] - rest[0]
+            dy = listener.position_m[1] - rest[1]
+            # Stage azimuth: 0 faces -y, +90 faces +x.
+            facing = float(np.degrees(np.arctan2(dx, -dy)))
         actors.append(
             StageActor(
                 speaker=speaker,
-                position_m=(round(x, 2), round(y, 2), 1.5),
+                position_m=(round(rest[0], 2), round(rest[1], 2), 1.5),
                 facing_deg=round(float(np.clip(facing, -180.0, 180.0)), 1),
             )
         )
-    return SceneStage(room=room, listener=listener, actors=actors)
+        if path is not None:
+            paths.append(path)
+    return SceneStage(room=room, listener=listener, actors=actors, paths=paths)
 
 
 def _f32p(array: np.ndarray):

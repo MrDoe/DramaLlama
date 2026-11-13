@@ -279,6 +279,36 @@ class ConfigUpdate(BaseModel):
     suno: dict[str, str] | None = None
 
 
+def _speaker_windows(
+    project, scene_id: int, speakers: list[str]
+) -> dict[str, tuple[float, float]]:
+    """When each speaker actually occupies the timeline in one scene.
+
+    Auto-staging needs this to place motion: "(approaching)" should walk the
+    speaker across the seconds they speak, not across the whole scene. Built
+    from the alignments, so a project that has not been rendered and aligned yet
+    yields no windows — and therefore no paths. An invented timing would be
+    worse than none, because the user would drag a move they cannot hear.
+    """
+    windows: dict[str, tuple[float, float]] = {}
+    for stem in project.stems:
+        if stem.scene != scene_id or stem.speaker not in speakers:
+            continue
+        alignment = project.alignments.get(stem.id)
+        if alignment is None:
+            continue
+        for cut in alignment.lines:
+            if not cut.enabled:
+                continue
+            start = float(cut.position_s or 0.0)
+            end = start + max(0.4, float(cut.end_s) - float(cut.start_s))
+            known = windows.get(stem.speaker)
+            windows[stem.speaker] = (
+                (start, end) if known is None else (min(known[0], start), max(known[1], end))
+            )
+    return windows
+
+
 def create_app(
     db_path: str | Path | None = None,
     projects_dir: str | Path | None = None,
@@ -1834,7 +1864,14 @@ def create_app(
             raise HTTPException(status_code=404, detail="scene not found")
         speakers = sorted({line.speaker for line in scene.lines})
         stage = project.stage or StageProject()
-        return spatial.layout_scene(stage, body.scene, speakers).model_dump(mode="json")
+        layout = spatial.layout_scene(
+            stage,
+            body.scene,
+            speakers,
+            lines=scene.lines,
+            timing=_speaker_windows(project, body.scene, speakers),
+        )
+        return layout.model_dump(mode="json")
 
     @app.post("/api/projects/{project_id}/stage/preview", status_code=202)
     def preview_stage(project_id: str, body: StageLayoutRequest) -> dict[str, Any]:

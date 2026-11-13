@@ -441,3 +441,115 @@ def test_stage_enabled_without_library_mixes_dry_with_a_warning(tmp_path, monkey
 
 def test_enabled_stage_with_no_staged_scenes_is_not_enabled():
     assert spatial.is_enabled(StageProject(enabled=True, scenes={})) is False
+
+
+# --------------------------------------------------------- cue-driven layout
+
+
+def _lines(*pairs: tuple[str, str]) -> list[Line]:
+    return [
+        Line(id=f"l{index}", scene=1, speaker=speaker, text="Line.", direction=direction)
+        for index, (speaker, direction) in enumerate(pairs)
+    ]
+
+
+def test_layout_ignores_stage_directions_when_none_are_given():
+    """The old geometric arc is still what a scriptless caller gets."""
+    stage = spatial.layout_scene(StageProject(), 1, ["A", "B"])
+    assert stage.paths == []
+    # Thirds across a 6 m room, alternating depth: the arc from before cues.
+    assert [actor.position_m for actor in stage.actors] == [(2.0, 1.5, 1.5), (4.0, 2.0, 1.5)]
+
+
+def test_layout_makes_no_paths_without_a_timeline():
+    """No alignment yet means no idea when anyone speaks, so nothing moves."""
+    lines = _lines(("MERIAN", "through the hatch"))
+    stage = spatial.layout_scene(StageProject(), 1, ["MERIAN"], lines=lines, timing={})
+    assert stage.paths == []
+    assert stage.actors[0].position_m == (3.0, 1.5, 1.5)
+
+
+def test_entering_speaker_starts_at_the_door_and_rests_inside():
+    room = StageRoom(dims_m=(6.0, 5.0, 3.0))
+    stage = spatial.layout_scene(
+        StageProject(default_room=room),
+        1,
+        ["MERIAN"],
+        lines=_lines(("MERIAN", "through the hatch, muffled")),
+        timing={"MERIAN": (6.0, 11.5)},
+    )
+    path = stage.paths[0]
+    # Alone in a 6 m room the slot is dead centre, so the threshold is too.
+    assert (path.keys[0][1], path.keys[0][2]) == pytest.approx((3.0, 0.2), abs=0.01)
+    assert path.keys[0][0] == 6.0 and path.keys[1][0] == 11.5
+    # The dot on the board is where they end up, not where they came from.
+    assert stage.actors[0].position_m == pytest.approx((3.0, 1.5, 1.5), abs=0.01)
+
+
+def test_approaching_speaker_ends_where_they_are_placed():
+    stage = spatial.layout_scene(
+        StageProject(),
+        1,
+        ["MERIAN", "VOGEL"],
+        lines=_lines(("MERIAN", "closer now, tender")),
+        timing={"MERIAN": (2.0, 9.0)},
+    )
+    path = stage.paths[0]
+    start, end = path.keys[0], path.keys[1]
+    assert (end[1], end[2]) == pytest.approx(stage.actors[0].position_m[:2], abs=0.02)
+    # Walks in from farther back: the first key is deeper into the room.
+    assert (start[1] - 3.0) ** 2 + (start[2] - 4.1) ** 2 > (end[1] - 3.0) ** 2 + (end[2] - 4.1) ** 2
+
+
+def test_leaving_speaker_faces_the_exit_not_the_listener():
+    stage = spatial.layout_scene(
+        StageProject(),
+        1,
+        ["SANDT", "VOGEL"],
+        lines=_lines(("SANDT", "as he leaves")),
+        timing={"SANDT": (1.0, 4.0)},
+    )
+    actor = next(actor for actor in stage.actors if actor.speaker == "SANDT")
+    path = next(path for path in stage.paths if path.speaker == "SANDT")
+    travel_x = path.keys[1][1] - path.keys[0][1]
+    travel_y = path.keys[1][2] - path.keys[0][2]
+    expected = float(np.degrees(np.arctan2(travel_x, -travel_y)))
+    assert actor.facing_deg == pytest.approx(expected, abs=0.2)
+
+
+def test_pacing_speaker_traverses_the_room_width():
+    room = StageRoom(dims_m=(6.0, 5.0, 3.0))
+    stage = spatial.layout_scene(
+        StageProject(default_room=room),
+        1,
+        ["SANDT"],
+        lines=_lines(("SANDT", "pacing")),
+        timing={"SANDT": (0.0, 6.0)},
+    )
+    first, last = stage.paths[0].keys
+    assert first[1] < last[1] and first[2] == pytest.approx(last[2])
+
+
+def test_motion_cue_keywords_are_matched_case_insensitively():
+    cues = spatial.speaker_cues(_lines(("A", "APPROACHING the console")), ["A"])
+    assert cues == {"A": "approach"}
+
+
+def test_a_plain_direction_carries_no_motion():
+    assert spatial.speaker_cues(_lines(("A", "whispering")) , ["A"]) == {}
+
+
+def test_path_keys_stay_inside_a_small_room():
+    room = StageRoom(dims_m=(2.0, 2.0, 2.2))
+    stage = spatial.layout_scene(
+        StageProject(default_room=room),
+        1,
+        ["A", "B"],
+        lines=_lines(("A", "pacing"), ("B", "through the doorway")),
+        timing={"A": (0.0, 3.0), "B": (0.0, 3.0)},
+    )
+    for path in stage.paths:
+        for _t, x, y, z in path.keys:
+            assert 0.0 <= x <= room.dims_m[0]
+            assert 0.0 <= y <= room.dims_m[1]
+            assert 0.0 <= z <= room.dims_m[2]
