@@ -837,3 +837,12 @@ declare `c_void_p` for every handle, and bench keeps its numpy buffers alive
 instead of passing a temporary's pointer. Reproduced and verified in an
 ubuntu:22.04 container against the CI-built library; v0.3.7 restores the
 native renderer asset.
+
+## [2026-11-13] ci | Fixing the segfault uncovered a missing ffmpeg
+
+With the ctypes crash gone, the spatial job's verify step finally reached
+`pytest tests/test_spatial.py`, where five mix tests failed with
+`FileNotFoundError: ffmpeg`. `build_mix` always loudness-normalises through the
+ffmpeg CLI, and the spatial job's apt list was only cmake + BLAS/LAPACKE.
+Installing ffmpeg fixes it; a `workflow_dispatch` run on master went green
+(spatial succeeded, release skipped as expected).
