@@ -356,6 +356,7 @@ export function VoiceStudio({
   onSaveReference,
   onDesign,
   onUpload,
+  onDirection,
 }: {
   project: Project;
   speaker: string;
@@ -372,9 +373,10 @@ export function VoiceStudio({
   ) => Promise<void>;
   onDesign: (
     speaker: string,
-    opts?: { name?: string; seed?: number },
+    opts?: { name?: string; seed?: number; description?: string },
   ) => void;
   onUpload: (speaker: string, file: File, name?: string) => void;
+  onDirection: (speaker: string, text: string) => Promise<void>;
 }) {
   const character = project.script.characters[speaker];
   const engine = projectEngine(project);
@@ -413,6 +415,31 @@ export function VoiceStudio({
     null,
   );
   const [now, setNow] = useState(() => Date.now());
+  // "Design from description" sends exactly this text to the TTS engine, so the
+  // panel must expose it. A deterministic parse learns names and lines, never
+  // voices, and without this field the button would design a generic narrator
+  // for everybody.
+  const [direction, setDirection] = useState(character?.description ?? "");
+  const [directionBusy, setDirectionBusy] = useState(false);
+  const directionDirty = direction.trim() !== (character?.description ?? "").trim();
+
+  useEffect(() => {
+    setDirection(character?.description ?? "");
+  }, [speaker, character?.description]);
+
+  async function saveDirection() {
+    setDirectionBusy(true);
+    try {
+      await onDirection(speaker, direction.trim());
+      setNotice("Voice direction saved. The next design uses it.");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Could not save the voice direction",
+      );
+    } finally {
+      setDirectionBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!designBusy) return;
@@ -541,6 +568,29 @@ export function VoiceStudio({
                   : "Manage this character's reference voices."}
             </p>
           </div>
+        </div>
+
+        <div className="voice-direction">
+          <label className="voice-field">
+            <span>Voice direction</span>
+            <textarea
+              className="input voice-transcript"
+              rows={2}
+              value={direction}
+              onChange={(event) => setDirection(event.target.value)}
+              placeholder="Woman in her fifties, gravelly, clipped military diction, barely-contained fear"
+              spellCheck={false}
+              aria-label={`Voice direction for ${character?.name ?? speaker}`}
+            />
+          </label>
+          <button
+            type="button"
+            className="button button-secondary button-sm"
+            onClick={() => void saveDirection()}
+            disabled={!directionDirty || directionBusy}
+          >
+            {directionBusy ? "Saving…" : "Save direction"}
+          </button>
         </div>
 
         <div className="voice-dialog-body">
@@ -878,10 +928,16 @@ export function VoiceStudio({
                 <button
                   type="button"
                   className="button button-ghost button-sm"
-                  onClick={() => {
+                  onClick={async () => {
+                    // Persist first, and hand the design the text on screen:
+                    // project state has not caught up with the PATCH yet, and a
+                    // design that used the previous description would silently
+                    // produce the wrong voice.
+                    if (directionDirty) await saveDirection();
                     onDesign(speaker, {
                       name: `Voice ${references.length + 1}`,
                       seed: 42 + references.length,
+                      description: direction.trim(),
                     });
                     setNotice("Voice design started; it will appear in the list when ready.");
                   }}

@@ -3355,6 +3355,19 @@ body.mt-fs-active .page {
   line-height: 1.5;
 }
 
+/* The direction is the input to "Design from description", so it lives with the
+   panel header where it can be read before the button is pressed. */
+.voice-direction {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px 18px 0;
+}
+
+.voice-direction .voice-field {
+  flex: 1;
+}
+
 .voice-field {
   display: flex;
   flex-direction: column;

@@ -11,6 +11,7 @@ export function VoicesBoard({
   onSaveReference,
   onDesign,
   onUpload,
+  onDirection,
 }: {
   project: Project;
   jobs: Record<string, Job>;
@@ -28,9 +29,10 @@ export function VoicesBoard({
   ) => Promise<void>;
   onDesign: (
     speaker: string,
-    opts?: { name?: string; seed?: number },
+    opts?: { name?: string; seed?: number; description?: string },
   ) => void;
   onUpload: (speaker: string, file: File, name?: string) => void;
+  onDirection: (speaker: string, text: string) => Promise<void>;
 }) {
   const lines = project.script.scenes.flatMap((scene) => scene.lines);
   const characters = Object.values(project.script.characters).sort((a, b) => {
@@ -99,6 +101,7 @@ export function VoicesBoard({
             onSaveReference={onSaveReference}
             onDesign={onDesign}
             onUpload={onUpload}
+            onDirection={onDirection}
           />
         ) : (
           <section className="panel voice-page-panel">

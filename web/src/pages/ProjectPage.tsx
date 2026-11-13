@@ -752,7 +752,10 @@ function CastPanel({
 }: {
   project: Project;
   jobs: Record<string, Job>;
-  onDesign: (speaker: string, opts?: { name?: string; seed?: number }) => void;
+  onDesign: (
+    speaker: string,
+    opts?: { name?: string; seed?: number; description?: string },
+  ) => void;
   onUpload: (speaker: string, file: File, name?: string) => void;
   onOpenVoices: (speaker: string) => void;
 }) {
@@ -2489,10 +2492,16 @@ export function ProjectPage() {
   );
 
   const designVoice = useCallback(
-    async (speaker: string, opts?: { name?: string; seed?: number }) => {
+    async (
+      speaker: string,
+      opts?: { name?: string; seed?: number; description?: string },
+    ) => {
       if (!project) return;
       const character = project.script.characters[speaker];
       if (!character) return;
+      // Prefer what the panel is showing over the copy in project state: the
+      // PATCH that saved it may not have round-tripped yet.
+      const description = opts?.description ?? character.description ?? "";
       const lines = project.script.scenes
         .flatMap((scene) => scene.lines)
         .filter((line) => line.speaker === speaker)
@@ -2506,8 +2515,8 @@ export function ProjectPage() {
         const job = await api.designReference(project.id, speaker, {
           ref_text: refText,
           ref_instruction:
-            (character.description
-              ? `${character.description} `
+            (description
+              ? `${description} `
               : "") +
             "Speak in the character's baseline mood, clearly and without music or room noise.",
           cfg_scale: 4.0,
@@ -2569,6 +2578,17 @@ export function ProjectPage() {
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Could not upload voice sample");
       }
+    },
+    [project],
+  );
+
+  const saveVoiceDirection = useCallback(
+    async (speaker: string, text: string) => {
+      if (!project) return;
+      const updated = await api.updateCharacter(project.id, speaker, {
+        description: text,
+      });
+      setProject(updated);
     },
     [project],
   );
@@ -2995,6 +3015,7 @@ export function ProjectPage() {
           onSaveReference={saveVoiceReference}
           onDesign={designVoice}
           onUpload={(speaker, file, name) => void uploadVoice(speaker, file, name)}
+          onDirection={(speaker, text) => saveVoiceDirection(speaker, text)}
         />
       ) : activeStep === "cut" ? (
         <MultiTrackEditor
