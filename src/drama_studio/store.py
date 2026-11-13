@@ -95,12 +95,15 @@ class ProjectStore:
         # (Legacy Stem.engine / Character.engine keys from pre-project-level
         # projects are ignored by pydantic's default extra=ignore.)
         from .models import normalize_references
-        from .cuts import normalize_alignment
+        from .cuts import normalize_alignment, repair_per_stem_positions
 
         for stem in project.stems:
             alignment = project.alignments.get(stem.id)
             if alignment is not None:
                 normalize_alignment(alignment, stem.takes)
+        # Builds before the cut-position fix wrote each stem's own cursor, which
+        # put every scene's first line at t=0; clear them so script order rules.
+        repair_per_stem_positions(project)
         # A reference that only exists as ref_file gets an entry here so the
         # Stems step can select it by name. Not saved: like the cut stamping
         # above, this repairs the in-memory view and lands on the next save.

@@ -305,32 +305,14 @@ def _speaker_windows(
     """
     from copy import deepcopy
 
-    from .cuts import layout_script_order
+    from .cuts import layout_script_order, repair_per_stem_positions
 
     placed = deepcopy(project)
+    # Stem-local cursors are not positions anybody chose: repair clears them, and
+    # the layout then fills in the script order the mixer places with.
+    repair_per_stem_positions(placed)
+    layout_script_order(placed, overwrite_positions=False)
     script_lines = {line.id: line for line in placed.script.iter_lines()}
-
-    def in_scene(alignment) -> bool:
-        for cut in alignment.lines:
-            line = script_lines.get(cut.line_id)
-            if line is not None and line.scene == scene_id:
-                return True
-        return False
-
-    # Are the stored positions a shared timeline, or each stem's own cursor?
-    # The aligner counts from zero inside a stem, so two speakers of one scene
-    # both opening at 0.0 means those numbers cannot be placed as they stand —
-    # and the mix would overlap them too, which it does not, because it lays the
-    # script out itself. Rebuild from script order in that case; keep a cut
-    # sheet the user actually arranged when it is already a global timeline.
-    at_zero = sum(
-        1
-        for alignment in placed.alignments.values()
-        if in_scene(alignment)
-        and alignment.lines
-        and float(alignment.lines[0].position_s or 0.0) == 0.0
-    )
-    layout_script_order(placed, overwrite_positions=at_zero > 1)
 
     # Global start and end of every enabled segment in this scene.
     spans: list[tuple[str, float, float]] = []

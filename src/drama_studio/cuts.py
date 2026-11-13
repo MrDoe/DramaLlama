@@ -170,6 +170,53 @@ def pick_selected_take(takes: list[Take], selected_take_id: str | None) -> Take 
     return takes[0]
 
 
+def positions_look_per_stem(project) -> bool:
+    """True when stored cut positions are each stem's own clock, not one timeline.
+
+    The aligner and the Suno estimator used to seed a cursor at 0 inside the
+    stem they were writing, so the first line of *every* scene landed at t=0 and
+    `build_mix` played the scenes on top of each other. Two scenes opening at the
+    same instant cannot be a real placement — scenes follow one another — so the
+    pattern identifies the legacy data without a schema version. User-authored
+    positions never look like this, because a deliberate freeform overlap of two
+    whole scenes is not a thing people do by dragging clips.
+    """
+    openings: set[int] = set()
+    by_id = {line.id: line for line in project.script.iter_lines()}
+    for alignment in project.alignments.values():
+        starts = [
+            float(cut.position_s)
+            for cut in alignment.lines
+            if cut.enabled and cut.position_s is not None
+        ]
+        if not starts or min(starts) > 0.005:
+            continue
+        for cut in alignment.lines:
+            line = by_id.get(cut.line_id)
+            if line is not None:
+                openings.add(line.scene)
+                break
+    return len(openings) > 1
+
+
+def repair_per_stem_positions(project) -> bool:
+    """Blank out stored positions that are really per-stem cursors.
+
+    Returns True when it changed anything. `position_s = None` is the documented
+    "derive script order" marker, so clearing them hands the decision back to
+    :func:`layout_script_order` everywhere at once — mix, Cut board, staging —
+    instead of teaching each consumer to spot the same legacy pattern. Like the
+    other repairs in `ProjectStore.get`, this fixes the in-memory view and lands
+    on the next save.
+    """
+    if not positions_look_per_stem(project):
+        return False
+    for alignment in project.alignments.values():
+        for cut in alignment.lines:
+            cut.position_s = None
+    return True
+
+
 def layout_script_order(
     project,
     *,

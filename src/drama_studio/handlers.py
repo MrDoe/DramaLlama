@@ -733,7 +733,6 @@ def _estimate_alignment(
     aligned: list[AlignedLine] = []
     for line, weight in zip(lines, weights, strict=False):
         span = duration_s * weight / total
-        pos = round(cursor, 2)
         aligned.append(
             AlignedLine(
                 id=line.id,
@@ -741,7 +740,10 @@ def _estimate_alignment(
                 take_id=take_id,
                 start_s=round(cursor, 2),
                 end_s=round(cursor + span, 2),
-                position_s=pos,
+                # None, not `cursor`: this is a slice of one take, and the take
+                # is only one speaker's share of one scene. A position here would
+                # be read as a slot on the project timeline and stack the scenes.
+                position_s=None,
                 confidence=0.05,
                 fallback=True,
             )

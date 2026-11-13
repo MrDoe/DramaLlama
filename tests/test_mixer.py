@@ -47,6 +47,75 @@ def make_project(tmp_path) -> tuple[Project, np.ndarray]:
     return project, np.zeros(24000, dtype=np.float32)
 
 
+def test_legacy_per_stem_positions_do_not_stack_the_scenes(tmp_path):
+    """A cut sheet that opens two scenes at t=0 is a bug, not a placement.
+
+    The aligner used to write a cursor that started at 0 inside each stem, so
+    every scene's first line landed at the top of the timeline and the mix played
+    the whole drama at once. The positions are stored, so `build_mix` has to
+    notice the pattern and lay the script out in order.
+    """
+    from drama_studio.models import AlignedLine, AlignmentResult
+
+    def tone(seconds: float, level: float) -> np.ndarray:
+        n = int(seconds * 24000)
+        return (level * np.sin(2 * np.pi * 220 * np.arange(n) / 24000)).astype(np.float32)
+
+    script = Script(
+        title="Stacked",
+        language="en",
+        characters={"A": Character(id="A", name="A"), "B": Character(id="B", name="B")},
+        scenes=[
+            Scene(id=1, heading="SCENE 1", lines=[Line(id="s1-01", scene=1, speaker="A", text="First.")]),
+            Scene(id=2, heading="SCENE 2", lines=[Line(id="s2-01", scene=2, speaker="B", text="Second.")]),
+        ],
+    )
+    project = Project(
+        id="stacked",
+        title="Stacked",
+        language="en",
+        raw_script="",
+        script=script,
+        settings=ProjectSettings(pause_ms=100, scene_gap_ms=200),
+    )
+    # Both stems open at 0.0 — the legacy signature.
+    project.alignments = {
+        "s1-a": AlignmentResult(
+            stem_id="s1-a",
+            aligner="whisper-large-v3",
+            lines=[AlignedLine(id="s1-01", line_id="s1-01", start_s=0.0, end_s=1.0, position_s=0.0)],
+        ),
+        "s2-b": AlignmentResult(
+            stem_id="s2-b",
+            aligner="whisper-large-v3",
+            lines=[AlignedLine(id="s2-01", line_id="s2-01", start_s=0.0, end_s=1.0, position_s=0.0)],
+        ),
+    }
+    directory = tmp_path / "stacked"
+    (directory / "lines").mkdir(parents=True)
+    # Scene 1 is silent, scene 2 is a tone. Stacked, the tone lands at t=0;
+    # sequential, it only appears after the gap. Comparing windows survives the
+    # loudness normaliser, absolute levels do not.
+    sf.write(directory / "lines" / "s1-01.wav", np.zeros(24000, dtype=np.float32), 24000)
+    sf.write(directory / "lines" / "s2-01.wav", tone(1.0, 0.9), 24000)
+
+    result = build_mix(project, directory, lambda _: None)
+    master, sr = sf.read(str(directory / result.file), dtype="float32")
+    if master.ndim > 1:
+        master = master.mean(axis=1)
+
+    def rms(a: int, b: int) -> float:
+        return float(np.sqrt((master[int(a * sr) : int(b * sr)] ** 2).mean()))
+
+    peak = max(rms(0.0, 0.5), rms(1.5, 2.0), 1e-9)
+    # The tone must not be at the top of the timeline, where scene 1 sits.
+    assert rms(0.1, 0.9) < 0.05 * peak, "scene 2 played on top of scene 1"
+    # One second of scene 1, then the pause and the scene gap, then scene 2.
+    start_2 = 1.0 + project.settings.pause_ms / 1000 + project.settings.scene_gap_ms / 1000
+    assert rms(start_2 + 0.1, start_2 + 0.9) > 0.5 * peak, "scene 2 never arrived"
+    assert result.duration_s > start_2
+
+
 def test_build_mix_without_cues(tmp_path):
     project, _ = make_project(tmp_path)
     result = build_mix(project, tmp_path / "mix-test", lambda _: None)

@@ -239,22 +239,27 @@ def build_mix(
     # at 0 (overlap). Derive the correct global script-order cursor here:
     # Viktoria 1, Andreas 1, Grandmother 1, Viktoria 2, etc.
     _script_positions: dict[str, float] = {}
-    if project.alignments and any(
-        seg.position_s is None
-        for alignment in project.alignments.values()
-        for seg in alignment.lines
-    ):
-        from .cuts import layout_script_order
+    if project.alignments:
+        from .cuts import layout_script_order, repair_per_stem_positions
 
-        # Work on a copy to avoid mutating the stored project mid-mix.
+        # A cut sheet whose positions are per-stem cursors would stack the scenes,
+        # so repair the view first: `None` means script order, and that is what the
+        # legacy numbers were standing in for.
         import copy
 
-        _project_copy = copy.deepcopy(project)
-        layout_script_order(_project_copy, overwrite_positions=False)
-        for alignment in _project_copy.alignments.values():
-            for seg in alignment.lines:
-                if seg.position_s is not None:
-                    _script_positions.setdefault(seg.line_id, seg.position_s)
+        _project_view = copy.deepcopy(project)
+        _repaired = repair_per_stem_positions(_project_view)
+        if _repaired or any(
+            seg.position_s is None
+            for alignment in _project_view.alignments.values()
+            for seg in alignment.lines
+        ):
+            layout_script_order(_project_view, overwrite_positions=False)
+            for alignment in _project_view.alignments.values():
+                for seg in alignment.lines:
+                    if seg.position_s is not None:
+                        _script_positions.setdefault(seg.line_id, seg.position_s)
+        project = _project_view
 
     line_starts: dict[str, float] = {}
     scene_end: dict[int, float] = {}

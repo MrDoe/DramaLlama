@@ -87,8 +87,6 @@ class WhisperAligner:
 
         out_dir = Path(output_dir) / "lines"
         aligned: list[AlignedLine] = []
-        cursor = 0.0
-        PAUSE = 0.5
         env = envelope(samples, sample_rate)
         floor = speech_floor(env)
         duration_s = samples.size / float(sample_rate)
@@ -111,20 +109,22 @@ class WhisperAligner:
             )
             segment = samples[int(head_s * sample_rate) : int(tail_s * sample_rate)]
             write_mono(out_dir / f"{_safe(line.id)}.wav", segment, sample_rate)
-            dur = max(0.0, tail_s - head_s)
-            pos = round(cursor, 3)
+            # `position_s` stays None on purpose. It is a slot on the *project*
+            # timeline, and this method only knows the timeline inside one stem:
+            # a cursor seeded at 0 here lands every scene's first line at t=0, and
+            # `build_mix` then plays all five scenes at once. The documented
+            # contract (see `cuts.stamp_take_ids`) is None = "derive script order".
             aligned.append(
                 AlignedLine(
                     id=line.id,
                     line_id=line.id,
                     start_s=head_s,
                     end_s=tail_s,
-                    position_s=pos,
+                    position_s=None,
                     confidence=round(float(conf), 3),
                     fallback=float(conf) < 0.8,
                 )
             )
-            cursor = pos + dur + PAUSE
         return AlignmentResult(
             stem_id=stem_id or Path(stem_path).stem,
             lines=aligned,
