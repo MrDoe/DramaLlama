@@ -536,3 +536,88 @@ def test_api_render_passes_voice_params(tmp_path):
     payload = response.json()["payload"]
     assert payload["ref_voice_id"] == "raspy"
     assert payload["suno_weirdness"] == 10
+
+
+def test_unnamed_design_still_registers_the_voice(tmp_path):
+    """A name-less REST design must not leave the panel offering the old voice.
+
+    Writing only `ref_file` used to swap the audio the renders use while the
+    Voices list kept showing the previous reference as if it were current.
+    """
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Test", "en", SCRIPT)
+    character = project.script.characters["MARA"]
+    character.references = [
+        RefVoice(id="voice-1", name="Voice 1", file="refs/mara-voice-1.wav", source="designed")
+    ]
+    store.save(project)
+    import unittest.mock as mock
+
+    with mock.patch.object(handler_module, "_STORE", store), mock.patch.object(
+        handler_module, "_MANAGER", FakeManager(FakeEngine())
+    ), mock.patch.object(handler_module, "_require_gpu", lambda name: None):
+        queue = JobQueue(tmp_path / "jobs.sqlite3")
+        job = queue.enqueue(
+            "reference.design",
+            {
+                "project_id": project.id,
+                "speaker": "MARA",
+                "ref_text": "You're late.",
+                "ref_instruction": "Cold.",
+            },
+        )
+        Worker(queue, {"reference.design": handler_module.design_reference}, worker_id="t").run_once()
+        finished = queue.get(job.id)
+        assert finished.status == "succeeded", finished.error
+
+    updated = store.get(project.id)
+    character = updated.script.characters["MARA"]
+    assert [item.name for item in character.references] == ["Voice 1", "Voice 2"]
+    assert character.ref_file in {item.file for item in character.references}
+
+
+def test_design_keeps_an_edit_made_while_it_was_running(tmp_path):
+    """A voice direction saved during a design must not be reverted by it.
+
+    Seen in the browser: four directions were typed into the Voices panel, three
+    vanished. The job had loaded project.json before the save landed and wrote
+    its own stale copy back when the GPU finished.
+    """
+    import unittest.mock as mock
+
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Test", "en", SCRIPT)
+    project_id = project.id
+
+    class MidEditEngine(FakeEngine):
+        """Applies a user edit while the engine is busy, as the API would."""
+
+        def design_reference(self, request):
+            result = super().design_reference(request)
+            during = store.get(project_id)
+            during.script.characters["MARA"].description = "Low, gravelly, afraid"
+            store.save(during)
+            return result
+
+    with mock.patch.object(handler_module, "_STORE", store), mock.patch.object(
+        handler_module, "_MANAGER", FakeManager(MidEditEngine())
+    ), mock.patch.object(handler_module, "_require_gpu", lambda name: None):
+        queue = JobQueue(tmp_path / "jobs.sqlite3")
+        job = queue.enqueue(
+            "reference.design",
+            {
+                "project_id": project_id,
+                "speaker": "MARA",
+                "ref_text": "You're late.",
+                "ref_instruction": "Cold.",
+                "name": "Voice 2",
+            },
+        )
+        Worker(queue, {"reference.design": handler_module.design_reference}, worker_id="t").run_once()
+        finished = queue.get(job.id)
+        assert finished.status == "succeeded", finished.error
+
+    final = store.get(project_id)
+    character = final.script.characters["MARA"]
+    assert character.description == "Low, gravelly, afraid"
+    assert character.ref_file in {item.file for item in character.references}

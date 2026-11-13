@@ -208,6 +208,47 @@ def _resolve_reference(
     return None
 
 
+def _save_job_result(
+    project: Project, *, stem_id: str | None = None, alignment_key: str | None = None
+) -> Project:
+    """Merge this job's work into the current file instead of replacing it.
+
+    A stem render runs for minutes. Writing back the copy it loaded at the start
+    silently reverts anything the user did meanwhile, because project.json is
+    one file and the last writer wins. Only the rendered stem, and the alignment
+    this job actually produced, are taken from our copy.
+    """
+    fresh = _load_project(project.id)
+    if stem_id is not None:
+        mine = next((item for item in project.stems if item.id == stem_id), None)
+        if mine is not None:
+            for index, item in enumerate(fresh.stems):
+                if item.id == stem_id:
+                    fresh.stems[index] = mine
+                    break
+    if alignment_key is not None and alignment_key in project.alignments:
+        fresh.alignments[alignment_key] = project.alignments[alignment_key]
+    fresh.mix_stale = project.mix_stale
+    return _STORE.save(fresh)
+
+
+def _save_character(project_id: str, speaker: str, mutate) -> Project:
+    """Apply a character-scoped change to a freshly loaded project, then save.
+
+    A design job sits on the GPU for a minute or two holding the project copy it
+    loaded at the start. Writing *that* back discards whatever the user changed
+    through the API in the meantime — a voice direction, another character's
+    voice — because project.json is a single file and the last writer wins.
+    Re-loading and replaying only this speaker's character keeps their edits.
+    Observed in the browser: three of four voice directions vanished this way.
+    """
+    fresh = _load_project(project_id)
+    character = fresh.script.characters.get(speaker)
+    if character is not None:
+        mutate(character)
+    return _STORE.save(fresh)
+
+
 def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
     payload = job.payload
     project_id = payload["project_id"]
@@ -226,19 +267,27 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
 
     directory = _STORE.project_dir(project.id)
     ref_name = (payload.get("name") or "").strip()
+    explicit_name = bool(ref_name)
+    if not ref_name:
+        # An unnamed design still has to appear in the reference list. Setting
+        # `ref_file` alone leaves the Voices panel offering the previous voice
+        # while every render, and the next mix, uses the new one.
+        ref_name = f"Voice {len(character.references) + 1}"
     speaker_slug = speaker.lower().replace(" ", "_")
-    if ref_name:
-        ref_id = slugify(ref_name, limit=32) or speaker_slug
-        existing_ids = {item.id for item in character.references}
-        suffix = 2
-        base_id = ref_id
-        while ref_id in existing_ids:
-            ref_id = f"{base_id}-{suffix}"
-            suffix += 1
-        output = directory / "refs" / f"{speaker_slug}-{ref_id}.wav"
-    else:
-        ref_id = ""
-        output = directory / "refs" / f"{speaker_slug}.wav"
+    ref_id = slugify(ref_name, limit=32) or speaker_slug
+    existing_ids = {item.id for item in character.references}
+    suffix = 2
+    base_id = ref_id
+    while ref_id in existing_ids:
+        ref_id = f"{base_id}-{suffix}"
+        suffix += 1
+    # A name-less call keeps the historic single-slot filename, so re-designing
+    # it stays a replace rather than a pile-up of unused files.
+    output = (
+        directory / "refs" / f"{speaker_slug}-{ref_id}.wav"
+        if explicit_name
+        else directory / "refs" / f"{speaker_slug}.wav"
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg_value = payload.get("cfg_scale")
     seed_value = payload.get("seed")
@@ -265,18 +314,31 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
     ctx.progress(0.12, f"designing reference for {speaker}")
     result = engine.design_reference(request)
     ctx.progress(0.95, "saving reference")
-    character.ref_file = str(output.relative_to(directory))
-    character.f0_hz = result.f0_hz
-    if ref_name:
-        character.references = [
-            item for item in character.references if item.id != ref_id
+    relative = str(output.relative_to(directory))
+    # What the payload asked for, applied to whoever is in the file now.
+    wanted_text = character.ref_text
+    wanted_instruction = character.ref_instruction
+
+    def apply(target) -> None:
+        if wanted_text:
+            target.ref_text = wanted_text
+        if wanted_instruction:
+            target.ref_instruction = wanted_instruction
+        target.ref_file = relative
+        target.f0_hz = result.f0_hz
+        # Registered whether or not the caller named it: the WAV the engine
+        # wrote must be selectable, or the panel and the mix disagree.
+        target.references = [
+            item
+            for item in target.references
+            if item.id != ref_id and str(item.file) != relative
         ] + [
             RefVoice(
                 id=ref_id,
                 name=ref_name,
-                file=str(output.relative_to(directory)),
-                ref_text=character.ref_text,
-                ref_instruction=character.ref_instruction,
+                file=relative,
+                ref_text=target.ref_text,
+                ref_instruction=target.ref_instruction,
                 f0_hz=result.f0_hz,
                 f0_range_hz=result.f0_range_hz,
                 source="designed",
@@ -285,7 +347,9 @@ def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
                 created_at=utcnow(),
             )
         ]
-    _STORE.save(project)
+
+    fresh = _save_character(project_id, speaker, apply)
+    character = fresh.script.characters.get(speaker) or character
     ctx.progress(1.0, "reference ready")
     return {
         "speaker": speaker,
@@ -395,17 +459,24 @@ def generate_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
         warnings=prepared.warnings,
         created_at=utcnow(),
     )
-    character.references = [
-        item for item in character.references if item.id != ref_id
-    ] + [entry]
+    decided: dict[str, bool] = {}
 
-    is_default = bool(payload.get("make_default")) or not character.ref_file
-    if is_default:
-        character.ref_file = relative
-        character.ref_text = prepared.ref_text
-        character.ref_instruction = None
-        character.f0_hz = prepared.f0_hz
-    _STORE.save(project)
+    def apply(target) -> None:
+        target.references = [
+            item for item in target.references if item.id != ref_id
+        ] + [entry]
+        # Default when asked, or when this character has no voice yet — decided
+        # against the file as it is now, not as it looked before Whisper ran.
+        is_default = bool(payload.get("make_default")) or not target.ref_file
+        decided["is_default"] = is_default
+        if is_default:
+            target.ref_file = relative
+            target.ref_text = prepared.ref_text
+            target.ref_instruction = None
+            target.f0_hz = prepared.f0_hz
+
+    _save_character(payload["project_id"], speaker, apply)
+    is_default = decided.get("is_default", False)
     ctx.progress(1.0, "reference ready")
     return {
         "speaker": speaker,
@@ -594,7 +665,7 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     if selected is not None:
         _remap_removed_cuts(existing_alignment, removed, selected, directory)
     project.mix_stale = True
-    _STORE.save(project)
+    _save_job_result(project, stem_id=stem.id)
 
     alignment = None
     if bool(payload.get("align", True)) and selected is not None:
@@ -616,7 +687,7 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             seed_positions(alignment)
             project.alignments[stem.id] = alignment
             project.mix_stale = True
-            _STORE.save(project)
+            _save_job_result(project, stem_id=stem.id, alignment_key=stem.id)
         elif lines:
             ctx.progress(0.78, "aligning stem with Whisper")
             aligner = WhisperAligner(language=project.language)
@@ -634,7 +705,7 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             seed_positions(alignment)
             project.alignments[stem.id] = alignment
             project.mix_stale = True
-            _STORE.save(project)
+            _save_job_result(project, stem_id=stem.id, alignment_key=stem.id)
 
     ctx.progress(1.0, "stem ready")
     return {
