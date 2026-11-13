@@ -846,3 +846,14 @@ With the ctypes crash gone, the spatial job's verify step finally reached
 ffmpeg CLI, and the spatial job's apt list was only cmake + BLAS/LAPACKE.
 Installing ffmpeg fixes it; a `workflow_dispatch` run on master went green
 (spatial succeeded, release skipped as expected).
+
+## [2026-11-13] release | 0.3.8 is green and the spatial asset is pinned
+
+The master dispatch run went green after ffmpeg was installed: all jobs
+passed, and the v0.3.8 tag rerun did the same, including *Attach artifacts to
+the release*. The release now carries the AppImage, Setup, tarball and
+`dramallama-spatial-linux-x86_64.tar.gz` (+ `.sha256`). The asset is pinned in
+`installer/pins.json` to the immutable v0.3.8 tag (482,826 bytes,
+`ab2b03e4…`); it was downloaded and verified (hash, size, `dl_abi_version()` =
+1). 0.3.9 is the first installer release that fetches it during core install,
+so staging works out of the box.

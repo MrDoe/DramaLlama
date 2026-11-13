@@ -246,11 +246,14 @@ installer must not import the app).
 CI builds the library in the `spatial` job of
 `.github/workflows/installer.yml`, from the commit pinned as
 `spatial.saf_commit`, and publishes `dramallama-spatial-linux-x86_64.tar.gz`
-carrying the ISC `SAF-LICENSE.md`. `ensure_spatial()` installs it into
+carrying the ISC `SAF-LICENSE.md`. The job also needs **ffmpeg**: its verify
+step runs `tests/test_spatial.py`, and the mix tests loudness-normalise through
+the ffmpeg CLI. `ensure_spatial()` downloads the pinned asset into
 `<prefix>/lib` and `dlopen()`s it as a gate — an asset that fails to load
-aborts the step rather than leaving a silently dry mixer. An empty
-`pins.json` `assets` map is a warning, not an error, because a mix without
-staging is supported. Windows and macOS have no asset yet.
+aborts the step rather than leaving a silently dry mixer. The Linux asset has
+been pinned to the immutable v0.3.8 release (482,826 bytes) since 0.3.9; a
+platform with no entry (Windows, macOS) is a warning, not an error, because a
+mix without staging is supported.
 
 ## Verification
 
