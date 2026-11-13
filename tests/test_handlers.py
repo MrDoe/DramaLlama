@@ -236,3 +236,76 @@ def test_suno_render_dedupes_same_clip(tmp_path, monkeypatch):
     )
     assert len(stem.takes) == 1
     assert stem.takes[0].id.endswith("copy2")
+
+
+def test_rerender_remaps_preserved_alignment_to_new_take(tmp_path, monkeypatch):
+    """Re-rendering replaces same-engine takes; cuts must follow the new take.
+
+    Regression: preserved alignments were remapped in memory but not saved,
+    so the Cut board saw cuts pointing at deleted takes and rendered empty.
+    """
+    from drama_studio.models import AlignedLine, AlignmentResult
+
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Test", "en", SCRIPT, default_engine="fake")
+    project.stems = build_stems(project)
+    store.save(project)
+
+    monkeypatch.setattr(handler_module, "_STORE", store)
+    monkeypatch.setattr(handler_module, "_MANAGER", FakeManager())
+    monkeypatch.setattr(handler_module, "_require_gpu", lambda name: None)
+
+    queue = JobQueue(tmp_path / "jobs.sqlite3")
+    workers = {"stem.render": handler_module.render_stem}
+    payload = {
+        "project_id": project.id,
+        "stem_id": "s1-mara",
+        "candidates": 1,
+        "seed": 1,
+        "cfg_scale": None,
+        "align": False,
+    }
+    queue.enqueue("stem.render", payload)
+    Worker(queue, workers, worker_id="test").run_once()
+
+    first = store.get(project.id)
+    stem = next(item for item in first.stems if item.id == "s1-mara")
+    old_take = next(take for take in stem.takes if take.selected)
+    # User-style cut sheet pointing at the old take.
+    first.alignments[stem.id] = AlignmentResult(
+        stem_id=stem.id,
+        lines=[
+            AlignedLine(
+                id=line_id,
+                line_id=line_id,
+                take_id=old_take.id,
+                start_s=0.0,
+                end_s=min(0.4, old_take.duration_s),
+                position_s=None,
+            )
+            for line_id in stem.line_ids
+        ],
+        aligner="manual",
+    )
+    store.save(first)
+
+    # Re-render (same engine): must replace the take and keep/remap cuts.
+    payload["seed"] = 7
+    queue.enqueue("stem.render", payload)
+    Worker(queue, workers, worker_id="test").run_once()
+
+    updated = store.get(project.id)
+    stem = next(item for item in updated.stems if item.id == "s1-mara")
+    assert len(stem.takes) == 1
+    new_take = stem.takes[0]
+    assert new_take.selected
+    assert new_take.id != old_take.id
+    assert all(take.id != old_take.id for take in stem.takes)
+
+    alignment = updated.alignments[stem.id]
+    assert alignment.lines, "preserved alignment must not be empty"
+    assert {line.take_id for line in alignment.lines} == {new_take.id}
+    for line in alignment.lines:
+        assert 0.0 <= line.start_s < line.end_s <= new_take.duration_s + 1e-3
+        clip = store.project_dir(project.id) / "lines" / f"{line.id}.wav"
+        assert clip.exists(), f"remapped clip missing for {line.id}"

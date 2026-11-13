@@ -67,6 +67,25 @@ def test_normalize_alignment_fills_legacy():
     assert alignment.lines[0].take_id == "sel"
 
 
+def test_normalize_alignment_repairs_stale_take_id():
+    selected = _take("sel", selected=True)
+    alignment = AlignmentResult(
+        stem_id="s1",
+        lines=[
+            AlignedLine(
+                id="seg-1",
+                line_id="a",
+                take_id="deleted-take",
+                start_s=0.0,
+                end_s=1.0,
+            )
+        ],
+    )
+    normalize_alignment(alignment, [selected])
+    assert alignment.lines[0].take_id == "sel"
+    assert alignment.lines[0].id == "seg-1"
+
+
 def test_pick_selected_take_honors_result_id():
     takes = [_take("a"), _take("b", selected=True)]
     picked = pick_selected_take(takes, "a")

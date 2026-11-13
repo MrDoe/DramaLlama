@@ -1471,6 +1471,64 @@ export function MultiTrackEditor({
     [pending, takeByIdFor, takeDurationOf, commitCuts, pushHistory],
   );
 
+  /** Rebind clips that reference deleted takes to each stem's selected take. */
+  const reassignMissingCuts = useCallback(() => {
+    const byStem = new Map<string, { line_id: string; takeId: string }[]>();
+    for (const item of missingTakes) {
+      const list = byStem.get(item.stemId) ?? [];
+      list.push({ line_id: item.lineId, takeId: item.takeId });
+      byStem.set(item.stemId, list);
+    }
+    if (byStem.size === 0) return;
+    pushHistory();
+    let changed = 0;
+    for (const [stemId, items] of byStem) {
+      const stem = stemById.get(stemId);
+      if (!stem) continue;
+      const target =
+        stem.takes.find((take) => take.selected) ?? stem.takes[0] ?? null;
+      if (!target) continue;
+      const targetDur = takeDurationOf(target) || target.duration_s;
+      const missingSegs = new Set(items.map((i) => i.line_id));
+      // A stem can contain multiple segments per line; reassign any missing one.
+      const cuts = (pending[stemId] ?? []).map((cut) => {
+        if (!(cut.take_id && !stem.takes.some((t) => t.id === cut.take_id))) {
+          return { ...cut };
+        }
+        if (!missingSegs.has(cut.line_id) && missingSegs.size > 0) {
+          // still missing by take id even if not listed (defensive)
+        }
+        const prevDur = 0;
+        let start = cut.start_s;
+        let end = cut.end_s;
+        if (prevDur > 0 && targetDur > 0) {
+          const ratio = targetDur / prevDur;
+          start = cut.start_s * ratio;
+          end = cut.end_s * ratio;
+        } else if (targetDur > 0) {
+          const count = Math.max(1, stem.line_ids.length);
+          const pos = Math.max(0, stem.line_ids.indexOf(cut.line_id));
+          start = (targetDur / count) * pos;
+          end = (targetDur / count) * (pos + 1);
+        }
+        start = clamp(0, Math.max(0, targetDur), start);
+        end = clamp(0, Math.max(0, targetDur), end);
+        if (targetDur > 0 && end - start < 0.05) {
+          end = Math.min(targetDur, start + 0.05);
+          start = Math.max(0, end - 0.05);
+        }
+        changed += 1;
+        return {
+          ...cut,
+          take_id: target.id,
+          start_s: round2(start),
+          end_s: round2(end),
+        };
+      });
+      commitCuts(stemId, cuts);
+    }
+  }, [missingTakes, pending, stemById, takeDurationOf, commitCuts, pushHistory]);
+
   const findFadeHandle = useCallback(
     (stemId: string, canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect();
@@ -2673,9 +2731,19 @@ export function MultiTrackEditor({
 
       {missingTakes.length > 0 ? (
         <div className="render-error" role="alert">
-          {missingTakes.length} clip{missingTakes.length === 1 ? "" : "s"} point at a
-          deleted take ({missingTakes.slice(0, 3).map((m) => m.takeId.slice(0, 8)).join(", ")}
-          {missingTakes.length > 3 ? "…" : ""}). Reassign the track or re-render.
+          <span>
+            {missingTakes.length} clip{missingTakes.length === 1 ? "" : "s"} point at a
+            deleted take ({missingTakes.slice(0, 3).map((m) => m.takeId.slice(0, 8)).join(", ")}
+            {missingTakes.length > 3 ? "…" : ""}). Reassign the track or re-render.
+          </span>{" "}
+          <button
+            type="button"
+            className="button button-ghost button-sm"
+            onClick={reassignMissingCuts}
+            title="Rebind clips with missing takes to each stem's selected take"
+          >
+            Use selected take
+          </button>
         </div>
       ) : null}
 

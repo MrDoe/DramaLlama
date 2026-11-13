@@ -118,23 +118,31 @@ def remap_removed_cuts(
 def normalize_alignment(
     alignment: AlignmentResult | None, takes: list[Take]
 ) -> AlignmentResult | None:
-    """Fill legacy take_id=None / id without inventing timeline positions.
+    """Fill legacy take_id=None / id and repair stale take refs.
 
     Position is global (script order: Viktoria 1, Andreas 1, Grandmother 1,
     Viktoria 2, ...) so a per-stem cursor would stack every stem at 0 and
     overlap. Leave ``position_s`` as None here — mixer/frontend derive
     script order for None. Use :func:`layout_script_order` to materialize
     script order into explicit positions.
+
+    Cuts that point at a take no longer present on the stem are rebound to the
+    selected/fallback take so previously-broken projects remain editable and
+    audible in the Cut board.
     """
     if alignment is None:
         return alignment
     fallback = next((take for take in takes if take.selected), None)
     if fallback is None and takes:
         fallback = takes[0]
+    valid_ids = {take.id for take in takes}
     if fallback is None:
+        for entry in alignment.lines:
+            if not entry.id:
+                entry.id = entry.line_id
         return alignment
     for entry in alignment.lines:
-        if entry.take_id is None:
+        if entry.take_id is None or entry.take_id not in valid_ids:
             entry.take_id = fallback.id
         if not entry.id:
             entry.id = entry.line_id

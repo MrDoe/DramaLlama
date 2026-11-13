@@ -662,19 +662,49 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         chosen.selected = True
 
     selected = next((take for take in stem.takes if take.selected), None)
-    if selected is not None:
+    needs_remap = bool(
+        selected is not None
+        and existing_alignment is not None
+        and removed
+        and any(line.take_id in removed for line in existing_alignment.lines)
+    )
+    if needs_remap and selected is not None:
+        # Remap in-memory so this job's result and any subsequent logic see
+        # valid take ids/windows; clip files are rewritten from the new take.
         _remap_removed_cuts(existing_alignment, removed, selected, directory)
     project.mix_stale = True
+    # Save the stem (and new takes) first without overwriting the alignment,
+    # so concurrent cut/position edits on disk are not clobbered.
     _save_job_result(project, stem_id=stem.id)
 
     alignment = None
-    if bool(payload.get("align", True)) and selected is not None:
+    align_requested = bool(payload.get("align", True))
+    preserved_alignment = (
+        align_requested
+        and selected is not None
+        and existing_alignment is not None
+        and bool(existing_alignment.lines)
+    )
+    if preserved_alignment:
+        alignment = existing_alignment
+        if needs_remap and selected is not None:
+            # Persist remapped take ids/windows against the freshest on-disk
+            # alignment so concurrent position edits are preserved.
+            fresh = _load_project(project.id)
+            fresh_alignment = fresh.alignments.get(stem.id)
+            if fresh_alignment is not None and any(
+                line.take_id in removed for line in fresh_alignment.lines
+            ):
+                _remap_removed_cuts(fresh_alignment, removed, selected, directory)
+                fresh.alignments[stem.id] = fresh_alignment
+                fresh.mix_stale = True
+                _STORE.save(fresh)
+            else:
+                _save_job_result(project, stem_id=stem.id, alignment_key=stem.id)
+    elif align_requested and selected is not None:
         ctx.check_cancelled()
         lines = _lines_for_stem(project, stem.line_ids)
-        if existing_alignment is not None and existing_alignment.lines:
-            # Preserve the user's take-aware cut sheet across re-renders.
-            alignment = existing_alignment
-        elif lines and engine_name == "suno" and not selected.vocal_isolated:
+        if lines and engine_name == "suno" and not selected.vocal_isolated:
             # Suno only separates vocals on paid plans. Whisper on a full song
             # (instruments + backing vocals) produces confidently wrong cuts,
             # so estimate timings by word count and mark them low-confidence.
@@ -706,6 +736,20 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             project.alignments[stem.id] = alignment
             project.mix_stale = True
             _save_job_result(project, stem_id=stem.id, alignment_key=stem.id)
+    elif needs_remap and selected is not None and existing_alignment is not None:
+        # Align disabled but cuts referenced removed takes: persist remap.
+        fresh = _load_project(project.id)
+        fresh_alignment = fresh.alignments.get(stem.id)
+        if fresh_alignment is not None and any(
+            line.take_id in removed for line in fresh_alignment.lines
+        ):
+            _remap_removed_cuts(fresh_alignment, removed, selected, directory)
+            fresh.alignments[stem.id] = fresh_alignment
+            fresh.mix_stale = True
+            _STORE.save(fresh)
+        else:
+            _save_job_result(project, stem_id=stem.id, alignment_key=stem.id)
+        alignment = existing_alignment
 
     ctx.progress(1.0, "stem ready")
     return {
