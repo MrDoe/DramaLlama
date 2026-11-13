@@ -664,3 +664,34 @@ A/B on the same 23 s Breeze take: voiced coverage 97.8 % → 99.8 %, worst line
 0.22 s → 0.04 s. And motion was confirmed in the *exported* Ambisonic file by
 rendering the project twice, once with a scene's path removed: the difference
 appears only inside that scene's walk window, 76.6-80.8 s.
+
+## [2026-11-13] ingest | Second pass on a fresh project, measured absolutely
+
+The repaired build was run over the whole workflow again as a new project, because
+a read-time migration can make an old project sound right while the producer is
+still wrong. Five scenes, four characters, Breeze with emotional direction on all
+31 lines, one take per stem.
+
+Parse: 31 lines, 31 stage directions carried, only the prose preamble unparsed.
+Voices: four designed from descriptions. Stems: 17/17 rendered and aligned. The
+stored file has 31 cuts and **none of them carries an explicit `position_s`** —
+the producer now defers to script order, which is the contract.
+
+Stage: five scenes, each in its own room, including the 1.4 m car that used to
+return 500 from the layout endpoint. Motion came from the stage directions and
+landed in the right places — MERIAN's entrance at 8.2 s rather than at the top of
+the scene, VOGEL's exit at 40.6 s inside the car.
+
+Mix: 179.2 s, zero warnings, stereo and Ambisonic frame-identical at 8,603,040
+frames, envelope cross-correlation between the W channel and the stereo sum at
++0.00 s, all 16 spherical-harmonic channels active. With the Suno bed attached the
+music measures 0.156 RMS before the first line and 0.037 under it — a 12.5 dB duck,
+which is the cue system working rather than the bed merely being present.
+
+Also found this pass, unrelated to staging: the Sound step's Suno picker never
+opened. The bridge forwarded `limit=500`, the Suno API allows at most 100 and said
+so, and the bridge turned that into a 502 that the UI showed as an empty panel. One
+line on each side of the seam; verified live, 100 clips returned.
+
+The pass-1 scratch project and an old probe project were deleted afterwards; the
+second-pass project stays so the master can be listened to.
