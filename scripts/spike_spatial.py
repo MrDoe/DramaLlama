@@ -34,11 +34,17 @@ lib.dl_set_listener.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float),
 lib.dl_set_listener_facing.argtypes = [ctypes.c_void_p, ctypes.c_float]
 lib.dl_process.argtypes = [ctypes.c_void_p, ctypes.c_int,
                            ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
+# Every handle argument needs an argtype. Without it ctypes passes the pointer
+# as a C int, truncating it to 32 bits; that only segfaults when the heap sits
+# above 4 GB (it did on the ubuntu-22.04 CI runner, not on the dev box).
 lib.dl_get_n_sh.restype = ctypes.c_int
+lib.dl_get_n_sh.argtypes = [ctypes.c_void_p]
 lib.dl_get_frame_size.restype = ctypes.c_int
+lib.dl_get_frame_size.argtypes = [ctypes.c_void_p]
 lib.dl_decode_stereo.argtypes = [ctypes.c_void_p, ctypes.c_int,
                                  ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
 lib.dl_last_error.restype = ctypes.c_char_p
+lib.dl_last_error.argtypes = [ctypes.c_void_p]
 
 
 def f32(arr):

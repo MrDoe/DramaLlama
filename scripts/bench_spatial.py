@@ -18,13 +18,19 @@ lib.dl_create.argtypes = [ctypes.c_int] + [ctypes.c_int] * 3 + [ctypes.POINTER(c
 lib.dl_set_sources.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
 lib.dl_set_listener.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_float]
 lib.dl_process.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
+# Handles must be c_void_p: a missing argtype truncates the 64-bit pointer to a
+# C int and dereferences garbage whenever the heap is above 4 GB.
 lib.dl_get_n_sh.restype = ctypes.c_int
+lib.dl_get_n_sh.argtypes = [ctypes.c_void_p]
 lib.dl_get_frame_size.restype = ctypes.c_int
+lib.dl_get_frame_size.argtypes = [ctypes.c_void_p]
 lib.dl_destroy.argtypes = [ctypes.c_void_p]
 
 
 def fp(a):
-    return np.ascontiguousarray(a, dtype=np.float32).ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    """Return (contiguous float32 buffer, pointer); keep the buffer alive."""
+    buf = np.ascontiguousarray(a, dtype=np.float32)
+    return buf, buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
 
 
 room = (ctypes.c_float * 3)(8.0, 7.0, 3.5)
@@ -45,8 +51,10 @@ def bench(order, n_sources, reflections, move_every):
     base = np.zeros((n_sources, 3), dtype=np.float32)
     for i in range(n_sources):
         base[i] = [1.0 + i * (6.0 / max(1, n_sources)), 5.0, 1.5]
-    lib.dl_set_listener(h, fp([4.0, 1.0, 1.6]), ctypes.c_float(0.0))
-    lib.dl_set_sources(h, n_sources, fp(base), None)
+    listener_buf, listener_ptr = fp([4.0, 1.0, 1.6])
+    lib.dl_set_listener(h, listener_ptr, ctypes.c_float(0.0))
+    base_buf, base_ptr = fp(base)
+    lib.dl_set_sources(h, n_sources, base_ptr, None)
 
     scratch_in = np.zeros((n_sources, BLOCK), dtype=np.float32)
     scratch_out = np.zeros((nsh, BLOCK), dtype=np.float32)
@@ -58,12 +66,15 @@ def bench(order, n_sources, reflections, move_every):
             drift = (b / nblocks) * 1.5
             moved[:, 0] = np.clip(moved[:, 0] + drift, 0.2, 7.8)
             moved[:, 1] = np.clip(moved[:, 1] - drift, 0.2, 6.8)
-            lib.dl_set_sources(h, n_sources, fp(moved), None)
+            moved_buf, moved_ptr = fp(moved)
+            lib.dl_set_sources(h, n_sources, moved_ptr, None)
 
         s = b * BLOCK
         scratch_in[:] = full[:, s:s + BLOCK]
-        lib.dl_process(h, BLOCK, fp(scratch_in), fp(scratch_out))
-        out[:, s:s + BLOCK] = scratch_out
+        in_buf, in_ptr = fp(scratch_in)
+        out_buf, out_ptr = fp(scratch_out)
+        lib.dl_process(h, BLOCK, in_ptr, out_ptr)
+        out[:, s:s + BLOCK] = out_buf
 
     wall = time.perf_counter() - t0
     lib.dl_destroy(h)
