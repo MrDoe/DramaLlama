@@ -298,3 +298,6 @@ def test_staged_mix_over_api_produces_stereo_master(tmp_path):
     ambisonic = store.project_dir(project_id) / result.ambisonic
     info = sf.info(str(ambisonic))
     assert info.channels == spatial.sh_channels(1)
+    # The Ambisonic master must line up with the stereo one, or it cannot be
+    # muxed against the same picture.
+    assert info.frames == sf.info(str(store.project_dir(project_id) / result.file)).frames

@@ -238,6 +238,20 @@ observable behavior, not just DOM presence.
 - Stage positions must be inside the room; the Pydantic validators compare
   against the *scene's* room, and `scene`/`room` field order matters for the
   `info.data` lookup in `SceneStage`.
+- Adding a production step means **five** edits in `ProjectPage.tsx`: `STEPS`,
+  the `activeStep` union, the rail's `available` gate, the rail button's
+  `onClick` dispatcher, and the render ternary. Forgetting the dispatcher is
+  silent — the button looks enabled and does nothing. Only a live click
+  catches it.
+- The Stage UI must re-clamp the listener and actors whenever the room changes
+  (`fitToRoom` in `StageBoard.tsx`). Applying a smaller room preset otherwise
+  leaves the listener outside the new walls and the save 422s.
+- The Ambisonic master carries staged dialogue only; unstaged scenes and the
+  SFX bed have no SH representation and read as silence there. It is padded to
+  the stereo master's length so the two line up for picture muxing.
+- FastAPI body-validation failures return `detail` as an **array** of
+  `{loc,msg}`. `api.ts` flattens it via `describeDetail()`; assigning
+  `body.detail` straight to a message renders as `[object Object]`.
 
 <!-- BEGIN opencode-rag -->
 ## Code Navigation

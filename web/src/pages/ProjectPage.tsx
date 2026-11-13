@@ -2768,7 +2768,11 @@ export function ProjectPage() {
                   }
                 } else if (step.id === "cut") {
                   setActiveStep("cut");
-                } else if (step.id === "sound" || step.id === "mix") {
+                } else if (
+                  step.id === "sound" ||
+                  step.id === "stage" ||
+                  step.id === "mix"
+                ) {
                   setActiveStep(step.id);
                 }
               }}
@@ -2783,7 +2787,9 @@ export function ProjectPage() {
                       ? "Parse a script with lines first"
                       : step.id === "cut"
                         ? "Render stems first"
-                        : "Next milestone"
+                        : step.id === "stage"
+                          ? "Render stems first"
+                          : "Next milestone"
               }
             >
               <span className="step-num">{String(index + 1).padStart(2, "0")}</span>

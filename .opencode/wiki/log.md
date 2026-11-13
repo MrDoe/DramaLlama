@@ -504,3 +504,36 @@ browser verification of the Stage step is still outstanding — no browser MCP i
 configured in this workspace, so it was checked through the running API instead.
 Packaging is the open end: no CI-built binaries or `installer/pins.json` entry
 yet, so staging is currently build-it-yourself.
+
+## [2026-11-13] lint | Full UI workflow verified in Firefox; three real bugs found
+
+Drove the whole pipeline in the automation browser with the `fake`/`chatterbox`
+engines (two `llama-server` processes held 8.6 GB of 16, so Breeze could not
+fit): parse → Voices design → Stems per-stem voice → render → Cut → Stage →
+Audition → Mix. AGENTS.md's "build + pytest is not enough" rule paid for
+itself immediately — three defects were invisible to every test I had written.
+
+1. **Stage rail button was inert.** I had added `stage` to `STEPS`, the union
+   type and the `available` gate, but not to the rail's `onClick` dispatcher, so
+   the button rendered enabled and did nothing. Only a click caught it.
+2. **"Spread the cast" could not stage anything.** `patchScene` bailed when the
+   scene had no entry yet, which is precisely the not-yet-staged case. Now it
+   starts from a blank scene.
+3. **Applying a room preset broke saving.** The listener is placed against the
+   old depth; shrinking to the Kitchen preset (5 m → 3.5 m) left it outside and
+   the PUT 422'd — surfaced as "[object Object]" because `api.ts` passed
+   FastAPI's `{loc,msg}` array straight through. Fixed by `fitToRoom()` clamping
+   on every scene patch, plus `describeDetail()` flattening the message.
+
+Also verified: per-scene rooms hold (scene 1 Kitchen 4×3.5×2.6 while scene 2
+keeps 6×5×3), keyboard nudging moves an actor 25 cm per press with the readout
+following, audition produced a 48 kHz stereo file, and the mix reported
+`spatial: true` with L/R correlation **0.3631** — a duplicated mono master would
+be exactly 1.0 — true peak −1.54 dBFS, and ACN channel 0 (W omni) strongest.
+Found and fixed a fourth issue: the Ambisonic master was 4.96 s against the
+stereo 6.36 s; it is now padded to match (305280 frames both).
+
+Practical notes for the next browser session: firefox-devtools is configured but
+mcp-lazy keeps it disconnected (`tools.mcp.load` first), it has no console tools,
+`saveTo` is sandboxed, `evaluate_script` has no `setTimeout`, and UIDs go stale
+after any re-render. Scratch project deleted afterwards; 8 projects remain.

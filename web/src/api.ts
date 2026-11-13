@@ -47,6 +47,36 @@ export class ApiError extends Error {
   }
 }
 
+/** Turn a FastAPI error `detail` into one readable line.
+ *
+ * Body validation failures arrive as an array of structured errors rather than
+ * a string, so naively using the value yields "[object Object]" in a banner.
+ */
+function describeDetail(detail: unknown): string | null {
+  if (typeof detail === "string" && detail.trim()) return detail.trim();
+  if (Array.isArray(detail) && detail.length) {
+    const parts = detail.map((item) => {
+      if (item && typeof item === "object") {
+        const entry = item as { loc?: unknown[]; msg?: unknown };
+        const where = Array.isArray(entry.loc)
+          ? entry.loc.filter((part) => typeof part === "string" && part !== "body").join(".")
+          : "";
+        const message = typeof entry.msg === "string" ? entry.msg : String(entry.msg ?? "");
+        return where ? `${where}: ${message}` : message;
+      }
+      return String(item);
+    }).filter((part) => part.trim());
+    if (parts.length) return parts.join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    const record = detail as Record<string, unknown>;
+    for (const key of ["error", "detail", "message"]) {
+      if (typeof record[key] === "string") return record[key] as string;
+    }
+  }
+  return null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     ...init,
@@ -58,8 +88,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     try {
-      const body = (await response.json()) as { detail?: string };
-      if (body.detail) detail = body.detail;
+      const body = (await response.json()) as { detail?: unknown };
+      const described = describeDetail(body.detail);
+      if (described) detail = described;
     } catch {
       // keep the status text
     }

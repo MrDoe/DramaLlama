@@ -51,6 +51,27 @@ function planDistance(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1]);
 }
 
+/** Keep a scene internally valid: everything must sit inside its own room.
+ *  Applying a smaller room preset, or editing a dimension, would otherwise
+ *  leave the listener or an actor outside the new walls and the save would be
+ *  rejected by the server with no way for the user to see why. */
+function fitToRoom(scene: SceneStage): SceneStage {
+  const [width, depth, height] = scene.room.dims_m;
+  const clamp = (point: Vec3): Vec3 => [
+    Math.min(width, Math.max(0, point[0])),
+    Math.min(depth, Math.max(0, point[1])),
+    Math.min(height, Math.max(0, point[2])),
+  ];
+  return {
+    ...scene,
+    listener: { ...scene.listener, position_m: clamp(scene.listener.position_m) },
+    actors: scene.actors.map((actor) => ({
+      ...actor,
+      position_m: clamp(actor.position_m),
+    })),
+  };
+}
+
 export function StageBoard({ project, onRefresh }: Props) {
   const [capabilities, setCapabilities] = useState<StageCapabilities | null>(null);
   const [stage, setStage] = useState<StageProject>(project.stage ?? emptyStage());
@@ -152,9 +173,15 @@ export function StageBoard({ project, onRefresh }: Props) {
   const patchScene = useCallback(
     (key: string, updater: (current: SceneStage) => SceneStage) => {
       setStage((current) => {
-        const existing = current.scenes[key];
-        if (!existing) return current;
-        return { ...current, scenes: { ...current.scenes, [key]: updater(existing) } };
+        // An unstaged scene starts from a blank one rather than being skipped:
+        // "Spread the cast" has to be able to *stage* a scene, not only edit
+        // one that is already staged. Reading `current` here (not the closure's
+        // `stage`) keeps concurrent patches from clobbering each other.
+        const existing = current.scenes[key] ?? emptyScene(current);
+        return {
+          ...current,
+          scenes: { ...current.scenes, [key]: fitToRoom(updater(existing)) },
+        };
       });
       setDirty(true);
     },

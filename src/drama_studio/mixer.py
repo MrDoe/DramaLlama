@@ -179,11 +179,14 @@ def _render_staged_scenes(stage, tracks, scene_bounds, sr, total, spatial_render
     return bed, scene_beds, extra
 
 
-def _write_ambisonic_master(path, scene_beds, stage, sr, spatial_render):
+def _write_ambisonic_master(path, scene_beds, stage, sr, total, spatial_render):
     """Write the per-scene beds back out as one ACN/SN3D (AmbiX) master.
 
     Streamed scene by scene rather than materialising the whole timeline: a
-    10-minute third-order master is well over a gigabyte.
+    10-minute third-order master is well over a gigabyte. Padded to the full
+    mix length so it lines up with the stereo master and can be muxed against
+    picture; unstaged scenes and the SFX bed have no Ambisonic representation
+    and read as silence here.
     """
     n_sh = spatial_render.sh_channels(stage.order)
     scene = _first_stage(stage)
@@ -206,6 +209,9 @@ def _write_ambisonic_master(path, scene_beds, stage, sr, spatial_render):
                 chunk = sim.to_sn3d(bed).T
                 handle.write(chunk)
                 cursor += chunk.shape[0]
+                if total > cursor:
+                    # Match the stereo master's length.
+                    handle.write(np.zeros((total - cursor, n_sh), dtype=np.float32))
     except Exception:
         path.unlink(missing_ok=True)
         return None
@@ -526,7 +532,7 @@ def build_mix(
     ambisonic_path: str | None = None
     if bed is not None and stage is not None and stage.export_ambisonic:
         ambisonic_path = _write_ambisonic_master(
-            mix_dir / f"{name}_ambisonic.wav", scene_beds, stage, sr, spatial_render
+            mix_dir / f"{name}_ambisonic.wav", scene_beds, stage, sr, total, spatial_render
         )
         if ambisonic_path is None:
             warnings.append("could not write the Ambisonic master")
