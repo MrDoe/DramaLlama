@@ -768,8 +768,10 @@ def test_ensure_spatial_skips_when_nothing_is_published(tmp_path: Path) -> None:
     paths = InstallPaths(prefix=tmp_path / "prefix").ensure()
     logs: list[str] = []
 
+    # The real pins now carry the Linux asset; this is the "not published yet"
+    # shape the installer must accept for any platform without an entry.
     result = runtimes.ensure_spatial(
-        paths, load_pins(), make_system(), Progress(on_log=logs.append)
+        paths, {"spatial": {"assets": {}}}, make_system(), Progress(on_log=logs.append)
     )
 
     assert result is None

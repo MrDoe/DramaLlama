@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-11-01",
+  "generated": "2026-11-13",
   "app": {
     "name": "Drama Llama",
     "default_port": 8770,
@@ -65,8 +65,14 @@
     "saf_repo": "leomccormack/Spatial_Audio_Framework",
     "saf_commit": "18fd5aba46e20787b51f28f7197a68506c965c07",
     "abi": 1,
-    "note": "Native room renderer (Ambisonic Stage step). Built by the Installers workflow, spatial job, from this exact SAF commit; assets are attached to the release. The installer downloads <asset>/libdrama_llama_spatial.* into <prefix>/lib and skips with a warning while 'assets' is empty for a platform. Fill in url/sha256/size from dist/*.sha256 after the first release that carries the asset; never resolve a moving tag.",
-    "assets": {}
+    "note": "Native room renderer (Ambisonic Stage step). Built by the Installers workflow, spatial job, from this exact SAF commit and pinned to an immutable release tag with its SHA-256. The installer downloads <asset>/libdrama_llama_spatial.* into <prefix>/lib and skips with a warning for a platform with no entry. Never resolve a moving tag.",
+    "assets": {
+      "linux-x86_64": {
+        "url": "https://github.com/MrDoe/DramaLlama/releases/download/v0.3.8/dramallama-spatial-linux-x86_64.tar.gz",
+        "sha256": "ab2b03e460da4c7c094a31aafc62cf77e2eef8b5a0a6a44932d1464125b20fec",
+        "size": 482826
+      }
+    }
   },
   "whisper": {
     "repo": "Systran/faster-whisper-large-v3",
