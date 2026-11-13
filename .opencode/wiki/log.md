@@ -628,3 +628,39 @@ is audible and invisible. Nothing marks a mover on the board.
 Numbers: 365 tests, up from 334 at the start of the branch. Linux-only renderer
 artefact; Windows and macOS still build by hand. SFX and beds remain
 non-spatial.
+
+## [2026-11-13] ingest | A mix that played the whole play at once
+
+Measured rather than assumed, this time. The five-scene test project mixed to
+35.8 s; it is a 176 s piece. Every scene sat on top of every other scene from
+t = 0.
+
+The aligner wrote a cursor into `AlignedLine.position_s`. Inside a stem that
+cursor is meaningful — it is where the next line of *this speaker's* performance
+falls. But `position_s` is a slot on the project timeline, and every stem starts
+its own clock at zero, so every scene's first line landed at the top of the mix.
+`cuts.py` already documents the contract (`None` means derive script order) and
+already carries the function that exists because "a per-stem cursor would stack
+every stem at 0 and overlap". The aligner was simply the last producer still
+doing it. `build_mix` only rescued `None`; a `0.0` looks like a placement someone
+chose.
+
+Fixed at both ends: the producers leave the field alone, and
+`cuts.repair_per_stem_positions` clears numbers that cannot be placements (two
+*different scenes* both opening at 0.0 — scenes follow one another) in
+`ProjectStore.get`, beside the other legacy repairs, so the mix, the Cut board and
+stage timing share one corrected view. After the fix: 175.9 s, silence at the four
+scene boundaries, Ambisonic still frame-for-frame with stereo, envelope lag 0.00 s.
+
+Staging looked healthy throughout, which is how this hid: speaker windows already
+came from script order, so the motion timings were right inside a mix that was
+wrong. A bug in the timeline is invisible to everything that measures relative
+time.
+
+Also in this session, on real takes: the auto-cut now stops at the *last* audible
+hop inside its allowance rather than at the first dip — cutting on the dip left
+0.1-0.2 s stranded, a smaller version of the clip the allowance exists to fix.
+A/B on the same 23 s Breeze take: voiced coverage 97.8 % → 99.8 %, worst line
+0.22 s → 0.04 s. And motion was confirmed in the *exported* Ambisonic file by
+rendering the project twice, once with a scene's path removed: the difference
+appears only inside that scene's walk window, 76.6-80.8 s.

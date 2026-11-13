@@ -48,6 +48,22 @@ and cuts whose take disappeared are ratio-remapped to the replacement. The cut
 sheet is therefore take-aware and can mix takes per line — see
 [[concepts/take-aware-cuts]].
 
+### `position_s` is a project slot, not a stem offset
+
+`AlignedLine.position_s` means "where this clip sits on the **project** timeline",
+and `None` is the documented marker for "derive it from script order". A stem is
+one speaker's performance inside one scene, so a cursor counted from 0 inside the
+stem is a *stem* offset, and writing it into `position_s` makes every scene's
+first line land at t = 0 — `build_mix` then plays the whole play at once. A
+five-scene test piece mixed to 35.8 s instead of 175.9 s this way.
+
+Both producers now leave the field alone. `cuts.repair_per_stem_positions` fixes
+projects already aligned by the buggy build: if two different *scenes* both open
+at 0.0 the numbers cannot be a placement, so they are cleared. It runs in
+[[entities/drama-llama-app]]'s `ProjectStore.get`, beside the other legacy
+repairs, so the mix, the Cut board and the stage timing all see one corrected
+view. Detection lives in one predicate, `cuts.positions_look_per_stem`.
+
 ### The cut allowance
 
 `align_cuts()` is owned by the sibling `~/tts_test` session and must not be
