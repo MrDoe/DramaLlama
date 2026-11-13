@@ -222,11 +222,17 @@ def build_mix(
     project_dir: Path,
     sfx_lookup,
     name: str = "master",
+    only_scene: int | None = None,
 ) -> MixResult:
     """Assemble the master mix.
 
     `name` selects the output filenames inside `mix/`; the Stage step uses a
     per-scene name so a preview never overwrites the real master.
+
+    `only_scene` keeps one scene's segments and rebases them to start at 0.
+    That is what a scene audition needs: the Stage board samples motion paths
+    on a scene-relative clock, so a full-length file would make every scene
+    after the first move at the wrong time.
     """
     warnings: list[str] = []
     pause = project.settings.pause_ms / 1000.0
@@ -311,6 +317,21 @@ def build_mix(
             segments.append((line.id, line.id, clip_path, timeline, None))
             timeline += duration + pause
             previous_scene = line.scene
+
+    if only_scene is not None:
+        # A scene audition is the scene, not the play it sits in. Keep its
+        # segments and rebase them so sample 0 is the scene's first sound;
+        # the Stage transport's playhead is scene-relative.
+        scene_line_ids = {line.id for line in lines if line.scene == only_scene}
+        kept = [item for item in segments if item[1] in scene_line_ids]
+        if kept:
+            offset = min(item[3] for item in kept)
+            segments = [
+                (seg_id, line_id, clip_path, pos - offset, fx)
+                for seg_id, line_id, clip_path, pos, fx in kept
+            ]
+        else:
+            segments = []
 
     # line_starts: first segment position per line; scene_end: max end per scene.
     # Stagger same-line segments left-to-right so sub-clips don't overlap

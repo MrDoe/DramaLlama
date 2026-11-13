@@ -3495,6 +3495,13 @@ body.mt-fs-active .page {
   font-size: 10px;
 }
 
+.voice-file-warning {
+  margin: 0;
+  color: var(--amber);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .voice-error {
   margin: 0;
   color: var(--red);
@@ -3956,6 +3963,78 @@ body.mt-fs-active .page {
   opacity: 0.8;
 }
 
+/* Waypoint handles for the selected actor's path. The polyline is a read-only
+   trace of the move; these are the editable ends. Only the selected actor's
+   handles are rendered, so the canvas stays calm otherwise. */
+.stage-path__key {
+  fill: currentColor;
+  stroke: rgba(8, 8, 18, 0.85);
+  stroke-width: 2;
+  cursor: grab;
+}
+
+.stage-path__key:active {
+  cursor: grabbing;
+}
+
+.stage-path__key:focus {
+  outline: none;
+}
+
+.stage-path__key:focus-visible {
+  stroke: var(--text);
+  stroke-width: 2.5;
+}
+
+.stage-motion {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.stage-motion__keys {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.stage-motion__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.stage-key {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.stage-key__head {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+}
+
+.stage-key__n {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--faint);
+  font-size: 10px;
+}
+
 .stage-actor--moves .stage-actor__dot {
   stroke-width: 3;
 }
@@ -4027,6 +4106,42 @@ body.mt-fs-active .page {
   color: var(--muted);
 }
 
+/* Transport for the scene audition: the board's clock. While it runs, actor
+   dots follow their spline paths instead of sitting at the resting pose. It
+   sits above the canvas because the canvas is taller than a laptop viewport —
+   under it, the only preview control was below the fold. */
+.stage-transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.stage-transport__play {
+  min-width: 34px;
+  padding: 4px 8px;
+}
+
+.stage-transport__scrub {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--teal);
+}
+
+.stage-transport__time {
+  min-width: 84px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.stage-audio {
+  display: none;
+}
+
 .stage-side {
   display: flex;
   flex-direction: column;
@@ -4082,6 +4197,23 @@ body.mt-fs-active .page {
 
 .stage-num input {
   width: 100%;
+}
+
+.stage-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stage-time input {
+  min-width: 0;
+}
+
+.stage-time em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--faint);
 }
 
 .stage-slider {

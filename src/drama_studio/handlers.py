@@ -1309,8 +1309,9 @@ def mix_preview_scene(job: Job, ctx: JobContext) -> dict[str, Any]:
     """Render one staged scene to an audition file.
 
     Goes through the same build_mix path as the master with the other scenes
-    unstaged and the cue bed muted, so what you hear is what the master will
-    contain for that scene.
+    removed and the cue bed muted, so what you hear is what the master will
+    contain for that scene — on the scene's own clock, starting at its first
+    sound. The Stage board samples motion paths relative to that clock.
     """
     import copy
 
@@ -1331,7 +1332,13 @@ def mix_preview_scene(job: Job, ctx: JobContext) -> dict[str, Any]:
     stage.scenes = {keep: stage.scenes[keep]}
     preview.cues = []  # the bed is context, not part of a staging audition
     name = f"preview_s{scene_id}"
-    result = build_mix(preview, directory, lambda _sfx_id: None, name=name)
+    result = build_mix(
+        preview,
+        directory,
+        lambda _sfx_id: None,
+        name=name,
+        only_scene=scene_id,
+    )
     if not result.spatial:
         raise SpatialUnavailable("spatial renderer produced no staged output")
     ctx.progress(1.0, "preview ready")

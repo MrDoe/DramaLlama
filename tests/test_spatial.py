@@ -112,9 +112,51 @@ def test_direct_blend_is_bounded():
 # ------------------------------------------------------------------ geometry
 
 
-def test_sample_path_interpolates_linearly():
+def test_two_key_path_is_still_a_straight_line():
+    """Auto-staged enter/approach moves are two keys and must not change."""
     keys = [(0.0, 1.0, 1.0, 1.5), (10.0, 3.0, 1.0, 1.5)]
-    assert spatial.sample_path(keys, 5.0) == pytest.approx((2.0, 1.0, 1.5))
+    for time_s in (0.0, 2.5, 5.0, 7.5, 10.0):
+        ratio = time_s / 10.0
+        assert spatial.sample_path(keys, time_s) == pytest.approx(
+            (1.0 + 2.0 * ratio, 1.0, 1.5)
+        )
+
+
+def test_sample_path_splines_through_three_keys():
+    """A third key bends the curve but the keys themselves are still hit.
+
+    The linear midpoint of the first segment would be x = 0.5; a Catmull-Rom
+    tangent read from the key on the far side pulls it towards x = 0.625, which
+    is what makes a corner a curve in the mix.
+    """
+    keys = [
+        (0.0, 0.0, 0.0, 1.5),
+        (1.0, 1.0, 0.0, 1.5),
+        (2.0, 0.0, 0.0, 1.5),
+    ]
+    for time_s, expected in ((0.0, 0.0), (1.0, 1.0), (2.0, 0.0)):
+        assert spatial.sample_path(keys, time_s)[0] == pytest.approx(expected)
+    midpoint = spatial.sample_path(keys, 0.5)
+    assert midpoint[0] == pytest.approx(0.625)
+    assert midpoint[0] != pytest.approx(0.5)
+
+
+def test_spline_has_no_velocity_jump_at_a_key():
+    """C1: the incoming and outgoing slopes agree at the middle key."""
+    keys = [
+        (0.0, 0.0, 0.0, 1.5),
+        (1.0, 1.0, 0.0, 1.5),
+        (2.0, 3.0, 0.0, 1.5),
+    ]
+    step = 1e-4
+    before = (
+        spatial.sample_path(keys, 1.0)[0] - spatial.sample_path(keys, 1.0 - step)[0]
+    ) / step
+    after = (
+        spatial.sample_path(keys, 1.0 + step)[0] - spatial.sample_path(keys, 1.0)[0]
+    ) / step
+    assert before == pytest.approx(after, rel=1e-2)
+    assert before == pytest.approx(1.5, rel=1e-2)
 
 
 def test_sample_path_holds_endpoints_outside_the_key_range():

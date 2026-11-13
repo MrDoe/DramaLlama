@@ -516,12 +516,56 @@ def all_wet(scene_stage_value: SceneStage | None) -> bool:
 # ------------------------------------------------------------------ geometry
 
 
+def _path_tangents(
+    keys: list[tuple[float, float, float, float]],
+) -> list[tuple[float, float, float]]:
+    """Catmull-Rom tangents for a time-parameterised position curve.
+
+    One tangent per key: the central difference of its neighbours divided by
+    the time they span. Endpoints use a one-sided difference, which keeps a
+    two-key path exactly straight — its tangents are the segment's own slope —
+    while three or more keys get a C1 curve that still passes through every key.
+    """
+    count = len(keys)
+    tangents: list[tuple[float, float, float]] = []
+    for index, key in enumerate(keys):
+        if count < 2:
+            tangents.append((0.0, 0.0, 0.0))
+            continue
+        if index == 0:
+            span = keys[1][0] - key[0]
+            previous, following = key, keys[1]
+        elif index == count - 1:
+            span = key[0] - keys[-2][0]
+            previous, following = keys[-2], key
+        else:
+            span = keys[index + 1][0] - keys[index - 1][0]
+            previous, following = keys[index - 1], keys[index + 1]
+        if span <= 0.0:
+            # Duplicate timestamps are legal; a zero span has no slope to read.
+            tangents.append((0.0, 0.0, 0.0))
+        else:
+            tangents.append(
+                (
+                    (following[1] - previous[1]) / span,
+                    (following[2] - previous[2]) / span,
+                    (following[3] - previous[3]) / span,
+                )
+            )
+    return tangents
+
+
 def sample_path(keys: list[tuple[float, float, float, float]], time_s: float):
-    """Interpolate a motion path at an absolute timeline time.
+    """Interpolate a motion path at a scene-relative time.
+
+    Cubic Hermite between keyframes with Catmull-Rom tangents: the curve passes
+    through every key and its direction is continuous across one, so a walk
+    that turns a corner curves instead of snapping. A two-key path is exactly
+    the old straight line, so auto-staged enter/approach moves are unchanged.
 
     None when there are no keyframes. Times outside the key range hold the
-    first/last position, so an actor that walks in stays put afterwards
-    instead of snapping to the origin.
+    first/last position, so an actor that walks in stays put afterwards instead
+    of snapping to the origin.
     """
     if not keys:
         return None
@@ -530,13 +574,28 @@ def sample_path(keys: list[tuple[float, float, float, float]], time_s: float):
     if time_s >= keys[-1][0]:
         return keys[-1][1], keys[-1][2], keys[-1][3]
 
+    tangents = _path_tangents(keys)
     for index in range(len(keys) - 1):
         t0, x0, y0, z0 = keys[index]
         t1, x1, y1, z1 = keys[index + 1]
         if t0 <= time_s <= t1:
             span = t1 - t0
-            ratio = 0.0 if span <= 0 else (time_s - t0) / span
-            return (x0 + (x1 - x0) * ratio, y0 + (y1 - y0) * ratio, z0 + (z1 - z0) * ratio)
+            if span <= 0:
+                return x1, y1, z1
+            u = (time_s - t0) / span
+            u2 = u * u
+            u3 = u2 * u
+            h00 = 2.0 * u3 - 3.0 * u2 + 1.0
+            h10 = u3 - 2.0 * u2 + u
+            h01 = -2.0 * u3 + 3.0 * u2
+            h11 = u3 - u2
+            m0 = tangents[index]
+            m1 = tangents[index + 1]
+            return (
+                h00 * x0 + h10 * span * m0[0] + h01 * x1 + h11 * span * m1[0],
+                h00 * y0 + h10 * span * m0[1] + h01 * y1 + h11 * span * m1[1],
+                h00 * z0 + h10 * span * m0[2] + h01 * z1 + h11 * span * m1[2],
+            )
     return keys[-1][1], keys[-1][2], keys[-1][3]
 
 

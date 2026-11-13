@@ -164,6 +164,62 @@ def _window_rms(data, sr, lo, hi):
     return float(np.sqrt((data[int(lo * sr) : int(hi * sr)] ** 2).mean()))
 
 
+def test_scene_audition_is_trimmed_to_the_scene(tmp_path):
+    """A scene audition is scene-relative, like the motion paths it clocks.
+
+    The Stage transport samples keyframes on the scene's own clock (`t=0` is
+    the first sound in that scene). Rendering the whole play into the preview
+    file made every scene after the first move at the wrong time and start
+    playing the previous scene, so `only_scene` filters and rebases.
+    """
+    from drama_studio.models import AlignedLine, AlignmentResult
+
+    script = Script(
+        title="Preview",
+        language="en",
+        characters={"A": Character(id="A", name="A"), "B": Character(id="B", name="B")},
+        scenes=[
+            Scene(id=1, heading="SCENE 1", lines=[Line(id="s1-01", scene=1, speaker="A", text="First.")]),
+            Scene(id=2, heading="SCENE 2", lines=[Line(id="s2-01", scene=2, speaker="B", text="Second.")]),
+        ],
+    )
+    project = Project(
+        id="preview",
+        title="Preview",
+        language="en",
+        raw_script="",
+        script=script,
+        settings=ProjectSettings(pause_ms=100, scene_gap_ms=200),
+    )
+    project.alignments = {
+        "s1-a": AlignmentResult(
+            stem_id="s1-a",
+            aligner="whisper-large-v3",
+            lines=[AlignedLine(id="s1-01", line_id="s1-01", start_s=0.0, end_s=1.0, position_s=0.0)],
+        ),
+        "s2-b": AlignmentResult(
+            stem_id="s2-b",
+            aligner="whisper-large-v3",
+            lines=[AlignedLine(id="s2-01", line_id="s2-01", start_s=0.0, end_s=1.0, position_s=1.3)],
+        ),
+    }
+    directory = tmp_path / "preview"
+    (directory / "lines").mkdir(parents=True)
+    sf.write(directory / "lines" / "s1-01.wav", np.zeros(24000, dtype=np.float32), 24000)
+    tone = (0.9 * np.sin(2 * np.pi * 220 * np.arange(24000) / 24000)).astype(np.float32)
+    sf.write(directory / "lines" / "s2-01.wav", tone, 24000)
+
+    result = build_mix(project, directory, lambda _: None, name="preview_s2", only_scene=2)
+    assert result.file == "mix/preview_s2.wav"
+    # One second of scene 2 plus the mixer tail — not the 4.3 s full play.
+    assert 1.0 <= result.duration_s <= 3.5, result.duration_s
+    data, sr = sf.read(str(directory / result.file), dtype="float32")
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    # The scene starts at sample 0: no scene-1 silence and no 1.3 s offset.
+    assert _window_rms(data, sr, 0.1, 0.9) > 0.1, "the scene did not start at 0"
+
+
 def test_freeform_music_ignores_the_scene_of_its_anchor(tmp_path):
     """A music cue placed on the timeline belongs to the timeline.
 
