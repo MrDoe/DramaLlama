@@ -1763,8 +1763,12 @@ def create_app(
             raise HTTPException(status_code=502, detail=str(exc))
 
     @app.get("/api/suno/library")
-    def suno_library(limit: int = Query(default=500, ge=1, le=500)) -> dict[str, Any]:
-        """Newest own Suno library clips for the import-from-Suno picker."""
+    def suno_library(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+        """Newest own Suno library clips for the import-from-Suno picker.
+
+        Asking for more than 100 is allowed and gets 100: the Suno API refuses a
+        larger page, and the point is the recent clips a user might import.
+        """
         try:
             return SunoBridge().list_library(limit)
         except SunoError as exc:

@@ -360,9 +360,14 @@ async function main() {
       // the newest own generations, so failed renders can be recovered
       // without generating again.
       if (req.method === "GET" && url.pathname === "/library") {
+        // Upstream `list_library` refuses anything above 100 outright ("Limit
+        // exceeds maximum of 100"), and the bridge turned that into a 502 for the
+        // whole panel. Clamp to what the API accepts rather than forwarding a
+        // request that is known to fail: the picker wants recent clips, not all
+        // of them.
         const limit = Math.max(
           1,
-          Math.min(500, Number(url.searchParams.get("limit")) || 50),
+          Math.min(100, Number(url.searchParams.get("limit")) || 50),
         );
         const stemsOnly =
           url.searchParams.get("stems_only") === "true" ||

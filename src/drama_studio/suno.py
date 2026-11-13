@@ -78,12 +78,16 @@ class SunoBridge:
             raise SunoError(data.get("error") or "Suno bridge returned no persona")
         return data
 
-    def list_library(self, limit: int = 500) -> dict[str, Any]:
+    # The Suno API refuses `list_library` above 100 clips; the bridge used to
+    # forward 500 and answered 502, so the picker never opened at all.
+    LIBRARY_MAX = 100
+
+    def list_library(self, limit: int = LIBRARY_MAX) -> dict[str, Any]:
         """Newest own Suno library clips (for the import-from-Suno picker)."""
         try:
             response = httpx.get(
                 f"{self.base_url}/library",
-                params={"limit": max(1, min(500, limit))},
+                params={"limit": max(1, min(self.LIBRARY_MAX, limit))},
                 timeout=60,
             )
             response.raise_for_status()

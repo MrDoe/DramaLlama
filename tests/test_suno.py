@@ -39,3 +39,36 @@ def test_clip_ready_waits_for_progressive_media():
         "encoding": "1.0.0",
     }
     assert _clip_ready({"status": "streaming", "media_urls": [progressive_m4a]}) is True
+
+
+def test_library_requests_stay_under_the_suno_maximum(monkeypatch):
+    """Asking the Suno API for more than 100 clips is an error, not a short page.
+
+    The bridge forwarded the picker's 500, upstream answered "Limit exceeds
+    maximum of 100", and the panel saw a 502 and never rendered a single clip —
+    so a request for "lots" has to arrive as a legal request for 100.
+    """
+    from drama_studio.suno import SunoBridge
+
+    seen = {}
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True, "clips": []}
+
+    def fake_get(url, params=None, timeout=None):
+        seen["url"] = url
+        seen["params"] = params
+        return _Response()
+
+    monkeypatch.setattr("httpx.get", fake_get)
+    bridge = SunoBridge(base_url="http://bridge.test")
+    bridge.list_library(limit=500)
+    assert seen["params"]["limit"] == 100
+    bridge.list_library(limit=7)
+    assert seen["params"]["limit"] == 7
+    bridge.list_library()
+    assert seen["params"]["limit"] == 100
