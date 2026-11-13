@@ -824,3 +824,16 @@ implant level ladder, cast, episode-by-episode plot (Tracks 14–20 and the
 Episode 8 script), themes, Suno craft rules, and open threads. Also documented
 the export's inconsistent episode numbering (Episode 4 is absent; Track 18 is
 labelled Episode 5).
+
+## [2026-11-13] fix | Spatial CI segfault: ctypes handles need argtypes
+
+The v0.3.5 and v0.3.6 spatial jobs died at `dl_get_n_sh` (exit 139) in
+`scripts/spike_spatial.py`. The DSP was fine: `dl_get_n_sh`,
+`dl_get_frame_size` and `dl_last_error` were called without `argtypes`, so
+ctypes passed the 64-bit handle as a C int, truncating the pointer. On the dev
+box the heap sat below 4 GB and the truncated address happened to survive; the
+ubuntu-22.04 runner's heap did not. Both the spike and `bench_spatial.py` now
+declare `c_void_p` for every handle, and bench keeps its numpy buffers alive
+instead of passing a temporary's pointer. Reproduced and verified in an
+ubuntu:22.04 container against the CI-built library; v0.3.7 restores the
+native renderer asset.

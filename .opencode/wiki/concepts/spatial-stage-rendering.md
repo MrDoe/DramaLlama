@@ -260,6 +260,12 @@ front source balance 0.000, left +0.862, right −0.862, and a left source
 recentred to 0.000 by facing +90. `tests/test_spatial.py` mirrors those as
 unit tests and skips itself when the library is absent.
 
+Both the spike and `bench_spatial.py` call the shim through raw `ctypes`, so
+every `dl_*` handle argument must have an `argtypes` entry. A missing one
+passes the 64-bit pointer as a C int and dereferences the truncated address;
+that only segfaults when the heap sits above 4 GB, which is why the CI runner
+crashed at `dl_get_n_sh` while the dev box did not.
+
 ## Related
 
 - [[concepts/spatial-coordinate-convention]] — the axes, and the y-flip trap.
