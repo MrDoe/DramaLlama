@@ -28,7 +28,9 @@ The **Cut** page is a shared multitrack timeline that shows every line at its sc
 
 [![Cut board](docs/screenshots/04-cutboard.png)](docs/screenshots/04-cutboard.png)
 
-The **Stage** page places your cast in a shoebox room. Drag speakers around a top-down plan, aim the listener, pick a room preset, and the mix renders through a real image-source acoustic model into stereo or a third-order Ambisonic master.
+The **Stage** page places your cast in a shoebox room. Drag speakers around a top-down plan, aim the listener, pick a room preset, and the mix renders through a real image-source acoustic model into stereo or a third-order Ambisonic master. Automatic placement also reads the stage directions: a line marked *"through the hatch"* walks in, *"closer now"* approaches, *"at the door"* leaves, and the board draws the route as a dashed line with a ring where the walk starts.
+
+[![Stage](docs/screenshots/06-stage.png)](docs/screenshots/06-stage.png)
 
 The **Mix** page assembles the dialogue with ducked sound effects and offers the loudness-normalised master as a WAV or MP3 download, plus the Ambisonic master when staging exports one.
 
@@ -191,7 +193,7 @@ The sidecar owns the GPU, and Drama Llama serialises GPU jobs, so stop the sidec
 
 The backend lives in `src/drama_studio/`, which contains the FastAPI app, the job queue, the worker, the parser, the engines and the mixer. The engine adapters for Breeze, Breeze-DE, Chatterbox, Suno and Fake are in its `engines/` subfolder, and the shared take-aware cut logic (freezing, remapping and validating cuts) is in `cuts.py`. Spatial staging is `spatial.py` plus the C shim and CMakeLists in `spatial/`. The pinned Breeze stem renderer and Whisper aligner are vendored under `vendor/breeze_stems/`.
 
-The Suno bridge in `suno-bridge/` is a small Node HTTP sidecar built on the installed `bettersuno-mcp` modules. The frontend in `web/` is written in React, Vite and TypeScript, and the Drama Llama mascot sits in `web/public/`. The tour screenshots are in `docs/screenshots/`. At runtime, each project's JSON, references, takes, line clips and mix are stored in `data/projects/<id>/`, and the job queue is an SQLite database in WAL mode at `data/jobs.sqlite3`. The `installer/` folder at the repository root holds the PySide6 wizard and the stdlib-only installer core, with its PyInstaller spec, Inno Setup script and AppImage builder under `installer/packaging/`; `scripts/build_installer.py` drives the build. The `tests/` folder holds 344 tests, none of which require a GPU. The spatial rendering tests self-skip when the native renderer has not been built.
+The Suno bridge in `suno-bridge/` is a small Node HTTP sidecar built on the installed `bettersuno-mcp` modules. The frontend in `web/` is written in React, Vite and TypeScript, and the Drama Llama mascot sits in `web/public/`. The tour screenshots are in `docs/screenshots/`. At runtime, each project's JSON, references, takes, line clips and mix are stored in `data/projects/<id>/`, and the job queue is an SQLite database in WAL mode at `data/jobs.sqlite3`. The `installer/` folder at the repository root holds the PySide6 wizard and the stdlib-only installer core, with its PyInstaller spec, Inno Setup script and AppImage builder under `installer/packaging/`; `scripts/build_installer.py` drives the build. The `tests/` folder holds 367 tests, none of which require a GPU. The spatial rendering tests self-skip when the native renderer has not been built.
 
 The Python package keeps its `drama_studio` import name. Only the product, the CLI and the UI were renamed.
 

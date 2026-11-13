@@ -88,6 +88,51 @@ See [[concepts/gpu-serialization]] — staging deliberately does **not** join it
 It is CPU-only at ~0.2 s per audio second, so it never touches the GPU queue
 discipline that Breeze, Chatterbox and Ollama are under.
 
+## Motion, and how the export is written
+
+A `SceneStage` carries `paths: list[StagePath]` — keyframes interpolated linearly
+between two points. **Keyframe times are scene-relative, not project-absolute.**
+A stem is one speaker's continuous performance inside one scene, and the mixer
+places every stem of a scene at that scene's first sound, so sample 0 of the
+sources *is* `t = 0` of the path. `render_scene` is given the scene's absolute
+`start_s` for block labelling and subtracts it before looking up keyframes.
+Reading them at project time made every staged scene after the first one sit
+still at its last keyframe — scene 1 only looked correct because its offset is
+zero, which is why the bug survived the first round of live testing.
+`render_scene` re-evaluates source positions on a 100 ms grid
+(`MOTION_GRID_S`), because every move makes SAF rebuild its image-source
+echograms and per-sample motion is wasted CPU.
+
+`layout_scene` derives the moves from the script. The parser keeps the direction
+on each line, so "through the hatch", "closer now", "as he leaves" and "pacing"
+map onto an enter / approach / leave / pace move, two keyframes each, clamped
+inside the walls, timed across the window in which that speaker actually speaks.
+Those windows come from the alignments: **a project that has not been rendered
+and aligned yet gets positions and no paths.** An invented timing would produce
+movement nobody could hear. A mover's dot sits where the move ends, and someone
+leaving faces the exit rather than the listener.
+
+Two rules keep re-spreading honest, because "Spread the cast" is a decision about
+people, not architecture:
+
+- **The room survives.** A staged scene keeps its own room rather than the
+  project default, and the UI sends the room *on screen* with the request, since
+  a preset picked a second ago exists only in the browser and the server would
+  otherwise plan the cast inside the stale saved one.
+- **Heights come from the room.** Ear and mouth height used to be 1.6 m and
+  1.5 m literally, so the Car interior preset (1.4 m) failed the model's own
+  "inside the room" check and the layout endpoint answered **500**. They are now
+  fractions of the ceiling. Anyone adding a low preset should re-check the
+  layout of every scene, because the failure was a crash, not a warning.
+
+The Ambisonic file is written from the *same summed ACN timeline* the stereo
+decode listens to, converted and streamed in blocks. An earlier version
+re-stitched the per-scene beds in the writer: appended end to end instead of
+placed at their offsets, they landed late whenever one scene's tail reached into
+the next, and the file came out longer than the stereo master. Writing the sum
+makes length and alignment true by construction.
+
+
 ## Degrading gracefully
 
 The hard rule: a missing or failing renderer must never lose a line.

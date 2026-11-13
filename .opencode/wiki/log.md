@@ -565,3 +565,66 @@ been invisible; `_install_prefixes()` now mirrors every installer prefix rule.
 
 Deliberately not done: the SHA-256 stays empty until CI publishes the first real
 asset. Any hash written now would be invented.
+
+## [2026-11-13] ingest | Shipping the renderer, and four bugs a browser found
+
+Packaging first: the native room renderer is now built by CI (`spatial` job in
+`installer.yml`, SAF commit pinned in `pins.json`, gated on `spike_spatial.py`
+and `tests/test_spatial.py` before an artefact is published) and fetched by the
+installer into `<prefix>/lib`. The shim sources reached neither sdist nor wheel —
+`src/drama_studio/spatial/` has no `__init__.py` on purpose, because a package of
+that name would shadow the module beside it — so `MANIFEST.in` grafts them in.
+`pins.json` ships an empty `assets` map: the SHA-256 has to come from a release
+that exists, and inventing one is worse than none.
+
+Then a Lem-style five-scene, four-character piece in the browser, Breeze with
+emotional direction on every line. Four real defects fell out.
+
+**The Ambisonic master was the wrong length and the wrong shape.** The writer
+re-stitched the per-scene beds, appending them rather than placing them at their
+offsets, so a tail that reached into the next scene pushed everything after it
+late — and the frame counts still matched, which is why the first regression test
+I wrote passed over it. Export now takes the summed ACN array the stereo decode
+already uses and streams it in blocks; length and alignment are true by
+construction, and the test correlates the two envelopes to keep it that way.
+
+**Long jobs reverted the user's edits.** A voice direction typed while a design
+ran was silently rolled back, because the job saved the project it had loaded
+minutes earlier — project.json, one file, last writer wins. Three of four
+directions disappeared in a single session. Jobs now replay only what they own.
+The same class of bug was in `SfxLibrary`: two processes, one index, so the API
+answered "sfx not found" about a Suno track the worker had just downloaded, and
+the panel's own preview 404ed with it.
+
+**A queue wedged permanently.** Stale-lease recovery ran once, at worker startup,
+so a job orphaned by a restart sat `running` with an idle GPU and everything
+behind it starved. Recovery is now periodic, which is only safe because the
+worker refreshes the lease while a handler runs — a single Breeze take is longer
+than the timeout, and without the keep-alive recovery would steal healthy renders.
+
+**The auto-cut was 0.4–1.0 s short on nearly every line.** `align_cuts()` reports
+where words are; the consonant decay sits past that, and the clip ended at the
+boundary. Padding lives in our wrapper (the vendored module is another session's):
+the cut follows a 20 ms envelope outward and stops when the signal stops, so
+decay is kept and silence is not, and the allowance can never shorten a cut.
+A relative floor alone was wrong — on a silent take the peak is zero, so digital
+silence passes any percentage-of-peak test; there is an absolute term now.
+
+Also: "Design from description" had no description. The field was only reachable
+by PATCH, so a deterministic parse gave every character the same generic
+narrator; the Voices panel now has the field, and designing persists it first and
+uses the text on screen rather than stale React state.
+
+New work, from a request to give staged sources sensible paths: layout now reads
+the parentheticals the parser already keeps. Hatch, closer now, as he leaves,
+pacing become enter/approach/leave/pace moves timed across the window in which
+that speaker actually speaks — taken from alignments, so an unaligned project
+gets positions and no paths. `render_scene` already interpolated motion on a
+100 ms grid; only the producer was missing.
+
+Known gap I did not close: `StageBoard` does not draw those paths yet, so motion
+is audible and invisible. Nothing marks a mover on the board.
+
+Numbers: 365 tests, up from 334 at the start of the branch. Linux-only renderer
+artefact; Windows and macOS still build by hand. SFX and beds remain
+non-spatial.

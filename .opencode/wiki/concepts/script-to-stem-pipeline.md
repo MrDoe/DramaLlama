@@ -48,6 +48,21 @@ and cuts whose take disappeared are ratio-remapped to the replacement. The cut
 sheet is therefore take-aware and can mix takes per line — see
 [[concepts/take-aware-cuts]].
 
+### The cut allowance
+
+`align_cuts()` is owned by the sibling `~/tts_test` session and must not be
+forked, and its boundaries are not wrong — they answer a different question. It
+reports where the *words* are; the decay after the last consonant is past that,
+so cutting exactly there loses 0.4–1.0 s of every line and the whole drama
+sounds clipped. The fix belongs in this wrapper, and is `padded_window()`: walk
+the cut outward along a 20 ms RMS envelope, stop when the signal stops, bound
+both ends by the neighbouring cuts and the take. The allowance can grow a cut
+and never shrink one, so a tight exchange gains nothing and a long beat does not
+pick up dead air. `AlignedLine.start_s/end_s` store the *padded* window, so the
+Cut board edits what the mix actually plays. See [[concepts/cut-region-effects]].
+
+
+
 ## Related
 
 - [[entities/breeze-engine]]

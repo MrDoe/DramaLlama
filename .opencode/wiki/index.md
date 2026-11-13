@@ -22,6 +22,7 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[concepts/gpu-optional-install]] — CPU-only installs, CUDA wheel channels, opt-in engines, size envelope.
 - [[concepts/spatial-stage-rendering]] — SAF room acoustics in the mix: why ISC not GPLv3, the decode-once timeline, the 0.68 s tail limit, benchmarks.
 - [[concepts/spatial-coordinate-convention]] — stage vs SAF vs ims axes, the `90 - facing` rotation, the y-flip trap, ACN/N3D vs AmbiX.
+- [[concepts/project-json-concurrency]] — long jobs vs one JSON file: lost updates, two-process SFX index, lease recovery.
 
 ## Engines and music
 

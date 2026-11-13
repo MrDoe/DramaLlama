@@ -20,7 +20,7 @@ CLI alias are intentionally unchanged.
   Voices workflow step.
 - SFX index over `~/Sounds`, cue sheet, mixer with ducking/EQ/loudnorm.
 - React UI: projects, script/parse, stems, render, sound, mix.
-- 344 backend tests (spatial ones skip without the native renderer), web build green.
+- 367 backend tests (spatial ones skip without the native renderer), web build green.
 - English Breeze path validated on one real scene; German Chatterbox path
   validated end-to-end (20.7 s ANNA stem, 7/7 cuts). Suno music generation and
   WAV download validated through the BetterSuno bridge.
@@ -245,7 +245,18 @@ observable behavior, not just DOM presence.
   needs no GPU.
 - Stage positions must be inside the room; the Pydantic validators compare
   against the *scene's* room, and `scene`/`room` field order matters for the
-  `info.data` lookup in `SceneStage`.
+  `info.data` lookup in `SceneStage`. Ear and mouth height come from the room
+  (`layout_scene`), never literal 1.6/1.5 m: a 1.4 m preset with a 1.6 m listener
+  fails that validator and the layout endpoint answers 500.
+- Motion keyframe times are **scene-relative**, and `render_scene` subtracts the
+  scene's `start_s` before looking them up. Stem `position_s` is not comparable
+  across speakers either — every stem starts at 0 — so speaker windows for
+  auto-staging come from `layout_script_order`, relative to the scene's first
+  sound. Read the keys at project time and every scene after the first one stops
+  moving; `tests/test_spatial.py` pins both halves of that.
+- "Spread the cast" must not change the room: a staged scene keeps its own room,
+  and `StageBoard` sends the room currently on screen because a preset picked a
+  second ago is unsaved and the server cannot see it.
 - Adding a production step means **five** edits in `ProjectPage.tsx`: `STEPS`,
   the `activeStep` union, the rail's `available` gate, the rail button's
   `onClick` dispatcher, and the render ternary. Forgetting the dispatcher is
