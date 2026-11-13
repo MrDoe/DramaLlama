@@ -334,6 +334,56 @@ class Project(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+def reference_id_for(file: str) -> str:
+    """A stable, filesystem-derived id for a reference voice."""
+    stem = file.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return stem or "voice"
+
+
+def adopt_legacy_reference(character: Character) -> RefVoice | None:
+    """Register a character's default reference as a selectable voice.
+
+    Voices designed or uploaded without a name live only in ``ref_file``, so
+    they have no id and the per-stem selector in the Stems step cannot list
+    them: the character looks voiced in Voices but offers nothing to choose.
+    Adding an entry that points at the same file makes it addressable without
+    moving any audio, and ``ref_file`` is left alone, so default resolution in
+    ``handlers._resolve_reference`` picks the exact same clip either way.
+
+    Idempotent: does nothing when the default is already registered.
+    """
+    if not character.ref_file:
+        return None
+    if any(entry.file == character.ref_file for entry in character.references):
+        return None
+    base = reference_id_for(character.ref_file)
+    taken = {entry.id for entry in character.references}
+    candidate, suffix = base, 2
+    while candidate in taken:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    entry = RefVoice(
+        id=candidate,
+        name=f"Voice {len(character.references) + 1}",
+        file=character.ref_file,
+        ref_text=character.ref_text,
+        ref_instruction=character.ref_instruction,
+        f0_hz=character.f0_hz,
+        source="unknown",
+    )
+    character.references.append(entry)
+    return entry
+
+
+def normalize_references(project: Project) -> bool:
+    """Adopt every unregistered default reference; True if anything changed."""
+    changed = False
+    for character in project.script.characters.values():
+        if adopt_legacy_reference(character) is not None:
+            changed = True
+    return changed
+
+
 class ProjectSummary(BaseModel):
     id: str
     title: str

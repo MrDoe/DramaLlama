@@ -1051,6 +1051,19 @@ function RenderBoard({
                   const readyForStem = voiceReady(stem);
                   const character = project.script.characters[stem.speaker];
                   const refVoices = character?.references ?? [];
+                  // The character's default is whatever ref_file points at. When
+                  // that is one of the listed voices it must not appear twice, so
+                  // it is folded into the unselected option and shown by name.
+                  const defaultVoice =
+                    refVoices.find((ref) => ref.file === character?.ref_file) ?? null;
+                  const otherVoices = defaultVoice
+                    ? refVoices.filter((ref) => ref.id !== defaultVoice.id)
+                    : refVoices;
+                  const defaultLabel = defaultVoice ? defaultVoice.name : "Default voice";
+                  const selectedRefVoice =
+                    stem.ref_voice_id && stem.ref_voice_id !== defaultVoice?.id
+                      ? stem.ref_voice_id
+                      : "";
                   const showRefVoice =
                     (selectedEngine === "breeze" ||
                       selectedEngine === "breeze-de" ||
@@ -1172,15 +1185,15 @@ function RenderBoard({
                           <label className="cue-field">
                             <span>Reference</span>
                             <select
-                              value={stem.ref_voice_id ?? ""}
+                              value={selectedRefVoice}
                               onChange={(event) =>
                                 onRefVoiceChange(stem, event.target.value)
                               }
                               disabled={renderBusy}
-                              title="Which of the speaker's designed voices to render with"
+                              title="Which of the speaker's voices to render with"
                             >
-                              <option value="">Default voice</option>
-                              {refVoices.map((ref) => (
+                              <option value="">{`${defaultLabel} (default)`}</option>
+                              {otherVoices.map((ref) => (
                                 <option key={ref.id} value={ref.id}>
                                   {ref.name}
                                 </option>

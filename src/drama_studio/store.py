@@ -94,12 +94,17 @@ class ProjectStore:
         # old projects stay readable after multi-track cuts landed.
         # (Legacy Stem.engine / Character.engine keys from pre-project-level
         # projects are ignored by pydantic's default extra=ignore.)
+        from .models import normalize_references
         from .cuts import normalize_alignment
 
         for stem in project.stems:
             alignment = project.alignments.get(stem.id)
             if alignment is not None:
                 normalize_alignment(alignment, stem.takes)
+        # A reference that only exists as ref_file gets an entry here so the
+        # Stems step can select it by name. Not saved: like the cut stamping
+        # above, this repairs the in-memory view and lands on the next save.
+        normalize_references(project)
         return project
 
     def find(self, project_id: str) -> Project | None:

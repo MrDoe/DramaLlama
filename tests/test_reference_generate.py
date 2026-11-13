@@ -133,7 +133,12 @@ def test_generate_reference_keeps_existing_default(project_store, monkeypatch, t
     updated_character = updated.script.characters["MARA"]
     assert updated_character.ref_file == "refs/mara.wav"
     assert updated_character.ref_text == "Default transcript."
-    assert updated_character.references[0].source == "generated"
+    # The pre-existing default is now registered too (so the Stems step can
+    # select it), and the new voice is the one flagged as generated.
+    generated = [item for item in updated_character.references if item.source == "generated"]
+    assert [item.name for item in generated] == ["Sample 1"]
+    assert generated[0].file == "refs/mara-sample-1.wav"
+    assert updated_character.ref_file == "refs/mara.wav"
 
 
 def test_generate_reference_rejects_chatterbox(project_store, monkeypatch, tmp_path):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -52,6 +54,81 @@ def test_ref_voice_model_defaults():
     character = Character(id="MARA", name="Mara")
     assert character.references == []
     assert character.ref_file is None
+
+
+def _character_with_legacy_default(tmp_path):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Test", "en", SCRIPT)
+    character = project.script.characters["MARA"]
+    ref_dir = store.project_dir(project.id) / "refs"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    (ref_dir / "mara.wav").write_bytes(b"default")
+    character.ref_file = "refs/mara.wav"
+    character.ref_text = "You're late."
+    character.ref_instruction = "Cold."
+    store.save(project)
+    return store, project
+
+
+def test_legacy_default_becomes_selectable(tmp_path):
+    """A designed voice with no name still shows up in the per-stem list."""
+    store, project = _character_with_legacy_default(tmp_path)
+    raw = json.loads(
+        (store.project_dir(project.id) / "project.json").read_text(encoding="utf-8")
+    )
+    assert raw["script"]["characters"]["MARA"]["references"] == []
+
+    loaded = store.get(project.id)
+    character = loaded.script.characters["MARA"]
+    assert len(character.references) == 1
+    entry = character.references[0]
+    assert entry.file == "refs/mara.wav"
+    assert entry.ref_text == "You're late."
+    assert entry.name.startswith("Voice ")
+
+
+def test_migration_does_not_change_default_resolution(tmp_path):
+    """Selecting the adopted entry renders the same clip as the default."""
+    from drama_studio.handlers import _resolve_reference
+
+    store, project = _character_with_legacy_default(tmp_path)
+    directory = store.project_dir(project.id)
+    loaded = store.get(project.id)
+    character = loaded.script.characters["MARA"]
+
+    by_default = _resolve_reference(character, directory, None)
+    by_id = _resolve_reference(character, directory, character.references[0].id)
+    assert by_default is not None and by_id is not None
+    assert by_default.path == by_id.path
+    assert by_default.ref_text == by_id.ref_text
+
+
+def test_migration_is_idempotent(tmp_path):
+    store, project = _character_with_legacy_default(tmp_path)
+    first = store.get(project.id)
+    assert len(first.script.characters["MARA"].references) == 1
+    first = store.save(first)
+    again = store.get(project.id)
+    assert len(again.script.characters["MARA"].references) == 1
+
+
+def test_registered_default_is_not_duplicated(tmp_path):
+    store, project = _character_with_legacy_default(tmp_path)
+    character = project.script.characters["MARA"]
+    character.references = [
+        RefVoice(id="raspy", name="Raspy", file="refs/mara.wav", ref_text="You're late.")
+    ]
+    store.save(project)
+    loaded = store.get(project.id)
+    assert [item.id for item in loaded.script.characters["MARA"].references] == ["raspy"]
+
+
+def test_character_without_reference_gains_nothing(tmp_path):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Test", "en", SCRIPT)
+    store.save(project)
+    loaded = store.get(project.id)
+    assert loaded.script.characters["MARA"].references == []
 
 
 def test_stem_range_validation():
