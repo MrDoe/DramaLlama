@@ -27,6 +27,7 @@ lib = ctypes.CDLL(str(LIB))
 lib.dl_create.restype = ctypes.c_void_p
 lib.dl_create.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                           ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
+lib.dl_destroy.argtypes = [ctypes.c_void_p]
 lib.dl_set_sources.argtypes = [ctypes.c_void_p, ctypes.c_int,
                                ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
 lib.dl_set_listener.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float), ctypes.c_float]
@@ -45,7 +46,9 @@ def f32(arr):
 
 
 def fp(arr):
-    return f32(arr).ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    """Return (contiguous float32 buffer, pointer). Keep the buffer alive for the call."""
+    buf = np.ascontiguousarray(arr, dtype=np.float32)
+    return buf, buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
 
 
 room = (ctypes.c_float * 3)(6.0, 5.0, 3.0)
@@ -66,17 +69,22 @@ N = (4800 // fs) * fs
 
 def render(src_xyz, facing=0.0):
     """Feed one click, return the decoded stereo block."""
-    lib.dl_set_listener(h, fp(LISTENER), ctypes.c_float(facing))
-    lib.dl_set_sources(h, 1, fp(src_xyz), None)
+    lbuf, lptr = fp(LISTENER)
+    lib.dl_set_listener(h, lptr, ctypes.c_float(facing))
+    sbuf, sptr = fp(src_xyz)
+    lib.dl_set_sources(h, 1, sptr, None)
 
     inbuf = np.zeros((1, N), dtype=np.float32)
-    inbuf[0, 0] = 1.0
     sh = np.zeros((nsh, N), dtype=np.float32)
-    rc = lib.dl_process(h, N, fp(inbuf), fp(sh))
+    inbuf[0, 0] = 1.0
+    in_ptr = inbuf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    sh_ptr = sh.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    rc = lib.dl_process(h, N, in_ptr, sh_ptr)
     assert rc == 0, f"dl_process failed: {lib.dl_last_error(h)}"
 
     stereo = np.zeros((2, N), dtype=np.float32)
-    rc = lib.dl_decode_stereo(h, N, fp(sh), fp(stereo))
+    st_ptr = stereo.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+    rc = lib.dl_decode_stereo(h, N, sh_ptr, st_ptr)
     assert rc == 0, f"dl_decode_stereo failed: {lib.dl_last_error(h)}"
 
     energy = np.sqrt((sh ** 2).sum(axis=0))

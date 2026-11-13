@@ -459,8 +459,10 @@ def layout_scene(
     return SceneStage(room=room, listener=listener, actors=actors, paths=paths)
 
 
-def _f32p(array: np.ndarray):
-    return np.ascontiguousarray(array, dtype=np.float32).ctypes.data_as(_F32P)
+def _f32p(array: np.ndarray) -> tuple[np.ndarray, ctypes.c_void_p]:
+    """Return (contiguous float32 buffer, pointer). Keep the buffer alive for the call."""
+    buf = np.ascontiguousarray(array, dtype=np.float32)
+    return buf, buf.ctypes.data_as(_F32P)
 
 
 # -------------------------------------------------------------------- project
@@ -636,7 +638,8 @@ class RoomSimulator:
     def set_listener(self, position, facing_deg: float) -> None:
         handle = self._require()
         array = np.array(position, dtype=np.float32).reshape(3)
-        if self._lib.dl_set_listener(handle, _f32p(array), ctypes.c_float(float(facing_deg))) != 0:
+        _buf, ptr = _f32p(array)
+        if self._lib.dl_set_listener(handle, ptr, ctypes.c_float(float(facing_deg))) != 0:
             raise SpatialUnavailable(self._error())
 
     def apply_scene_state(self, scene: SceneStage, time_s: float = 0.0) -> None:
@@ -651,7 +654,13 @@ class RoomSimulator:
         if count > MAX_SOURCES:
             raise SpatialUnavailable(f"a scene supports at most {MAX_SOURCES} staged sources")
         gain_array = None if gains is None else np.asarray(gains, dtype=np.float32)
-        if self._lib.dl_set_sources(handle, count, _f32p(positions), None if gain_array is None else _f32p(gain_array)) != 0:
+        _pbuf, pptr = _f32p(positions)
+        if gain_array is None:
+            gptr = None
+            _gbuf = None
+        else:
+            _gbuf, gptr = _f32p(gain_array)
+        if self._lib.dl_set_sources(handle, count, pptr, gptr) != 0:
             raise SpatialUnavailable(self._error())
 
     # -- rendering
@@ -673,7 +682,9 @@ class RoomSimulator:
         out = np.zeros((self.n_sh, n_samples), dtype=np.float32)
         if n_sources == 0:
             return out
-        if self._lib.dl_process(handle, n_samples, _f32p(data), _f32p(out)) != 0:
+        _dbuf, dptr = _f32p(data)
+        _obuf, optr = _f32p(out)
+        if self._lib.dl_process(handle, n_samples, dptr, optr) != 0:
             raise SpatialUnavailable(self._error())
         return out
 
@@ -684,7 +695,9 @@ class RoomSimulator:
         if data.ndim != 2 or data.shape[1] == 0:
             return np.zeros((2, 0), dtype=np.float32)
         out = np.zeros((2, data.shape[1]), dtype=np.float32)
-        if self._lib.dl_decode_stereo(handle, data.shape[1], _f32p(data), _f32p(out)) != 0:
+        _dbuf, dptr = _f32p(data)
+        _obuf, optr = _f32p(out)
+        if self._lib.dl_decode_stereo(handle, data.shape[1], dptr, optr) != 0:
             raise SpatialUnavailable(self._error())
         return out
 
@@ -694,7 +707,8 @@ class RoomSimulator:
         data = np.ascontiguousarray(sh, dtype=np.float32).copy()
         if data.ndim != 2 or data.shape[1] == 0:
             return data
-        if self._lib.dl_to_sn3d(handle, data.shape[1], _f32p(data)) != 0:
+        _dbuf, dptr = _f32p(data)
+        if self._lib.dl_to_sn3d(handle, data.shape[1], dptr) != 0:
             raise SpatialUnavailable(self._error())
         return data
 
