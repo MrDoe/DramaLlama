@@ -20,7 +20,7 @@ CLI alias are intentionally unchanged.
   Voices workflow step.
 - SFX index over `~/Sounds`, cue sheet, mixer with ducking/EQ/loudnorm.
 - React UI: projects, script/parse, stems, render, sound, mix.
-- 367 backend tests (spatial ones skip without the native renderer), web build green.
+- 376 backend tests (spatial ones skip without the native renderer), web build green.
 - English Breeze path validated on one real scene; German Chatterbox path
   validated end-to-end (20.7 s ANNA stem, 7/7 cuts). Suno music generation and
   WAV download validated through the BetterSuno bridge.

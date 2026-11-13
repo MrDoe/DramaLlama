@@ -13,6 +13,7 @@ import pytest
 
 from drama_studio.aligner import (
     HOP_S,
+    PAD_TAIL_S,
     envelope,
     padded_window,
     speech_floor,
@@ -123,3 +124,40 @@ def test_a_missing_envelope_leaves_the_cut_alone():
         1.0,
         2.0,
     )
+
+
+def test_alignment_leaves_timeline_positions_to_the_layout(tmp_path, monkeypatch):
+    """A stem's own clock must never be written into `position_s`.
+
+    Every stem starts counting at zero, and the mixer treats that field as a slot
+    on the project timeline, so a per-stem cursor lands every scene's first line
+    at t = 0 and the play mixes on top of itself. The contract is None = "derive
+    script order" — asserted here at the producer, not only at the repair.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    from drama_studio.aligner import WhisperAligner
+    from drama_studio.models import Line
+
+    rate = 24000
+    take = tmp_path / "stem.wav"
+    sf.write(str(take), (0.2 * np.sin(2 * np.pi * 200 * np.arange(rate * 3) / rate)).astype(np.float32), rate)
+
+    aligner = WhisperAligner()
+    monkeypatch.setattr(aligner, "load", lambda: None)
+    aligner._align_cuts = lambda samples, sr, groups, asr, language=None: (
+        [(0.0, 1.2), (1.5, 2.8)],
+        [0.9, 0.9],
+    )
+    lines = [
+        Line(id="s1-01", scene=1, speaker="A", text="First."),
+        Line(id="s1-02", scene=1, speaker="A", text="Second."),
+    ]
+    result = aligner.align(take, lines, tmp_path / "out", stem_id="s1-a")
+    assert [cut.position_s for cut in result.lines] == [None, None]
+    # Windows are still real cuts, in take order, and the allowance may close a
+    # gap between two lines but never overlap them.
+    assert result.lines[0].start_s == pytest.approx(0.0, abs=HOP_S)
+    assert result.lines[0].end_s <= result.lines[1].start_s + 1e-6
+    assert result.lines[1].end_s <= 2.8 + PAD_TAIL_S
