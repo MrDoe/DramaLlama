@@ -272,6 +272,7 @@ def test_real_pins_are_complete():
     meta = load_pins()["cosyvoice"]
     entries = [item for group in meta["models"]["files"] for item in group]
     entries += list(meta["assets"].values()) + list(meta["ggml"].values())
+    assert {"linux-x86_64", "windows-x86_64"} <= set(meta["assets"])
     entries.append(meta["build"]["onnxruntime"])
     for entry in entries:
         assert len(entry["sha256"]) == 64 and entry["size"] > 0

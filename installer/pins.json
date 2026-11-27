@@ -182,7 +182,7 @@
   },
   "cosyvoice": {
     "release": "v0.2.1",
-    "note": "CosyVoice 3 through cosyvoice.cpp. Linux: built by the Installers workflow's `cosyvoice` job from build.* (upstream's Linux binaries need glibc 2.43); copy URL, size and SHA-256 from dist/*.sha256 into assets.linux-x86_64 after the first release that carries it. Until then the installer uses an installed or locally built cosyvoice-cli (scripts/build_cosyvoice.py --install). Windows uses the pinned upstream zip. GGML libraries: an installed Ollama is reused when its GGML 1.x passes a probe, otherwise the pinned llama.cpp Vulkan build is downloaded.",
+    "note": "CosyVoice 3 through cosyvoice.cpp. Linux: built by the Installers workflow's `cosyvoice` job from build.* (upstream's Linux binaries need glibc 2.43); assets.linux-x86_64 pins an immutable release tag; to ship a rebuilt program, copy URL, size and SHA-256 from that release's dist/*.sha256. An installed or locally built cosyvoice-cli (scripts/build_cosyvoice.py --install) is preferred over the download. Windows uses the pinned upstream zip. GGML libraries: an installed Ollama is reused when its GGML 1.x passes a probe, otherwise the pinned llama.cpp Vulkan build is downloaded.",
     "smoke_reference": {
       "url": "https://raw.githubusercontent.com/FunAudioLLM/CosyVoice/074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc/asset/zero_shot_prompt.wav",
       "size": 334138,
@@ -309,6 +309,11 @@
       ]
     },
     "assets": {
+      "linux-x86_64": {
+        "url": "https://github.com/MrDoe/DramaLlama/releases/download/v0.4.0/dramallama-cosyvoice-linux-x86_64.tar.gz",
+        "sha256": "093df1554628cc6fd09e0babd21b914a6fd089b19013acffd8b4a1731181e17d",
+        "size": 15174011
+      },
       "windows-x86_64": {
         "url": "https://github.com/Lourdle/cosyvoice.cpp/releases/download/v0.2.1/cosyvoice-81ce60c-windows-x64-miniaudio-no_icu.zip",
         "sha256": "f196f0c2c65bc0f825108629ecdabfdad79bfbf080a6aac1f67763b7b0e1081b",
