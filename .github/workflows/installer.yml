@@ -250,8 +250,8 @@ jobs:
           python scripts/build_spatial.py \
             --saf third_party/Spatial_Audio_Framework \
             --output dist/spatial \
-            --cmake-arg "-DCMAKE_TOOLCHAIN_FILE=${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
-            --cmake-arg "-DVCPKG_TARGET_TRIPLET=x64-windows"
+            --cmake-arg="-DCMAKE_TOOLCHAIN_FILE=${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
+            --cmake-arg="-DVCPKG_TARGET_TRIPLET=x64-windows"
       - name: Bundle the OpenBLAS runtime
         # x64-windows is a dynamic triplet: without these DLLs beside it the
         # renderer does not load on a machine that has no vcpkg.
