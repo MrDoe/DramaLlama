@@ -957,3 +957,11 @@ so staging works out of the box.
   `--cmake-arg=-D...` with `=`.
 - Open: the `spatial-windows` job failed in both releases (vcpkg OpenBLAS has no
   LAPACKE); no Windows renderer is published or pinned yet.
+
+## [2026-11-27] release | 0.4.2 and 0.4.3: the Windows room renderer
+
+0.4.2 is the first release carrying `dramallama-spatial-windows-x86_64.zip`;
+0.4.3 pins it. The job had failed for three reasons: vcpkg's OpenBLAS has no
+LAPACKE (use the official package), MSVC asked for C11 makes SAF pick `_Complex`
+types it lacks, and the shim exported symbols with a GCC-only attribute. This
+closes the "Open" point of the previous entry.

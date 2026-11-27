@@ -76,8 +76,13 @@
         "size": 1548
       }
     },
-    "note": "Native room renderer (Ambisonic Stage step). Built by the Installers workflow's `spatial` (Linux) and `spatial-windows` jobs from this exact SAF commit and pinned to an immutable release tag with its SHA-256. The installer downloads <asset>/libdrama_llama_spatial.so or drama_llama_spatial.dll into <prefix>/lib and skips with a warning for a platform with no entry. Never resolve a moving tag. Windows entry is intentionally absent until the first release carrying the zip is published; copy its URL, size and SHA-256 from dist/*.sha256 into assets.windows-x86_64 from that release onward.",
+    "note": "Native room renderer (Ambisonic Stage step). Built by the Installers workflow's `spatial` (Linux) and `spatial-windows` jobs from this exact SAF commit and pinned to an immutable release tag with its SHA-256. The installer downloads <asset>/libdrama_llama_spatial.so or drama_llama_spatial.dll into <prefix>/lib and skips with a warning for a platform with no entry. Never resolve a moving tag. The Windows zip links the official OpenBLAS pinned in openblas_windows and ships its DLL. To ship a rebuilt renderer, copy URL, size and SHA-256 from that release's dist/*.sha256.",
     "assets": {
+      "windows-x86_64": {
+        "url": "https://github.com/MrDoe/DramaLlama/releases/download/v0.4.2/dramallama-spatial-windows-x86_64.zip",
+        "sha256": "53eb4ac0179e358013fb686848199a7d7370bc7862fb1530a80604d4bc074bc1",
+        "size": 13387644
+      },
       "linux-x86_64": {
         "url": "https://github.com/MrDoe/DramaLlama/releases/download/v0.3.8/dramallama-spatial-linux-x86_64.tar.gz",
         "sha256": "ab2b03e460da4c7c094a31aafc62cf77e2eef8b5a0a6a44932d1464125b20fec",
