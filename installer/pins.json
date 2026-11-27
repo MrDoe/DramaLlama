@@ -65,6 +65,17 @@
     "saf_repo": "leomccormack/Spatial_Audio_Framework",
     "saf_commit": "18fd5aba46e20787b51f28f7197a68506c965c07",
     "abi": 1,
+    "openblas_windows": {
+      "version": "0.3.34",
+      "url": "https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.34/OpenBLAS-0.3.34-x64.zip",
+      "sha256": "e9cb6134541f36c27346d5fc5995652f060fba227cebbbabcbda5a5a44d7c76b",
+      "size": 40860061,
+      "license": {
+        "url": "https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/v0.3.34/LICENSE",
+        "sha256": "190b5a9c8d9723fe958ad33916bd7346d96fab3c5ea90832bb02d854f620fcff",
+        "size": 1548
+      }
+    },
     "note": "Native room renderer (Ambisonic Stage step). Built by the Installers workflow's `spatial` (Linux) and `spatial-windows` jobs from this exact SAF commit and pinned to an immutable release tag with its SHA-256. The installer downloads <asset>/libdrama_llama_spatial.so or drama_llama_spatial.dll into <prefix>/lib and skips with a warning for a platform with no entry. Never resolve a moving tag. Windows entry is intentionally absent until the first release carrying the zip is published; copy its URL, size and SHA-256 from dist/*.sha256 into assets.windows-x86_64 from that release onward.",
     "assets": {
       "linux-x86_64": {

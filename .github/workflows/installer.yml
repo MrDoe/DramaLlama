@@ -17,6 +17,7 @@ on:
       - "installer/**"
       - "scripts/build_installer.py"
       - "scripts/build_spatial.py"
+      - "scripts/fetch_openblas.py"
       - "scripts/build_cosyvoice.py"
       - "scripts/smoke_cosyvoice.py"
       - "src/drama_studio/engines/cosyvoice_runtime.py"
@@ -228,13 +229,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install OpenBLAS / LAPACKE
-        # SAF's CBLAS backend is the only one that works without a vendor SDK.
-        # vcpkg ships the headers and the import library on Windows runners.
-        run: |
-          set -euo pipefail
-          vcpkg install openblas:x64-windows
-          echo "VCPKG_ROOT=${VCPKG_INSTALLATION_ROOT}" >> "$GITHUB_ENV"
+      - name: Fetch the pinned OpenBLAS
+        # SAF's CBLAS backend is the only one that works without a vendor SDK,
+        # and it needs LAPACKE, which vcpkg's openblas port leaves out. The
+        # official Windows package has both; its hash is in installer/pins.json.
+        run: python scripts/fetch_openblas.py third_party/openblas
       - name: Check out the pinned Spatial_Audio_Framework
         run: |
           set -euo pipefail
@@ -247,19 +246,21 @@ jobs:
       - name: Build the shim
         run: |
           python -m pip install --upgrade pip
+          blas="$(cygpath -m "$PWD/third_party/openblas")"
           python scripts/build_spatial.py \
             --saf third_party/Spatial_Audio_Framework \
             --output dist/spatial \
-            --cmake-arg="-DCMAKE_TOOLCHAIN_FILE=${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" \
-            --cmake-arg="-DVCPKG_TARGET_TRIPLET=x64-windows"
+            --cmake-arg="-DOPENBLAS_LIBRARY=$blas/lib/libopenblas.lib" \
+            --cmake-arg="-DLAPACKE_LIBRARY=$blas/lib/libopenblas.lib" \
+            --cmake-arg="-DOPENBLAS_HEADER_PATH=$blas/include" \
+            --cmake-arg="-DLAPACKE_HEADER_PATH=$blas/include"
       - name: Bundle the OpenBLAS runtime
-        # x64-windows is a dynamic triplet: without these DLLs beside it the
-        # renderer does not load on a machine that has no vcpkg.
+        # Without this DLL beside it the renderer does not load on a user's
+        # machine.
         run: |
           set -euo pipefail
-          installed="$(cygpath -u "$VCPKG_INSTALLATION_ROOT")/installed/x64-windows"
-          cp "$installed"/bin/*.dll dist/spatial/
-          cp "$installed/share/openblas/copyright" dist/spatial/OpenBLAS-LICENSE.txt
+          cp third_party/openblas/bin/libopenblas.dll dist/spatial/
+          cp third_party/openblas/LICENSE dist/spatial/OpenBLAS-LICENSE.txt
       - name: Package the artifact
         # The installer looks for drama_llama_spatial.dll and extracts .zip.
         shell: pwsh
