@@ -119,10 +119,10 @@ def test_directions_become_instructions_and_are_classified_once(studio, monkeypa
 
     first, second = studio.engine.requests
     assert [(s.text, s.instruction) for s in first.segments] == [
-        ("Kommen Sie herein.", instruction_for("soft")),
+        ("Kommen Sie herein.", instruction_for("soft", "de")),
         ("Wann kommt der Bus?", None),
     ]
-    assert second.segments[0].instruction == instruction_for("angry")
+    assert second.segments[0].instruction == instruction_for("angry", "de")
     # One model load covered the whole project, before the engine was loaded.
     assert calls == [["leise", "wütend"]]
     assert studio.events[:3] == ["unload all", "classify", "load cosyvoice"]

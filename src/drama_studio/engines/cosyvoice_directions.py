@@ -21,7 +21,11 @@ BATCH = 40
 @dataclass(frozen=True)
 class Style:
     meaning: str  # what the classifier is told
-    instruction: str  # what CosyVoice is told
+    instruction: str  # what CosyVoice is told for English
+    #: For German: the same wish in Chinese, ending in "speak German". The
+    #: English-project phrases give German lines an English accent. Chosen by ear
+    #: (2026-11-27) over English and German wordings; the effect is milder.
+    german: str
 
 
 #: Chosen by measurement with the RL model and the fp32 speech tokenizer
@@ -34,30 +38,37 @@ STYLES: dict[str, Style] = {
     "soft": Style(  # 100 %, 1.34x slower, slightly lower pitch; level unchanged
         "quiet, soft, whispering, subdued",
         "Please say a sentence in a very soft voice.",
+        "请用非常轻柔的声音说德语。",
     ),
     "loud": Style(  # 100 %, +6.7 dB, +3.1 semitones
         "loud, shouting, calling out",
         "请用尽可能大声地说一句话。",
+        "请尽可能大声地说德语。",
     ),
     "slow": Style(  # 96 %, 1.85x slower
         "slow, deliberate, word by word",
         "请用尽可能慢地语速说一句话。",
+        "请用尽可能慢的语速说德语。",
     ),
     "fast": Style(  # 94 %, 0.79x the duration
         "fast, rushed, hurried",
         "Please speak very fast.",
+        "请用尽可能快的语速说德语。",
     ),
     "angry": Style(  # 98 %, +5.0 dB, +1.3 semitones
         "angry, furious, aggressive",
         "Speak very angrily and loudly.",
+        "请非常生气地说德语。",
     ),
     "sad": Style(  # 94 %, 1.2x slower
         "sad, tearful, grieving",
         "请非常伤心地说一句话。",
+        "请非常伤心地说德语。",
     ),
     "happy": Style(  # 98 %, +3.0 dB, +1.0 semitones
         "happy, cheerful, delighted",
         "Please speak very happily.",
+        "请非常开心地说德语。",
     ),
 }
 
@@ -75,9 +86,11 @@ Answer with JSON: {{"assignments": [{{"id": 1, "style": "none"}}, ...]}}
 """
 
 
-def instruction_for(style: str) -> str | None:
+def instruction_for(style: str, language: str = "en") -> str | None:
     entry = STYLES.get(style)
-    return entry.instruction if entry else None
+    if entry is None:
+        return None
+    return entry.german if language == "de" else entry.instruction
 
 
 def _schema() -> dict:

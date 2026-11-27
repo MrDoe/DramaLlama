@@ -36,7 +36,7 @@ def join_line_texts(lines: list[Line]) -> str:
 
 
 def delivery_segments(
-    stem: Stem, lines: list[Line], styles: dict[str, str]
+    stem: Stem, lines: list[Line], styles: dict[str, str], language: str = "en"
 ) -> list[RenderSegment]:
     """Split a stem where the delivery changes, for engines that steer per piece.
 
@@ -50,7 +50,7 @@ def delivery_segments(
     for line in lines:
         if not line.text.strip():
             continue
-        instruction = instruction_for(styles.get(line.direction.strip(), ""))
+        instruction = instruction_for(styles.get(line.direction.strip(), ""), language)
         if groups and groups[-1][0] == instruction:
             groups[-1][1].append(line)
         else:

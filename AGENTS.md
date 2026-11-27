@@ -52,7 +52,9 @@ CLI alias are intentionally unchanged.
 - **CosyVoice directions go to a local LLM only** (`cosyvoice_directions.py`),
   which picks from a measured phrase table. Raw German directions are spoken
   aloud and free-form English barely changes delivery; change phrases only with
-  `scripts/bench_cosyvoice.py` evidence.
+  `scripts/bench_cosyvoice.py` evidence. German projects use the `german`
+  phrases (Chinese, ending "说德语"): the others give an English accent, which
+  Whisper cannot detect, so judge phrases by ear.
 - **Ollama's GGML can change under us:** a piece that is silent or garbage on
   every attempt is re-rendered with the pinned spare; only if that succeeds is
   the Ollama build rejected (`ggml-rejected.json` in the CosyVoice home).

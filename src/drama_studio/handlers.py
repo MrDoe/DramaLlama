@@ -308,7 +308,10 @@ def _cosyvoice_segments(
                 fresh = _load_project(project.id)
                 fresh.direction_styles.update(styles)
                 _STORE.save(fresh)
-    return delivery_segments(stem, lines, project.direction_styles), notes
+    segments = delivery_segments(
+        stem, lines, project.direction_styles, project.language
+    )
+    return segments, notes
 
 
 def _delete_replaced_audio(project_id: str, replaced: dict[str, Take]) -> None:

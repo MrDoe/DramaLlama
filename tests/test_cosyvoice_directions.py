@@ -103,3 +103,17 @@ def test_no_local_model_means_no_classification(monkeypatch):
     monkeypatch.setattr(OllamaClient, "probe_models", lambda self: ([], []))
 
     assert directions.local_llm_client() is None
+
+
+def test_german_projects_ask_for_german_in_every_style():
+    """English or bare Chinese phrases gave German lines an English accent."""
+    for key in directions.STYLES:
+        german = directions.instruction_for(key, "de")
+        assert german.endswith("说德语。"), key
+        assert german != directions.instruction_for(key, "en")
+    assert directions.instruction_for("none", "de") is None
+
+
+def test_english_projects_keep_the_measured_phrases():
+    for key, style in directions.STYLES.items():
+        assert directions.instruction_for(key, "en") == style.instruction

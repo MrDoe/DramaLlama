@@ -116,3 +116,13 @@ def test_delivery_segments_respect_an_edited_stem_text():
     )
 
     assert [(s.text, s.instruction) for s in segments] == [("Something else entirely.", None)]
+
+
+def test_delivery_segments_use_the_project_language():
+    project = _directed_project("quiet")
+
+    segments = delivery_segments(
+        project.stems[0], project.script.scenes[0].lines, {"quiet": "soft"}, "de"
+    )
+
+    assert segments[0].instruction == instruction_for("soft", "de")
