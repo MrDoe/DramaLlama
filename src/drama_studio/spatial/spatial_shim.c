@@ -14,6 +14,7 @@
  * only the library algorithm it wraps.
  */
 
+#define _USE_MATH_DEFINES /* M_PI on MSVC */
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -33,7 +34,11 @@
 #define DL_FRAME_SIZE ambi_roomsim_getFrameSize()
 #endif
 
+#if defined(_WIN32)
+#define DL_EXPORT __declspec(dllexport)
+#else
 #define DL_EXPORT __attribute__((visibility("default")))
+#endif
 
 /* ------------------------------------------------------------------- state */
 
