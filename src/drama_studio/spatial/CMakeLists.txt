@@ -18,8 +18,13 @@ if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
+# Not on MSVC: asking it for C11 defines __STDC_VERSION__, and SAF then picks
+# C99 `_Complex` types, which MSVC does not have. Its default C mode selects
+# SAF's MSVC types.
+if(NOT MSVC)
+    set(CMAKE_C_STANDARD 11)
+    set(CMAKE_C_STANDARD_REQUIRED ON)
+endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ---------------------------------------------------------------- SAF location
