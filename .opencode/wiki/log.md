@@ -943,3 +943,17 @@ the release*. The release now carries the AppImage, Setup, tarball and
 `ab2b03e4…`); it was downloaded and verified (hash, size, `dl_abi_version()` =
 1). 0.3.9 is the first installer release that fetches it during core install,
 so staging works out of the box.
+
+## [2026-11-27] release | 0.4.0 and 0.4.1: CosyVoice 3
+
+- 0.4.0 added the CosyVoice 3 engine, installer component and the first
+  `dramallama-cosyvoice-linux-x86_64.tar.gz`; 0.4.1 pins that 0.4.0 asset in
+  `installer/pins.json` (`cosyvoice.assets.linux-x86_64`).
+- Measured, German: the fp32 speech tokenizer took correct lines from 86 % to
+  97 %; the RL weights mainly removed silent takes. Raw German directions are
+  spoken aloud, so a local LLM maps them to measured phrases.
+- Linux asset: built on Ubuntu 22.04 with GCC 13, libstdc++ linked in.
+- CI traps: keep `pins.json` ASCII (Windows reads it as cp1252); pass
+  `--cmake-arg=-D...` with `=`.
+- Open: the `spatial-windows` job failed in both releases (vcpkg OpenBLAS has no
+  LAPACKE); no Windows renderer is published or pinned yet.
