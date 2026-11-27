@@ -2,5 +2,5 @@
 
 from __future__ import annotations
 
-INSTALLER_VERSION = "0.4.2"
+INSTALLER_VERSION = "0.4.3"
 __version__ = INSTALLER_VERSION
