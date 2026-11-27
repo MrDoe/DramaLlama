@@ -335,3 +335,26 @@ class JobQueue:
             started_at=_parse(row["started_at"]),
             finished_at=_parse(row["finished_at"]),
         )
+
+
+def enqueue_vocal_extraction(
+    queue: JobQueue,
+    project_id: str,
+    stem_id: str,
+    take_id: str,
+    *,
+    method: str = "demucs",
+    align: bool = True,
+) -> Job:
+    """Queue a ``stem.extract`` job; shared by the API and the render handler."""
+    return queue.enqueue(
+        "stem.extract",
+        {
+            "project_id": project_id,
+            "stem_id": stem_id,
+            "take_id": take_id,
+            "method": method,
+            "align": align,
+        },
+        priority=10,
+    )

@@ -8,7 +8,7 @@ sourceRefs:
   - third_party/bettersuno-mcp/src/suno-client.js
   - third_party/bettersuno-mcp/src/ws-bridge.js
   - /home/christoph/code/BetterSuno/background.js
-lastReviewed: 2026-10-30
+lastReviewed: 2026-11-21
 ---
 
 # Suno Turnstile captcha — diagnosis and fix plan

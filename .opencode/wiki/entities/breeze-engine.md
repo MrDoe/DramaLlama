@@ -5,7 +5,7 @@ sourceRefs:
   - src/drama_studio/engines/breeze.py
   - vendor/breeze_stems/breeze_drama.py
   - vendor/breeze_stems/breeze_stems.py
-lastReviewed: 2026-10-29
+lastReviewed: 2026-11-21
 ---
 
 # Breeze engine

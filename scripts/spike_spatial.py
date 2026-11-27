@@ -14,11 +14,15 @@ Stage convention (shared with SPARTA AmbiRoomSim):
 Run directly:  python scripts/spike_spatial.py
 """
 import ctypes
+import os
 import pathlib
 
 import numpy as np
 
-LIB = pathlib.Path("build/spatial/libdrama_llama_spatial.so").resolve()
+LIB = pathlib.Path(
+    os.environ.get("DRAMA_LLAMA_SPATIAL_LIB")
+    or "build/spatial/libdrama_llama_spatial.so"
+).resolve()
 SR = 48000
 SPEED_OF_SOUND = 343.0
 DIST = 3.43

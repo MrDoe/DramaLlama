@@ -5,12 +5,21 @@ const ENGINE_LABELS: Record<string, string> = {
   breeze: "Breeze",
   "breeze-de": "Breeze-DE",
   chatterbox: "Chatterbox",
+  cosyvoice: "CosyVoice",
   suno: "Suno",
   fake: "Fake",
 };
 
 export function engineLabel(name: string): string {
   return ENGINE_LABELS[name] ?? name;
+}
+
+/**
+ * A new seed for every generation, so generating again gives a new performance.
+ * Kept below 2e9: engines add small offsets per candidate and retry.
+ */
+export function freshSeed(): number {
+  return 1 + Math.floor(Math.random() * 2_000_000_000);
 }
 
 /** Default engine when a project has no explicit `default_engine`. */

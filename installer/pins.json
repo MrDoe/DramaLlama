@@ -65,7 +65,7 @@
     "saf_repo": "leomccormack/Spatial_Audio_Framework",
     "saf_commit": "18fd5aba46e20787b51f28f7197a68506c965c07",
     "abi": 1,
-    "note": "Native room renderer (Ambisonic Stage step). Built by the Installers workflow, spatial job, from this exact SAF commit and pinned to an immutable release tag with its SHA-256. The installer downloads <asset>/libdrama_llama_spatial.* into <prefix>/lib and skips with a warning for a platform with no entry. Never resolve a moving tag.",
+    "note": "Native room renderer (Ambisonic Stage step). Built by the Installers workflow's `spatial` (Linux) and `spatial-windows` jobs from this exact SAF commit and pinned to an immutable release tag with its SHA-256. The installer downloads <asset>/libdrama_llama_spatial.so or drama_llama_spatial.dll into <prefix>/lib and skips with a warning for a platform with no entry. Never resolve a moving tag. Windows entry is intentionally absent until the first release carrying the zip is published; copy its URL, size and SHA-256 from dist/*.sha256 into assets.windows-x86_64 from that release onward.",
     "assets": {
       "linux-x86_64": {
         "url": "https://github.com/MrDoe/DramaLlama/releases/download/v0.3.8/dramallama-spatial-linux-x86_64.tar.gz",
@@ -177,6 +177,154 @@
         "tag": "latest-cpu",
         "digest": "sha256:900e5ae19e69e8dcce9e1f97b2f047b6a6e9190cd653c1c3c907de2113d8c494",
         "size": 1274691788
+      }
+    }
+  },
+  "cosyvoice": {
+    "release": "v0.2.1",
+    "note": "CosyVoice 3 through cosyvoice.cpp. Linux: built by the Installers workflow's `cosyvoice` job from build.* (upstream's Linux binaries need glibc 2.43); copy URL, size and SHA-256 from dist/*.sha256 into assets.linux-x86_64 after the first release that carries it. Until then the installer uses an installed or locally built cosyvoice-cli (scripts/build_cosyvoice.py --install). Windows uses the pinned upstream zip. GGML libraries: an installed Ollama is reused when its GGML 1.x passes a probe, otherwise the pinned llama.cpp Vulkan build is downloaded.",
+    "smoke_reference": {
+      "url": "https://raw.githubusercontent.com/FunAudioLLM/CosyVoice/074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc/asset/zero_shot_prompt.wav",
+      "size": 334138,
+      "sha256": "c7b31d6dbe7cc6a716dded00550db5b50940bf209e424e4ad207b12e657c8ff6",
+      "text": "希望你以后能够做的比我还好呦。"
+    },
+    "upstream": {
+      "repo": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+      "revision": "29e01c4e8d000f4bcd70751be16fa94bf3d85a18"
+    },
+    "rl": {
+      "file": "CosyVoice3-2512_RL_Q8_0.gguf",
+      "size": 994684608,
+      "sha256": "b25cc256a3e5f19b5959bc703c315e1331e2aab86ab31174053067f5e2986113",
+      "converter": {
+        "url": "https://raw.githubusercontent.com/Lourdle/cosyvoice.cpp/81ce60cd682ff44b8ab4a9226c097b4aff64d1f6/convert_model_to_gguf.py",
+        "sha256": "67ffe56e9b012d17f740913d3bd2652722e91632532a940d29c27eca61bea29f",
+        "size": 17097
+      },
+      "packages": [
+        "gguf==0.17.1",
+        "transformers==4.57.3",
+        "PyYAML==6.0.3"
+      ],
+      "sources": [
+        {
+          "path": "cosyvoice3.yaml",
+          "size": 6934,
+          "sha256": "f5a6b2c6f05139d0f18861a1fe506f751e787026b77c05f7e8fef9f8a4405965"
+        },
+        {
+          "path": "llm.rl.pt",
+          "size": 2024682701,
+          "sha256": "74d34b01a80c7154670ae75ac372d1b1712c78bceae9f467eb9f1f6f61ec764f"
+        },
+        {
+          "path": "flow.pt",
+          "size": 1329116148,
+          "sha256": "a6fab32a7825e5b0bc855ddd948f8db9370b0a786fbc249caa4595e95b608e4b"
+        },
+        {
+          "path": "hift.pt",
+          "size": 83202622,
+          "sha256": "b279d7641eb97ae55b3b540cfba4f953c26492a2df758328a89a4d007ab87a65"
+        },
+        {
+          "path": "CosyVoice-BlankEN/config.json",
+          "size": 659,
+          "sha256": "168aa1bd401abc3bc262ba15ba4e499627a8b4e006e9d050b47c22de20660185"
+        },
+        {
+          "path": "CosyVoice-BlankEN/generation_config.json",
+          "size": 242,
+          "sha256": "e558847a8b4402616f1273797b015104dc266fe4b520056fca88823ba8f8ebe6"
+        },
+        {
+          "path": "CosyVoice-BlankEN/merges.txt",
+          "size": 1402109,
+          "sha256": "ac8ff86a72bee70828fbc1119bc4398c6f3a9a6e490d7b0dbe917be025478bd0"
+        },
+        {
+          "path": "CosyVoice-BlankEN/tokenizer_config.json",
+          "size": 1287,
+          "sha256": "482bd979881423375ca5414e4e0d94cd7c5349dbb17fffd46b4d36d71e62a1bc"
+        },
+        {
+          "path": "CosyVoice-BlankEN/vocab.json",
+          "size": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        }
+      ]
+    },
+    "build": {
+      "repo": "https://github.com/Lourdle/cosyvoice.cpp",
+      "commit": "81ce60cd682ff44b8ab4a9226c097b4aff64d1f6",
+      "ggml_repo": "https://github.com/ggml-org/ggml",
+      "ggml_commit": "bb877c0c51f38c52ee2d5e41d58e3d0c20f3fed4",
+      "onnxruntime": {
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.32.0/microsoft.ml.onnxruntime.1.32.0.nupkg",
+        "sha256": "a9150bc2992cbbb6722070da9910e1ffa989a8bfc67bdd5bb8e745ca755641db",
+        "size": 184391411
+      }
+    },
+    "models": {
+      "repo": "Lourdle/Fun-CosyVoice3-0.5B-2512-GGUF",
+      "revision": "ab01740bbbfcc059fd748163787554f7c8977e64",
+      "files": [
+        [
+          {
+            "path": "CosyVoice3-2512_Q8_0.gguf",
+            "size": 943933536,
+            "sha256": "be133cb6154ca73cd1d213b1c9496def99ba9c1f7c14cd99f6b350af2eb7963d"
+          },
+          {
+            "path": "CosyVoice3-2512_RL_Q8_0.gguf",
+            "size": 994684608,
+            "sha256": "b25cc256a3e5f19b5959bc703c315e1331e2aab86ab31174053067f5e2986113"
+          },
+          {
+            "path": "CosyVoice3-2512_F16.gguf",
+            "size": 1724750240,
+            "sha256": "66f77746c066c6144ad48deae30c06b38a98bec2835aeb5bfe827b70c9254c24"
+          },
+          {
+            "path": "CosyVoice3-2512_Q4_K_M.gguf",
+            "size": 629141792,
+            "sha256": "eb40867e270abdcde4ea958e634d5932702e16545d46336659fed9f8f462bc02"
+          }
+        ],
+        [
+          {
+            "path": "frontend-onnx/speech_tokenizer_v3.onnx",
+            "size": 969451503,
+            "sha256": "23236a74175dbdda47afc66dbadd5bcb41303c467a57c261cb8539ad9db9208d"
+          }
+        ],
+        [
+          {
+            "path": "frontend-onnx/campplus.onnx",
+            "size": 28303423,
+            "sha256": "a6ac6a63997761ae2997373e2ee1c47040854b4b759ea41ec48e4e42df0f4d73"
+          }
+        ]
+      ]
+    },
+    "assets": {
+      "windows-x86_64": {
+        "url": "https://github.com/Lourdle/cosyvoice.cpp/releases/download/v0.2.1/cosyvoice-81ce60c-windows-x64-miniaudio-no_icu.zip",
+        "sha256": "f196f0c2c65bc0f825108629ecdabfdad79bfbf080a6aac1f67763b7b0e1081b",
+        "size": 9033799
+      }
+    },
+    "ggml": {
+      "linux-x86_64": {
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12810/llama-b12810-bin-ubuntu-vulkan-x64.tar.gz",
+        "sha256": "c583739e85d158c93ee0b9fc8d1140736a1d8acdbe52d647bc5eb7cf0a73e214",
+        "size": 37266098
+      },
+      "windows-x86_64": {
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12810/llama-b12810-bin-win-vulkan-x64.zip",
+        "sha256": "134e518ee19a7c9d27b478a0d0817ce4e5f11b4f0d4f721dee8cbde2fc8017ee",
+        "size": 39301547
       }
     }
   },

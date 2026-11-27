@@ -7,7 +7,7 @@ sourceRefs:
   - web/src/audio/syncEngine.ts
   - src/drama_studio/mixer.py
   - src/drama_studio/api.py
-lastReviewed: 2026-11-04
+lastReviewed: 2026-11-21
 ---
 
 # Multitrack Cut board
@@ -45,6 +45,20 @@ the layout exactly like the next mix rebuild will.
   stem's default, and is a dirty edit (saved with the stem, not immediately).
 - **Save / Save all** → `PATCH .../stems/{id}/alignment` with `rebuild_mix=true`
   and a `take_id` per cut; only dirty stems are saved.
+
+## Undo / redo
+
+`MultiTrackEditor` keeps a 50-entry in-memory history of `{pending, cues,
+dirty, cueDirty}` snapshots. `pushHistory()` runs before every local mutation
+(cut trims/slips/moves, take switches, cue field edits, clipboard actions) and
+coalesces continuous input with a `coalesceMs` argument so a drag stays one
+step. `Ctrl+Z` / `Ctrl+Y` (or Shift+Ctrl+Z) were already wired; the transport
+toolbar now also has Undo/Redo buttons that disable when the corresponding
+stack is empty and flash a confirmation. The stack is per session and does not
+survive a page reload — cue membership deletes are server-immediate and are
+not undoable. The buttons were verified in a live browser: a `Ctrl+D` clip
+duplicate enabled Undo, Undo restored the Save-all count to 0, and Redo brought
+it back to 1.
 
 ## Playback
 

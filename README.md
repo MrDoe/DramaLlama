@@ -50,7 +50,7 @@ Suno dialogue and music have been validated through a real BetterSuno extension 
 
 Spatial staging renders a scene through SAF's shoebox image-source model and has been verified against physics: a click 3.43 m away arrives at 10.00 ms, a source straight ahead decodes exactly centred, side sources pan to their own side, and rotating the listener recentres them. A staged master measures differently in the left and right channels, which is the point. Order 3 with six moving sources renders at roughly 0.2 seconds of CPU per second of audio, so staging needs no GPU and a ten-minute play costs about two minutes of mix time.
 
-Native installers wrap all of this in a PySide6 wizard over a stdlib-only installer core that is shared with a headless CLI. The same core produces an AppImage on Linux and an Inno Setup installer on Windows, with a per-user layout, GPU auto-detection with `--cpu`/`--gpu` overrides, and opt-in Breeze English, Breeze German and Chatterbox using pinned wheels, models and Docker image digests. See [`INSTALL.md`](INSTALL.md).
+Native installers wrap all of this in a PySide6 wizard over a stdlib-only installer core that is shared with a headless CLI. The same core produces an AppImage on Linux and an Inno Setup installer on Windows, with a per-user layout, GPU auto-detection with `--cpu`/`--gpu` overrides, and opt-in Breeze English, Breeze German, Chatterbox and CosyVoice 3 using pinned wheels, models and Docker image digests. See [`INSTALL.md`](INSTALL.md).
 
 Engines are chosen per project, so there is no per-stem switching, and every cut records the take it was measured on. Suno re-renders append new generations instead of replacing earlier ones, and manual trims survive re-renders. The Cut board edits all stems on one shared timeline with per-clip take choice and atomic batch saves, and it rebuilds the mix only once. A queued realignment never overwrites newer manual trims.
 
@@ -82,7 +82,7 @@ Get-FileHash .\DramaLlama-Setup-<version>.exe -Algorithm SHA256
 ```
 
 The wizard detects the hardware, lets you pick optional engines (Breeze
-English, Breeze German, Chatterbox), and downloads only what you select. A
+English, Breeze German, Chatterbox, CosyVoice 3), and downloads only what you select. A
 core CPU install takes about 4.2 GiB of downloads and needs no GPU. Breeze
 English is opt-in because it is English-only and impractically slow on CPU.
 The local LLM is not installed; deterministic parsing works out of the box.
@@ -146,7 +146,7 @@ Paste your script and choose English or German. `Save & parse` parses determinis
 
 ### 2. Stems & Render
 
-Group the lines by scene and speaker, then render them with the project's default engine, which you pick in the project header. The `auto` setting means Breeze for English and Chatterbox for German; pick `suno` explicitly for cloud voices in English and German (voice, persona and take details: see Engines). Breeze works from a designed reference voice of 6-11 seconds, while Chatterbox uses an uploaded voice sample or its default voice. The worker renders the stem, aligns it with Whisper on the CPU, cuts the line clips and stores a confidence value for each. Takes accumulate and stay labelled by engine so you can compare them, and switching a cut's take scales its window by the ratio of the two durations.
+Group the lines by scene and speaker, then render them with the project's default engine, which you pick in the project header. The `auto` setting means Breeze for English and Chatterbox for German, except that a new German project starts on CosyVoice when it is installed; pick `suno` explicitly for cloud voices in English and German (voice, persona and take details: see Engines). Breeze works from a designed reference voice of 6-11 seconds, while Chatterbox uses an uploaded voice sample or its default voice. The worker renders the stem, aligns it with Whisper on the CPU, cuts the line clips and stores a confidence value for each. Takes accumulate and stay labelled by engine so you can compare them, and switching a cut's take scales its window by the ratio of the two durations.
 
 ### 3. Cut
 
@@ -174,6 +174,18 @@ For English, Drama Llama uses Breeze TTS 2. You design a 6-11 second reference v
 
 Chatterbox Multilingual 0.5B covers both English and German. It clones a voice from an uploaded sample and falls back to its default voice when no sample is provided. Drama Llama expects the Chatterbox model server at `http://127.0.0.1:4123`. You can start it independently, and it keeps the model warm between requests. Drama Llama only sends text and an optional voice sample over HTTP.
 
+### CosyVoice 3 (optional)
+
+CosyVoice 3 clones a voice in German or English from a 6-11 second reference clip plus its transcript (use **Generate from sample** in the Voices step; it has no voice design). It runs through the community C++ port [cosyvoice.cpp](https://github.com/Lourdle/cosyvoice.cpp), one short-lived `cosyvoice-cli` process per piece, so no GPU memory is held between renders. The weights are Apache-2.0.
+
+- **Line directions steer delivery.** A *local* language model (your configured one if it runs locally, otherwise a local Ollama) labels each direction once as soft, loud, slow, fast, angry, sad, happy or none; the labels are stored in the project. A hosted LLM is never used for this. Without a local model, stems render with plain cloning and the take says so.
+- **Every piece is checked.** The model sometimes garbles or drops a line, so each piece is transcribed with Whisper on the CPU and retried with a new seed (the last attempt without the direction). Anything still doubtful is listed on the take.
+- **Every generation is new.** Generating a stem again uses a fresh seed (all local engines), and the replaced audio is removed.
+- **New German projects** on *Auto* start on CosyVoice when it is installed. Existing projects keep their engine.
+- **Installed parts are reused:** `cosyvoice-cli` on `PATH` and model files already in the Hugging Face cache. Ollama's GGML 1.x libraries are used first; a small pinned copy is kept beside them, and if an Ollama update ever produces broken audio the app switches to it and remembers.
+- **RL weights:** the official reinforcement-tuned checkpoint, which in testing mainly removed silent takes, is converted by the installer when its 4.4 GB sources are already in the Hugging Face cache (or by hand with `scripts/convert_cosyvoice_rl.py`). Otherwise the published base model is used.
+- **Linux:** upstream's binaries need glibc 2.43, so Drama Llama publishes its own build (Ubuntu 22.04 or newer). From a source checkout, `python scripts/build_cosyvoice.py --install` builds it (git, cmake 3.28+, ninja, GCC 13+).
+
 ### Suno cloud voices (no GPU needed)
 
 Suno is a first-class dialogue engine in Drama Llama, not just a music source: pick `suno` as the project engine and every stem renders as expressive spoken or sung dialogue. It covers English and German, needs no GPU and no reference sample, and works language-agnostically. Each stem is sent as dialogue-verbatim lyrics with `[delivery]` tags (built from the line directions, voice baseline and scene mood), plus a title and style tags starting from `audio drama radio play`. You can set a Suno persona voice per character, vocal gender, model version (`mv`) and — on paid Suno plans — style/weirdness/audio weights. Each render returns multiple candidate takes that accumulate next to local-engine takes for A/B comparison; downloads are converted to WAV so Whisper alignment and the mixer keep working, and vocal-stem extraction is a manual per-take step (Demucs or Suno stems). The same bridge also generates theme music, beds and songs from the Sound stage, where a prompt produces a track that you add as a music cue.
@@ -191,9 +203,9 @@ The sidecar owns the GPU, and Drama Llama serialises GPU jobs, so stop the sidec
 
 ## Project layout
 
-The backend lives in `src/drama_studio/`, which contains the FastAPI app, the job queue, the worker, the parser, the engines and the mixer. The engine adapters for Breeze, Breeze-DE, Chatterbox, Suno and Fake are in its `engines/` subfolder, and the shared take-aware cut logic (freezing, remapping and validating cuts) is in `cuts.py`. Spatial staging is `spatial.py` plus the C shim and CMakeLists in `spatial/`. The pinned Breeze stem renderer and Whisper aligner are vendored under `vendor/breeze_stems/`.
+The backend lives in `src/drama_studio/`, which contains the FastAPI app, the job queue, the worker, the parser, the engines and the mixer. The engine adapters for Breeze, Breeze-DE, Chatterbox, CosyVoice, Suno and Fake are in its `engines/` subfolder, and the shared take-aware cut logic (freezing, remapping and validating cuts) is in `cuts.py`. Spatial staging is `spatial.py` plus the C shim and CMakeLists in `spatial/`. The pinned Breeze stem renderer and Whisper aligner are vendored under `vendor/breeze_stems/`.
 
-The Suno bridge in `suno-bridge/` is a small Node HTTP sidecar built on the installed `bettersuno-mcp` modules. The frontend in `web/` is written in React, Vite and TypeScript, and the Drama Llama mascot sits in `web/public/`. The tour screenshots are in `docs/screenshots/`. At runtime, each project's JSON, references, takes, line clips and mix are stored in `data/projects/<id>/`, and the job queue is an SQLite database in WAL mode at `data/jobs.sqlite3`. The `installer/` folder at the repository root holds the PySide6 wizard and the stdlib-only installer core, with its PyInstaller spec, Inno Setup script and AppImage builder under `installer/packaging/`; `scripts/build_installer.py` drives the build. The `tests/` folder holds 389 tests, none of which require a GPU. The spatial rendering tests self-skip when the native renderer has not been built.
+The Suno bridge in `suno-bridge/` is a small Node HTTP sidecar built on the installed `bettersuno-mcp` modules. The frontend in `web/` is written in React, Vite and TypeScript, and the Drama Llama mascot sits in `web/public/`. The tour screenshots are in `docs/screenshots/`. At runtime, each project's JSON, references, takes, line clips and mix are stored in `data/projects/<id>/`, and the job queue is an SQLite database in WAL mode at `data/jobs.sqlite3`. The `installer/` folder at the repository root holds the PySide6 wizard and the stdlib-only installer core, with its PyInstaller spec, Inno Setup script and AppImage builder under `installer/packaging/`; `scripts/build_installer.py` drives the build. The `tests/` folder holds more than 500 tests, none of which require a GPU. The spatial rendering tests self-skip when the native renderer has not been built.
 
 The Python package keeps its `drama_studio` import name. Only the product, the CLI and the UI were renamed.
 
@@ -212,6 +224,10 @@ Drama Llama is configured through environment variables. The old `DRAMA_STUDIO_*
 | `CHATTERBOX_URL`            | `http://127.0.0.1:4123`                                |
 | `BREEZE_DE_URL`             | `http://127.0.0.1:8080`                                |
 | `SUNO_BRIDGE_URL`           | `http://127.0.0.1:9430`                                |
+| `DRAMA_LLAMA_COSYVOICE_CLI` | *(PATH, then `~/code/cosyvoice-cpp/bin`)*              |
+| `DRAMA_LLAMA_COSYVOICE_GGML` | *(Ollama's GGML 1.x, then `~/code/cosyvoice-cpp/ggml`)* |
+| `DRAMA_LLAMA_COSYVOICE_MODEL` | *(best model in `~/models/CosyVoice3-GGUF` or the HF cache)* |
+| `DRAMA_LLAMA_COSYVOICE_BACKEND` | `auto` (NVIDIA Vulkan first), `cpu`, or e.g. `Vulkan0` |
 | `DRAMA_LLAMA_SFX_ROOTS`     | `~/Sounds:<repo>/data/sfx`                             |
 
 By default, the script-parsing LLM is a local Ollama instance. You can change this on the **Settings** page in the top bar, where you select the protocol (Ollama or OpenAI-compatible), the endpoint URL, the model and an optional API key for hosted endpoints. The model picker is filled from the endpoint's own model list, and a Test connection button lets you check the setup before saving. Your choices are stored in `data/settings.json`, which is gitignored. The API never returns the key itself. Changes apply immediately, including to the engine stack on the front page. For each setting, the settings file takes precedence over the corresponding `DRAMA_LLAMA_LLM_URL`, `DRAMA_LLAMA_LLM` and `DRAMA_LLAMA_LLM_API_KEY` environment variables, and settings you have not saved still follow the environment. `GET /api/config` reports where each value comes from.

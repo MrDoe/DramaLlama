@@ -1,20 +1,26 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from unittest import mock
 
+import numpy as np
 import pytest
+import soundfile as sf
 from fastapi.testclient import TestClient
 
 from drama_studio import handlers as handler_module
 from drama_studio.api import create_app
+from drama_studio.cuts import suno_take_needing_extraction
 from drama_studio.engines.fake import FakeEngine
 from drama_studio.engines.suno import SunoEngine
-from drama_studio.jobs import JobQueue
+from drama_studio.jobs import JobQueue, enqueue_vocal_extraction
 from drama_studio.models import (
     Character,
     RefVoice,
     Stem,
     StemRenderRequest,
+    Take,
 )
 from drama_studio.stems import build_stems
 from drama_studio.sfx import SfxLibrary
@@ -513,6 +519,176 @@ def test_extract_stem_demucs(tmp_path):
         project = store.get(project.id)
         stem = next(s for s in project.stems if s.id == stem.id)
         assert any(t.engine == "demucs" and t.vocal_isolated for t in stem.takes)
+
+
+def _suno_take(take_id: str, clip_id: str, **extra) -> Take:
+    fields = {"engine": "suno", "duration_s": 1, "sample_rate": 24000, "seed": 1}
+    fields.update(extra)
+    return Take(id=take_id, file=f"audio/takes/{take_id}.wav", clip_id=clip_id, **fields)
+
+
+def test_suno_take_needing_extraction_follows_the_selected_take():
+    stem = Stem(id="s1-mara", scene=1, speaker="MARA", line_ids=[], text="", instruction="")
+    picked = _suno_take("suno-a", "clip-a", selected=True)
+    other = _suno_take("suno-b", "clip-b")
+    stem.takes = [picked, other]
+    assert suno_take_needing_extraction(stem) is picked
+
+    # Once its vocal exists, the other candidate must not be pulled in: that
+    # would override the user's choice of generation.
+    vocal = _suno_take(
+        "demucs-a", "clip-a", engine="demucs", vocal_isolated=True, selected=True
+    )
+    picked.selected = False
+    stem.takes.append(vocal)
+    assert suno_take_needing_extraction(stem) is None
+    # Switching back to the original does not extract it a second time.
+    vocal.selected = False
+    picked.selected = True
+    assert suno_take_needing_extraction(stem) is None
+
+
+def _suno_project(tmp_path):
+    client = make_client(tmp_path)
+    project = client.post(
+        "/api/projects",
+        json={
+            "title": "T", "language": "en", "script_text": SCRIPT,
+            "default_engine": "suno",
+        },
+    ).json()
+    built = client.post(f"/api/projects/{project['id']}/stems").json()
+    stem = next(s for s in built["stems"] if s["speaker"] == "MARA")
+    return client, project["id"], stem["id"]
+
+
+def test_api_render_does_not_queue_extraction_up_front(tmp_path):
+    client, project_id, stem_id = _suno_project(tmp_path)
+    response = client.post(
+        f"/api/projects/{project_id}/stems/{stem_id}/render",
+        json={"auto_extract_vocals": True},
+    )
+    assert response.status_code == 202
+    assert response.json()["payload"]["auto_extract_vocals"] is True
+    jobs = JobQueue(tmp_path / "jobs.sqlite3").list_jobs()
+    assert [job.type for job in jobs if job.type == "stem.extract"] == []
+
+
+class SunoLikeEngine(FakeEngine):
+    """Two candidates, the first one picked, like the Suno engine."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        super().__init__()
+        self.fail = fail
+
+    def render_stem(self, request, *, progress=None, cancelled=None):
+        if self.fail:
+            raise RuntimeError("quota exceeded")
+        result = super().render_stem(request, progress=progress, cancelled=cancelled)
+        for index, take in enumerate(result.takes):
+            take.engine = "suno"
+            take.clip_id = f"clip-{index}"
+        result.selected_take_id = result.takes[0].id
+        return result
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_render_queues_extraction_only_after_success(tmp_path, fail):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("T", "en", SCRIPT, default_engine="suno")
+    project.stems = build_stems(project)
+    # An older generation that was never extracted must be left alone.
+    stem = next(s for s in project.stems if s.id == "s1-mara")
+    stem.takes = [_suno_take("suno-old", "clip-old", selected=True)]
+    store.save(project)
+    queue = JobQueue(tmp_path / "jobs.sqlite3")
+    render = queue.enqueue(
+        "stem.render",
+        {
+            "project_id": project.id, "stem_id": stem.id, "candidates": 2,
+            "align": False, "auto_extract_vocals": True,
+        },
+    )
+    engine = SunoLikeEngine(fail=fail)
+    with mock.patch.object(handler_module, "_STORE", store), mock.patch.object(
+        handler_module, "_MANAGER", FakeManager(engine)
+    ), mock.patch.object(handler_module, "_require_gpu", lambda _: None):
+        Worker(queue, {"stem.render": handler_module.render_stem}, worker_id="t").run_once()
+
+    queued = [job for job in queue.list_jobs() if job.type == "stem.extract"]
+    finished = queue.get(render.id)
+    if fail:
+        assert finished.status != "succeeded"
+        assert queued == []
+        return
+    assert finished.status == "succeeded", finished.error
+    saved = store.get(project.id)
+    selected = next(
+        t for s in saved.stems if s.id == stem.id for t in s.takes if t.selected
+    )
+    assert selected.clip_id == "clip-0"
+    assert [job.payload["take_id"] for job in queued] == [selected.id]
+    assert finished.result["extract_job_id"] == queued[0].id
+
+
+def test_extract_keeps_edits_made_while_it_runs(tmp_path):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("T", "en", SCRIPT, default_engine="suno")
+    project.stems = build_stems(project)
+    stem = next(s for s in project.stems if s.id == "s1-mara")
+    stem.takes = [_suno_take("suno-a", "clip-a", selected=True)]
+    store.save(project)
+    directory = store.project_dir(project.id)
+    source = directory / stem.takes[0].file
+    source.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(source, np.zeros(2400, dtype=np.float32), 24000)
+
+    def demucs_with_concurrent_edit(cmd, **_kwargs):
+        edited = store.get(project.id)
+        edited.settings.pause_ms = 1234
+        next(s for s in edited.stems if s.id == stem.id).suno_title = "Edited"
+        store.save(edited)
+        output = Path(cmd[cmd.index("-o") + 1]) / "htdemucs" / "track"
+        output.mkdir(parents=True)
+        sf.write(output / "vocals.wav", np.zeros(2400, dtype=np.float32), 24000)
+
+    queue = JobQueue(tmp_path / "jobs.sqlite3")
+    job = enqueue_vocal_extraction(queue, project.id, stem.id, "suno-a", align=False)
+    with mock.patch.object(handler_module, "_STORE", store), mock.patch.object(
+        handler_module.subprocess, "run", demucs_with_concurrent_edit
+    ):
+        Worker(queue, {"stem.extract": handler_module.extract_stem}, worker_id="t").run_once()
+
+    assert queue.get(job.id).status == "succeeded", queue.get(job.id).error
+    saved = store.get(project.id)
+    saved_stem = next(s for s in saved.stems if s.id == stem.id)
+    assert saved.settings.pause_ms == 1234
+    assert saved_stem.suno_title == "Edited"
+    assert any(t.vocal_isolated and t.selected for t in saved_stem.takes)
+
+
+def test_api_extract_all_targets_only_stems_that_need_it(tmp_path):
+    client, project_id, stem_id = _suno_project(tmp_path)
+    store = ProjectStore(tmp_path / "projects")
+    saved = store.get(project_id)
+    stem = next(s for s in saved.stems if s.id == stem_id)
+    stem.takes = [_suno_take("suno-1", "clip-1", selected=True)]
+    store.save(saved)
+
+    body = client.post(f"/api/projects/{project_id}/stems/extract-all").json()
+    assert body["count"] == 1
+    assert body["jobs"][0]["payload"]["take_id"] == "suno-1"
+
+    for job in body["jobs"]:
+        client.post(f"/api/jobs/{job['id']}/cancel")
+    saved = store.get(project_id)
+    stem = next(s for s in saved.stems if s.id == stem_id)
+    stem.takes.append(
+        _suno_take("demucs-1", "clip-1", engine="demucs", vocal_isolated=True)
+    )
+    store.save(saved)
+    again = client.post(f"/api/projects/{project_id}/stems/extract-all").json()
+    assert again == {"jobs": [], "count": 0}
 
 
 def test_api_render_passes_voice_params(tmp_path):

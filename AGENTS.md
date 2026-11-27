@@ -4,7 +4,7 @@
 
 Local single-user web app: paste a script → parse scenes/lines and attribute
 speakers → group into per-character, per-scene stems → render with Breeze
-(English) or Chatterbox (German) → align/cut line clips with Whisper → search/place
+(English), Chatterbox (German) or CosyVoice 3 (both) → align/cut line clips with Whisper → search/place
 SFX → mix and export.
 
 The product was renamed from Drama Studio to Drama Llama. The Python import
@@ -20,16 +20,16 @@ CLI alias are intentionally unchanged.
   Voices workflow step.
 - SFX index over `~/Sounds`, cue sheet, mixer with ducking/EQ/loudnorm.
 - React UI: projects, script/parse, stems, render, sound, mix.
-- 389 backend tests (spatial ones skip without the native renderer), web build green.
+- 500+ backend tests (spatial ones skip without the native renderer), web build green.
 - English Breeze path validated on one real scene; German Chatterbox path
   validated end-to-end (20.7 s ANNA stem, 7/7 cuts). Suno music generation and
   WAV download validated through the BetterSuno bridge.
 - Project-level engine (`Project.default_engine`: Breeze / Breeze-DE /
-  Chatterbox / Suno / Fake) with engine-labelled takes for A/B comparison and
+  Chatterbox / CosyVoice / Suno / Fake) with engine-labelled takes for A/B comparison and
   take-aware cuts.
 - Native installers: PySide6 wizard over a stdlib-only core, shared with a
   headless CLI; AppImage on Linux, Inno Setup around PyInstaller on Windows.
-  Optional Breeze EN, Breeze DE and Chatterbox, GPU auto-detect with
+  Optional Breeze EN, Breeze DE, Chatterbox and CosyVoice, GPU auto-detect with
   `--cpu`/`--gpu`, per-user prefix, pinned versions in `installer/pins.json`.
 
 ## Hard constraints
@@ -42,6 +42,23 @@ CLI alias are intentionally unchanged.
 - **One GPU job at a time.** Breeze eager peaks ~8.5 GB; the local LLM ~7.6 GB;
   Whisper + Breeze exceeds 16 GB. Align on CPU int8. The app serializes jobs,
   but other sessions can still hold VRAM — check `nvidia-smi` before a load.
+- **New German projects start on CosyVoice 3 when it is installed** (stored
+  explicitly by `POST /api/projects`; `tests/conftest.py` pins it off). Do not
+  change `_engine_name`/`autoEngine`: existing "auto" projects must stay on
+  Breeze (en) / Chatterbox (de) next to their takes. CosyVoice uses a Qwen2 text backbone internally, which is unrelated to the
+  removed Qwen3-TTS. One `cosyvoice-cli` process per piece: never switch to the
+  `cosyvoice-server` without a reason, the CLI needs no port, pid file or
+  orphan handling and frees VRAM by exiting.
+- **CosyVoice directions go to a local LLM only** (`cosyvoice_directions.py`),
+  which picks from a measured phrase table. Raw German directions are spoken
+  aloud and free-form English barely changes delivery; change phrases only with
+  `scripts/bench_cosyvoice.py` evidence.
+- **Ollama's GGML can change under us:** a piece that is silent or garbage on
+  every attempt is re-rendered with the pinned spare; only if that succeeds is
+  the Ollama build rejected (`ggml-rejected.json` in the CosyVoice home).
+- **Prefer installed CosyVoice parts:** env override, then installed (PATH,
+  Ollama GGML 1.x, Hugging Face cache), then pinned downloads. Never use the
+  prebuilt CUDA GGML backend (audible noise, cosyvoice.cpp issue #15).
 - **Do not fork `align_cuts`.** It is owned by the sibling `~/tts_test`
   session (Kepler). Vendor the stable module under `vendor/breeze_stems/`,
   pin hashes in `VENDORED_FROM.md`, and send fixes upstream.
@@ -271,6 +288,31 @@ observable behavior, not just DOM presence.
 - FastAPI body-validation failures return `detail` as an **array** of
   `{loc,msg}`. `api.ts` flattens it via `describeDetail()`; assigning
   `body.detail` straight to a message renders as `[object Object]`.
+- cosyvoice.cpp needs **GGML 1.x** (SONAME 1); 0.x copies (older llama.cpp
+  trees) do not load on Linux and produce garbage on Windows.
+- Its ICU text normalizer has no locale and reads Latin-script numbers in
+  English, so Drama Llama's build and the Windows pin are `no_icu`.
+- Upstream Linux releases need glibc 2.43. `scripts/build_cosyvoice.py` builds
+  our own. It needs GCC 13 for `<format>`; the release asset is built on Ubuntu
+  22.04 with the toolchain PPA and links libstdc++ statically, because building
+  on 24.04 raises the baseline to glibc 2.38 (`--output` refuses that). Its CMake would clone
+  ggml master and query "latest" ONNX Runtime unless both paths are given; the
+  microsoft/onnxruntime GitHub repo returned 404 in Nov 2026, so ORT comes from
+  NuGet.
+- Windows CosyVoice needs the VC++ redistributable and llama.cpp's `libomp.dll`
+  beside the GGML DLLs. `scripts/smoke_cosyvoice.py` is the end-to-end check CI
+  runs on Windows and Ubuntu 22.04.
+- The UI sends a fresh random seed with every generation; the handler deletes the
+  replaced takes' audio. Tests and API callers keep `stem.seed` or pass one.
+- Whisper uses `default_cpu_threads()`. For the CosyVoice take check, `beam_size=1`
+  changed pass/fail decisions and one pass per whole take let a dropped word
+  through; neither is used.
+- CosyVoice garbles or silences a few percent of short lines. The fp32 speech
+  tokenizer is most of the gain (86 % → 97 % with the Q8_0 model); the RL weights
+  mainly remove silent takes. `speech_check.PASS_SCORE` was calibrated on real
+  failures. Same seed means byte-identical audio.
+- faster-whisper cannot decode file paths in the `qwen3tts` venv (PyAV
+  mismatch): pass 16 kHz arrays, as `WhisperTranscriber` does.
 
 <!-- BEGIN opencode-rag -->
 ## Code Navigation

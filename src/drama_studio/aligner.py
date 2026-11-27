@@ -8,6 +8,7 @@ import numpy as np
 
 from .audio import write_mono
 from .models import AlignedLine, AlignmentResult, Line
+from .transcriber import default_cpu_threads
 
 VENDOR_DIR = Path(__file__).resolve().parents[2] / "vendor" / "breeze_stems"
 
@@ -64,7 +65,10 @@ class WhisperAligner:
         self._align_cuts = breeze_stems.align_cuts
         self._find_asr = breeze_stems.find_asr
         self._asr = WhisperModel(
-            self._find_asr(), device=self.device, compute_type=self.compute_type
+            self._find_asr(),
+            device=self.device,
+            compute_type=self.compute_type,
+            cpu_threads=default_cpu_threads(),
         )
 
     def align(

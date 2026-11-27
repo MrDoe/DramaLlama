@@ -7,7 +7,7 @@ sourceRefs:
   - src/drama_studio/config.py
   - src/drama_studio/api.py
   - web/vite.config.ts
-lastReviewed: 2026-10-30
+lastReviewed: 2026-11-21
 ---
 
 # start-ui.sh launcher

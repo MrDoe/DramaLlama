@@ -36,6 +36,18 @@ LLM_KEEP_ALIVE = _env("LLM_KEEP_ALIVE", "0")
 SUNO_BRIDGE_URL = os.environ.get("SUNO_BRIDGE_URL", "http://127.0.0.1:9430")
 CHATTERBOX_URL = os.environ.get("CHATTERBOX_URL", "http://127.0.0.1:4123")
 BREEZE_DE_URL = os.environ.get("BREEZE_DE_URL", "http://127.0.0.1:8137")
+# CosyVoice 3 (cosyvoice.cpp). Empty overrides mean "find an installed copy":
+# see engines/cosyvoice_runtime.py for the resolution order.
+COSYVOICE_CLI = _env("COSYVOICE_CLI", "")
+COSYVOICE_GGML = _env("COSYVOICE_GGML", "")
+COSYVOICE_MODEL = _env("COSYVOICE_MODEL", "")
+COSYVOICE_BACKEND = _env("COSYVOICE_BACKEND", "auto")  # auto | cpu | Vulkan0…
+COSYVOICE_HOME = Path(
+    _env("COSYVOICE_HOME", str(Path.home() / "code" / "cosyvoice-cpp"))
+).expanduser()
+COSYVOICE_MODELS = Path(
+    _env("COSYVOICE_MODELS", str(Path.home() / "models" / "CosyVoice3-GGUF"))
+).expanduser()
 
 def _split_paths(value: str) -> list[Path]:
     """Split a path list using the platform separator (``:`` or ``;``).

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from drama_studio.engines.cosyvoice_directions import instruction_for
 from drama_studio.models import Character, Line, ParseReport, Project, Scene, Script
-from drama_studio.stems import build_stems
+from drama_studio.stems import build_stems, delivery_segments
 
 
 def make_project() -> Project:
@@ -68,3 +69,50 @@ def test_build_stems_new_text_drops_old_takes():
     project.script.scenes[0].lines[0].text = "You are late."
     rebuilt = build_stems(project)
     assert rebuilt[0].text.startswith("You are late.")
+
+
+def _directed_project(*directions: str) -> Project:
+    project = make_project()
+    project.script.scenes[0].lines = [
+        Line(id=f"s1-{n:02d}", scene=1, speaker="MARA", text=f"Line {n}.", direction=direction)
+        for n, direction in enumerate(directions, 1)
+    ]
+    project.stems = build_stems(project)
+    return project
+
+
+def test_delivery_segments_group_neighbours_that_sound_the_same():
+    project = _directed_project("quiet", "hushed", "", "blickt weg", "furious")
+    styles = {"quiet": "soft", "hushed": "soft", "blickt weg": "none", "furious": "angry"}
+    lines = project.script.scenes[0].lines
+
+    segments = delivery_segments(project.stems[0], lines, styles)
+
+    assert [segment.text for segment in segments] == [
+        "Line 1. ... Line 2.",
+        "Line 3. ... Line 4.",
+        "Line 5.",
+    ]
+    assert segments[0].instruction == instruction_for("soft")
+    assert segments[1].instruction is None
+    assert segments[2].instruction == instruction_for("angry")
+
+
+def test_delivery_segments_without_styles_are_one_plain_piece():
+    project = _directed_project("quiet", "furious")
+
+    segments = delivery_segments(project.stems[0], project.script.scenes[0].lines, {})
+
+    assert [(s.text, s.instruction) for s in segments] == [("Line 1. ... Line 2.", None)]
+
+
+def test_delivery_segments_respect_an_edited_stem_text():
+    project = _directed_project("quiet", "furious")
+    stem = project.stems[0]
+    stem.text = "Something else entirely."
+
+    segments = delivery_segments(
+        stem, project.script.scenes[0].lines, {"quiet": "soft", "furious": "angry"}
+    )
+
+    assert [(s.text, s.instruction) for s in segments] == [("Something else entirely.", None)]

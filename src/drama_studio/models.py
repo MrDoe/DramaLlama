@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 Language = Literal["en", "de"]
-EngineName = Literal["breeze", "breeze-de", "chatterbox", "fake", "suno"]
+EngineName = Literal["breeze", "breeze-de", "chatterbox", "cosyvoice", "fake", "suno"]
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 VoiceMode = Literal["reference", "preset"]
 
@@ -219,10 +219,11 @@ class StageActor(BaseModel):
 
 
 class StagePath(BaseModel):
-    """Motion for one speaker: absolute-time keyframes, interpolated linearly.
+    """Motion for one speaker: scene-relative keyframes on a cubic spline.
 
-    Times are seconds on the project timeline (the same clock the Cut board
-    uses), not bars.
+    Times are seconds from the scene's first sound, not the project timeline;
+    `spatial.sample_path` interpolates them as a cubic Hermite curve with
+    Catmull-Rom tangents. A two-key path is exactly a straight line.
     """
 
     speaker: str
@@ -320,6 +321,21 @@ class MixResult(BaseModel):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class MasterReverbSettings(BaseModel):
+    """Optional convolution reverb on the finished stereo master.
+
+    The spatial room sim buffers only 32768 samples of history (0.68 s at
+    48 kHz), so long "cathedral" tails cannot come from it. This is a separate
+    post-mix effect: disabled by default, and the disabled path leaves the mix
+    bytes untouched.
+    """
+
+    enabled: bool = False
+    # Project-relative path to a mono/stereo impulse response WAV.
+    ir_path: str | None = None
+    wet: float = Field(default=0.35, ge=0.0, le=1.0)
+
+
 class ProjectSettings(BaseModel):
     pause_ms: int = 500
     scene_gap_ms: int = 1200
@@ -331,6 +347,7 @@ class ProjectSettings(BaseModel):
     # Spatial rendering runs on the CPU at ~8x faster than real time, so it
     # never needs the GPU serialisation the TTS engines do.
     spatial_sample_rate: Literal[24000, 48000] = 48000
+    master_reverb: MasterReverbSettings = Field(default_factory=MasterReverbSettings)
 
 
 class Project(BaseModel):
@@ -340,6 +357,9 @@ class Project(BaseModel):
     default_engine: EngineName | None = None
     raw_script: str = ""
     script: Script
+    # CosyVoice: line direction -> delivery style, filled by a local LLM once so
+    # re-renders sound the same and need no model.
+    direction_styles: dict[str, str] = Field(default_factory=dict)
     report: ParseReport | None = None
     stems: list[Stem] = Field(default_factory=list)
     alignments: dict[str, AlignmentResult] = Field(default_factory=dict)
@@ -451,6 +471,8 @@ class Take(BaseModel):
     # Sung full mixes align badly with Whisper, so the aligner is skipped and
     # timing is estimated instead.
     vocal_isolated: bool = False
+    # Things the engine wants the user to know about this take (listen here).
+    warnings: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -491,6 +513,13 @@ class Stem(BaseModel):
         return None
 
 
+class RenderSegment(BaseModel):
+    """One piece of a stem that is synthesized with a single delivery."""
+
+    text: str
+    instruction: str | None = None
+
+
 class StemRenderRequest(BaseModel):
     project_id: str
     stem_id: str
@@ -520,6 +549,8 @@ class StemRenderRequest(BaseModel):
     # Suno lyric sheet override. When None the stored stem sheet (or the stem
     # text as a last resort) is sent to Suno.
     suno_lyrics: str | None = None
+    # CosyVoice: the stem split by delivery. Empty means the whole text, plain.
+    segments: list[RenderSegment] = Field(default_factory=list)
 
 
 class StemRenderResult(BaseModel):

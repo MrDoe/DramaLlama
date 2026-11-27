@@ -6,7 +6,7 @@ sourceRefs:
   - src/drama_studio/suno.py
   - src/drama_studio/handlers.py
   - suno-bridge/server.mjs
-lastReviewed: 2026-10-31
+lastReviewed: 2026-11-21
 ---
 
 # Suno engine
@@ -16,17 +16,24 @@ it calls the local BetterSuno bridge (`SunoBridge`).
 
 ## Voice workflow
 
-- Generates a clip whose lyrics are the stem text, style tags
-  `"audio drama radio play"`, `style_weight=20` (20% style influence), mv one of
-  `chirp-hawk` (v6), `chirp-hawk-wild` (v6-wild), `chirp-goose` (v6-mini).
-- Optionally extracts the vocal stem via `make_stems` and downloads it as m4a
-  ("without credits"), converting to WAV for the aligner/mixer.
+- Generates a clip whose lyrics are the stem text, with a `dialogue <stem id>`
+  title and `audio drama radio play` tags unless the Render card overrides
+  them. The model is `chirp-hawk` (v6) by default, with `chirp-hawk-wild`
+  (v6-wild) and `chirp-goose` (v6-mini) as options. `style_weight`, `weirdness`,
+  `audio_weight` and personas are **paid-plan knobs** and are only sent when
+  `resolve_suno()` reports Pro — on Free they are omitted so Suno does not
+  reject the whole request.
+- A render downloads the full mix as m4a (falling back to WAV) and converts it
+  to 24 kHz mono WAV for the aligner/mixer. Vocal extraction is **manual** via
+  the Extract Stem button (`make_stems`); music generation uses WAV directly,
+  because Suno's M4A path is unreliable.
 - Suno voices (personas): browse via `GET /api/suno/personas` (own +
   followed, slimmed to id/name/model/image/root clip), preview a voice via
   `GET /api/suno/personas/{id}`, select via `PATCH .../characters/{speaker}`
   (`suno_persona_id` + `suno_persona_model`, `""` clears to preset voice).
-  The Cast panel has a voice picker with preview audio. `design_reference()`
-  is unsupported.
+  The voice picker lives in the **Render** card (persona, vocal gender, song
+  title and style tags are saved per stem with `PATCH`); the Cast panel only
+  shows the badge. `design_reference()` is unsupported.
 - `bettersuno-mcp` is a pinned git subproject (`third_party/bettersuno-mcp`);
   the bridge resolves it via `suno-bridge/node_modules` and falls back to
   `~/code/bettersuno-mcp`. Only one process may own `ws://127.0.0.1:9423` —
@@ -57,5 +64,9 @@ A Suno re-render adds tracks instead of replacing the previous generation:
 ## Related
 
 - [[concepts/take-aware-cuts]]
+- [[concepts/suno-vocal-extraction]] — turning a full-mix Suno take into an
+  aligned vocals-only take, automatically or in bulk.
 - [[concepts/engine-selection]]
 - [[concepts/script-to-stem-pipeline]]
+- [[sources/log-from-2138-story]] — a real hand-built Suno audio drama whose
+  bracket tag conventions motivated this engine.

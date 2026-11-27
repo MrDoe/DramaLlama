@@ -16,6 +16,15 @@ ASR_GLOB = os.path.expanduser(
 _MODEL_CACHE: dict[tuple[str, str, str], Any] = {}
 
 
+def default_cpu_threads() -> int:
+    """About one thread per physical core.
+
+    CTranslate2 defaults to 4. On an 8-core machine 8 threads were 22 % faster
+    per clip with identical results; more gained nothing.
+    """
+    return max(4, min(8, (os.cpu_count() or 8) // 2))
+
+
 @dataclass(frozen=True)
 class TranscriptWord:
     word: str
@@ -83,7 +92,10 @@ class WhisperTranscriber:
                     "before generating reference voices"
                 ) from exc
             _MODEL_CACHE[key] = WhisperModel(
-                path, device=self.device, compute_type=self.compute_type
+                path,
+                device=self.device,
+                compute_type=self.compute_type,
+                cpu_threads=default_cpu_threads(),
             )
         self._model = _MODEL_CACHE[key]
 

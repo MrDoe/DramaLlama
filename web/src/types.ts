@@ -3,6 +3,7 @@ export type EngineName =
   | "breeze"
   | "breeze-de"
   | "chatterbox"
+  | "cosyvoice"
   | "fake"
   | "suno";
 
@@ -246,12 +247,20 @@ export interface MixResult {
   created_at: string;
 }
 
+export interface MasterReverbSettings {
+  enabled: boolean;
+  ir_path: string | null;
+  wet: number;
+}
+
 export interface ProjectSettings {
   pause_ms: number;
   scene_gap_ms: number;
   loudness_target: "podcast" | "broadcast";
   sfx_library_roots: string[];
   exclude_sfx_dirs: string[];
+  spatial_sample_rate?: 24000 | 48000;
+  master_reverb?: MasterReverbSettings;
 }
 
 export interface Take {
@@ -267,6 +276,8 @@ export interface Take {
   clip_id?: string | null;
   preview_url?: string | null;
   vocal_isolated?: boolean;
+  /** Engine notes on this take, such as a piece worth listening to. */
+  warnings?: string[];
   created_at: string;
 }
 

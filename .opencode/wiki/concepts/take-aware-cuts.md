@@ -10,7 +10,7 @@ sourceRefs:
   - web/src/components/MultiTrackEditor.tsx
   - web/src/audio/syncEngine.ts
   - web/src/audio/timeline.ts
-lastReviewed: 2026-10-31
+lastReviewed: 2026-11-21
 ---
 
 # Take-aware cuts
@@ -108,6 +108,14 @@ Suno dedupe and non-Suno same-engine replacement:
 Non-Suno engines keep their old semantics (same-engine takes are replaced and
 the new take becomes selected); the difference is that cuts now survive via
 remapping instead of being invalidated.
+
+A later fix (2026-11-13) covers the race where a re-render replaced a take
+while cuts were being edited: the handler remaps against the **freshest
+on-disk** alignment and saves it, so a concurrent position edit is not
+clobbered. `cuts.normalize_alignment` also rebinds cuts that still name a take
+no longer on the stem. In the Cut board the missing-take banner offers **Use
+selected take** to rebind all affected clips in one step instead of asking for
+a re-render.
 
 ## `select_take` is now guarded
 

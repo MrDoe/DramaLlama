@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .models import AlignedLine, AlignmentResult, Take
+from .models import AlignedLine, AlignmentResult, Stem, Take
 
 
 def safe_filename(value: str) -> str:
@@ -272,3 +272,28 @@ def layout_script_order(
         for seg in alignment.lines:
             if not seg.id:
                 seg.id = seg.line_id
+
+
+def suno_take_needing_extraction(stem: Stem) -> Take | None:
+    """The stem's current Suno take, if it still has no isolated vocal.
+
+    Only the selected take counts (the newest Suno take when none is selected):
+    extraction selects its result, so picking any other generation would
+    silently override the user's choice.
+    """
+    current = next((take for take in stem.takes if take.selected), None)
+    if current is None:
+        suno = [take for take in stem.takes if take.engine == "suno"]
+        current = max(suno, key=lambda take: take.created_at, default=None)
+    if (
+        current is None
+        or current.engine != "suno"
+        or current.vocal_isolated
+        or not current.clip_id
+    ):
+        return None
+    if any(
+        take.vocal_isolated and take.clip_id == current.clip_id for take in stem.takes
+    ):
+        return None
+    return current

@@ -16,7 +16,7 @@ sourceRefs:
   - web/src/components/StageBoard.tsx
   - scripts/build_spatial.py
   - scripts/spike_spatial.py
-lastReviewed: 2026-11-13
+lastReviewed: 2026-11-21
 ---
 
 # Spatial stage rendering
@@ -106,8 +106,11 @@ image-source echograms and per-sample motion is wasted CPU.
 
 The spline passes through every key and has a continuous tangent across one, so
 a three-key walk turns a corner instead of snapping. Endpoint tangents are
-one-sided, which keeps a two-key path **exactly** the old straight line —
-auto-staged enter/approach moves are unchanged. `_path_tangents` and
+one-sided, which keeps a **hand-authored** two-key path exactly straight.
+Auto-staged walks are no longer two-key: `plan_path()` now emits a third key
+offset perpendicular to the walk (at most 45 cm or 18% of its length), so
+"Spread the cast" hands the renderer a curve too, with the same start, end and
+timing as before. `_path_tangents` and
 `sample_path` in `spatial.py` have a line-for-line mirror in `StageBoard.tsx`
 (`pathTangents` / `samplePath`); the board draws the curve by sampling that
 function finely and clamping to the room, so the drawn walk and the audible one
@@ -115,8 +118,9 @@ cannot drift apart.
 
 `layout_scene` derives the moves from the script. The parser keeps the direction
 on each line, so "through the hatch", "closer now", "as he leaves" and "pacing"
-map onto an enter / approach / leave / pace move, two keyframes each, clamped
-inside the walls, timed across the window in which that speaker actually speaks.
+map onto an enter / approach / leave / pace move, three keyframes each (a bent
+midpoint), clamped inside the walls, timed across the window in which that
+speaker actually speaks.
 Those windows come from the alignments: **a project that has not been rendered
 and aligned yet gets positions and no paths.** An invented timing would produce
 movement nobody could hear. A mover's dot sits where the move ends, and someone
@@ -188,7 +192,7 @@ The hard rule: a missing or failing renderer must never lose a line.
   staged tracks back into the centre and mixes dry.
 - `stage is None`, or enabled with no staged actors → the code path is exactly
   what it was before staging existed. Every pre-staging project must mix
-  byte-identically; [[tests/test_mixer.py]] guards that.
+  byte-identically; the `tests/test_mixer.py` regression tests guard that.
 
 The legacy 24 kHz mono path is untouched, including the `master_24k.wav`
 filename. Spatial projects write `master_pre.wav` instead, at 48 kHz.

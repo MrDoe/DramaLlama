@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 
-from .models import Character, Line, Project, Stem
+from .engines.cosyvoice_directions import instruction_for
+from .models import Character, Line, Project, RenderSegment, Stem
 from .suno_lyrics import format_suno_lyrics
 
 
@@ -29,6 +30,37 @@ def _instruction(character: Character | None, scene_heading: str, lines: list[Li
     return " ".join(parts)
 
 
+def join_line_texts(lines: list[Line]) -> str:
+    """How a stem's lines become one block of text; "..." keeps a pause."""
+    return " ... ".join(line.text.strip() for line in lines if line.text.strip())
+
+
+def delivery_segments(
+    stem: Stem, lines: list[Line], styles: dict[str, str]
+) -> list[RenderSegment]:
+    """Split a stem where the delivery changes, for engines that steer per piece.
+
+    ``styles`` maps a line direction to a delivery style; neighbouring lines
+    with the same resulting instruction stay together. A hand-edited stem text
+    no longer matches its lines, so it renders as one plain piece.
+    """
+    if stem.text != join_line_texts(lines):
+        return [RenderSegment(text=stem.text)]
+    groups: list[tuple[str | None, list[Line]]] = []
+    for line in lines:
+        if not line.text.strip():
+            continue
+        instruction = instruction_for(styles.get(line.direction.strip(), ""))
+        if groups and groups[-1][0] == instruction:
+            groups[-1][1].append(line)
+        else:
+            groups.append((instruction, [line]))
+    return [
+        RenderSegment(text=join_line_texts(group), instruction=instruction)
+        for instruction, group in groups
+    ]
+
+
 def build_stems(project: Project) -> list[Stem]:
     """Group lines by (scene, speaker) and keep existing takes when unchanged."""
     existing = {(stem.scene, stem.speaker): stem for stem in project.stems}
@@ -40,7 +72,7 @@ def build_stems(project: Project) -> list[Stem]:
             groups.setdefault(line.speaker, []).append(line)
 
         for speaker, lines in groups.items():
-            text = " ... ".join(line.text.strip() for line in lines if line.text.strip())
+            text = join_line_texts(lines)
             if not text:
                 continue
             instruction = _instruction(

@@ -180,6 +180,13 @@ export function ProjectsPage() {
                 tone="violet"
               />
               <EngineCard
+                icon={<MicrophoneStage size={19} weight="bold" />}
+                name="CosyVoice 3"
+                detail="German + English · cloning with directions"
+                badge="GPU"
+                tone="violet"
+              />
+              <EngineCard
                 icon={<GlobeHemisphereWest size={19} weight="bold" />}
                 name="Whisper large-v3"
                 detail="CPU int8 · word-level stem alignment"

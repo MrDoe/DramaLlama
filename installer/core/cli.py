@@ -245,6 +245,7 @@ def _handle_verify(args: argparse.Namespace, pins: dict, as_json: bool) -> int:
         selection,
         progress,
         breeze_de_cpu=bool((load_state(prefix) or {}).get("breeze_de_cpu", False)),
+        cosyvoice_cpu=bool((load_state(prefix) or {}).get("cosyvoice_cpu", False)),
     )
     if as_json:
         print(

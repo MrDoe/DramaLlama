@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .detect import SystemInfo
+from .engines import probe_cosyvoice
 from .paths import (
     InstallPaths,
     legacy_breeze_de_binary,
@@ -24,11 +25,18 @@ from .paths import (
     runtime_search_path,
     whisper_cache_root,
 )
-from .plan import BREEZE_DE, BREEZE_EN, CHATTERBOX, Selection, effective_device
+from .plan import (
+    BREEZE_DE,
+    BREEZE_EN,
+    CHATTERBOX,
+    COSYVOICE,
+    Selection,
+    effective_device,
+)
 from .progress import Progress
 from .util import InstallerError, command_output, human_bytes, is_windows, run
 
-ENGINE_NAMES = {"fake", "breeze", "breeze-de", "chatterbox", "suno"}
+ENGINE_NAMES = {"fake", "breeze", "breeze-de", "chatterbox", "cosyvoice", "suno"}
 
 
 @dataclass
@@ -114,6 +122,17 @@ def verify_files(
         )
     if selection.has(CHATTERBOX):
         checks.append(_chatterbox_check(pins))
+    if selection.has(COSYVOICE):
+        probe, problem = probe_cosyvoice(
+            paths, system, effective_device(selection, system), home
+        )
+        detail = (
+            f"{probe['cli']} ({probe['ggml_source']} GGML, {probe['backend']})"
+            if probe
+            else problem
+        )
+        # Optional component: a failure is reported, not fatal.
+        checks.append(VerifyCheck("CosyVoice 3", probe is not None, detail, required=False))
     return checks
 
 
@@ -163,6 +182,7 @@ def _server_env(
     selection: Selection,
     *,
     breeze_de_cpu: bool,
+    cosyvoice_cpu: bool = False,
 ) -> dict[str, str]:
     from .launchers import launcher_env
 
@@ -175,6 +195,8 @@ def _server_env(
             device=device,
             breeze_de=selection.has(BREEZE_DE),
             breeze_de_cpu=breeze_de_cpu,
+            cosyvoice=selection.has(COSYVOICE),
+            cosyvoice_cpu=cosyvoice_cpu,
         )
     )
     env["PATH"] = os.pathsep.join(
@@ -192,12 +214,20 @@ def verify_server(
     progress: Progress,
     *,
     breeze_de_cpu: bool = False,
+    cosyvoice_cpu: bool = False,
     timeout: float = 120,
 ) -> list[VerifyCheck]:
     port = _free_port()
     data_dir = Path(tempfile.mkdtemp(prefix="drama-llama-verify-"))
     log_path = data_dir / "server.log"
-    env = _server_env(paths, data_dir, system, selection, breeze_de_cpu=breeze_de_cpu)
+    env = _server_env(
+        paths,
+        data_dir,
+        system,
+        selection,
+        breeze_de_cpu=breeze_de_cpu,
+        cosyvoice_cpu=cosyvoice_cpu,
+    )
     command = [
         str(paths.python(system=system.os_name)),
         "-m",
@@ -293,6 +323,7 @@ def verify_install(
     progress: Progress,
     *,
     breeze_de_cpu: bool = False,
+    cosyvoice_cpu: bool = False,
 ) -> VerifyResult:
     checks = verify_files(paths, pins, system, selection)
     checks.append(verify_imports(paths, system, selection))
@@ -304,6 +335,7 @@ def verify_install(
             selection,
             progress,
             breeze_de_cpu=breeze_de_cpu,
+            cosyvoice_cpu=cosyvoice_cpu,
         )
     )
     ok = all(check.ok for check in checks if check.required)

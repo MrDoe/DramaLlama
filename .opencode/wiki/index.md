@@ -11,10 +11,11 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 - [[concepts/cut-region-effects]] — per-region fade/speed/pitch/reverb/dereverb DSP and inspector.
 - [[concepts/cut-cues-lanes]] — Music/SFX cue lanes, anchored vs timeline placement, inspector, save-all, unchanged-SFX rule.
 - [[concepts/take-aware-cuts]] — per-clip take selection, render append/dedupe, remap rules.
+- [[concepts/suno-vocal-extraction]] — Demucs/Suno vocal isolation, auto-follow-up after a Suno render, bulk extraction.
 - [[concepts/gpu-serialization]] — why Breeze, Chatterbox, Ollama and Whisper are scheduled carefully.
 - [[concepts/engine-selection]] — project default only, no per-stem override.
 - [[entities/cuts-module]] — shared `cuts.py` domain (freeze/remap/validate).
-- [[concepts/sfx-library-and-mix]] — local SFX index, cue model, mix chain.
+- [[concepts/sfx-library-and-mix]] — local SFX index, cue model, mix chain, master reverb, SFX in the Ambisonic export.
 - [[concepts/suno-turnstile-captcha]] — why Suno renders stall on Cloudflare Turnstile, and the fix plan.
 - [[concepts/render-error-dialog]] — actionable failure text, captcha hint, Re-check verification, batch pause/resume.
 - [[concepts/batch-render-and-captcha-recovery]] — sequential "render all", pause-on-captcha, recovery dialog.
@@ -36,6 +37,7 @@ Working knowledge for Drama Llama, the local script-to-audio-drama app.
 ## Distribution
 
 - [[entities/installer]] — PySide6 wizard + stdlib core, AppImage/Inno packaging, headless CLI.
+- [[concepts/release-versioning]] — the seven version files, chore commit, annotated tag and pinned spatial asset.
 
 ## Sources
 

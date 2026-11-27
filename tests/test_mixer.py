@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import soundfile as sf
 
-from drama_studio.mixer import build_mix
+from drama_studio.mixer import _apply_master_reverb, build_mix
 from drama_studio.models import (
     Character,
     Cue,
     Line,
+    MasterReverbSettings,
     Project,
     ProjectSettings,
     Scene,
@@ -45,6 +47,86 @@ def make_project(tmp_path) -> tuple[Project, np.ndarray]:
     sf.write(directory / "lines" / "s1-01.wav", np.zeros(24000, dtype=np.float32), 24000)
     sf.write(directory / "lines" / "s1-02.wav", np.zeros(24000, dtype=np.float32), 24000)
     return project, np.zeros(24000, dtype=np.float32)
+
+
+def test_master_reverb_disabled_keeps_mix_bytes(tmp_path):
+    project, _ = make_project(tmp_path)
+    directory = tmp_path / "mix-test"
+    tone = (0.5 * np.sin(2 * np.pi * 220 * np.arange(4800) / 24000)).astype(np.float32)
+    sf.write(directory / "lines" / "s1-01.wav", tone, 24000)
+
+    base = build_mix(project, directory, lambda _: None)
+    before = (directory / base.file).read_bytes()
+    project.settings.master_reverb = MasterReverbSettings(
+        enabled=False, ir_path="irs/ir.wav", wet=0.9
+    )
+    after_result = build_mix(project, directory, lambda _: None)
+    assert before == (directory / after_result.file).read_bytes()
+
+
+def test_master_reverb_enabled_adds_tail(tmp_path):
+    project, _ = make_project(tmp_path)
+    directory = tmp_path / "mix-test"
+    tone = (0.5 * np.sin(2 * np.pi * 220 * np.arange(4800) / 24000)).astype(np.float32)
+    sf.write(directory / "lines" / "s1-01.wav", tone, 24000)
+
+    ir_dir = directory / "irs"
+    ir_dir.mkdir()
+    n = int(0.5 * 24000)
+    decay = np.exp(-np.linspace(0, 9, n))
+    ir = (decay * np.sin(2 * np.pi * 900 * np.arange(n) / 24000)).astype(np.float32)
+    sf.write(ir_dir / "ir.wav", ir, 24000)
+    project.settings.master_reverb = MasterReverbSettings(
+        enabled=True, ir_path="irs/ir.wav", wet=0.8
+    )
+
+    result = build_mix(project, directory, lambda _: None)
+    master, sr = sf.read(str(directory / result.file), dtype="float32")
+    if master.ndim > 1:
+        master = master.mean(axis=1)
+
+    def rms(a: float, b: float) -> float:
+        return float(np.sqrt((master[int(a * sr) : int(b * sr)] ** 2).mean()))
+
+    def tail_energy(path) -> float:
+        data, rate = sf.read(str(path), dtype="float32")
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        window = data[int(0.3 * rate) : int(0.6 * rate)]
+        return float(np.sqrt((window**2).mean()))
+
+    with_tail = tail_energy(directory / result.file)
+    project.settings.master_reverb = MasterReverbSettings(enabled=False)
+    dry = build_mix(project, directory, lambda _: None)
+    without_tail = tail_energy(directory / dry.file)
+
+    # The only source is a 0.2 s tone at the start; energy well after it must
+    # come from the convolution tail, not the source itself.
+    assert rms(0.0, 0.2) > 1e-3
+    assert with_tail > 1e-5 and with_tail > without_tail * 10
+
+
+@pytest.mark.parametrize(("ir_seconds", "truncated"), [(1.5, False), (3.0, True)])
+def test_master_reverb_caps_the_ir_in_seconds_not_samples(tmp_path, ir_seconds, truncated):
+    """A 48 kHz IR on a 24 kHz mix keeps up to 2 s of tail, not half of it."""
+    # Energy right up to the end, so the output shows how much was kept.
+    ir = np.full(int(ir_seconds * 48000), 0.5, dtype=np.float32)
+    sf.write(tmp_path / "ir.wav", ir, 48000)
+    mix = np.zeros(4 * 24000, dtype=np.float32)
+    mix[0] = 1.0
+    warnings: list[str] = []
+
+    out = _apply_master_reverb(
+        mix,
+        tmp_path,
+        MasterReverbSettings(enabled=True, ir_path="ir.wav", wet=1.0),
+        24000,
+        warnings,
+    )
+
+    last = float(np.max(np.nonzero(np.abs(out) > 1e-4)[0])) / 24000
+    assert last == pytest.approx(min(ir_seconds, 2.0), abs=0.01)
+    assert bool(warnings) is truncated
 
 
 def test_legacy_per_stem_positions_do_not_stack_the_scenes(tmp_path):

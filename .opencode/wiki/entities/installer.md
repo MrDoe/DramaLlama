@@ -12,7 +12,7 @@ sourceRefs:
   - scripts/build_installer.py
   - .github/workflows/installer.yml
   - INSTALL.md
-lastReviewed: 2026-11-05
+lastReviewed: 2026-11-21
 ---
 
 # Installer
@@ -174,16 +174,29 @@ asserts `verification: enabled` then `verification: disabled`.
 PR touching the installer, builds both targets on their native runners, and
 attaches artifacts plus checksums to a release on a `v*` tag.
 
-## v0.3.0 release
+## Releases and versioning
 
-Published at https://github.com/MrDoe/DramaLlama/releases/tag/v0.3.0 with
-assets `DramaLlama-0.3.0-x86_64.AppImage`,
-`DramaLlama-0.3.0-linux-x86_64.tar.gz`,
-`DramaLlama-Setup-0.3.0.exe`, and a `.sha256` for each. The Linux AppImage
-build initially failed because `appimagetool` requires a `.desktop` file and
-icon at the AppDir root; `build-appimage.sh` now writes both there (and keeps
-copies under `usr/share/...`). Moving the tag re-ran the workflow, which
-passed all four jobs.
+The shipped version as of 2026-11-21 is **0.3.9** (`pyproject.toml`,
+`installer/__init__.py`, `src/drama_studio/__init__.py` and `web/package.json`).
+The AppImage build origin of `appimagetool` requiring a `.desktop` file and
+icon at the AppDir root was fixed in 0.3.0 by `build-appimage.sh`. Since 0.3.9
+a release also carries `dramallama-spatial-linux-x86_64.tar.gz` (plus
+`.sha256`), built from the SAF commit pinned in `installer/pins.json` and
+downloaded by `ensure_spatial()` only when both URL and hash are present. The
+`spatial-windows` CI job now builds the matching
+`dramallama-spatial-windows-x86_64.zip` from the same pinned SAF commit using
+vcpkg's `openblas:x64-windows`; the Windows DLL is named
+`drama_llama_spatial.dll` (no `lib` prefix, and Visual Studio puts it under
+`Release/`). The zip also bundles vcpkg's OpenBLAS runtime DLLs and licence:
+`ctypes.CDLL` with a full path resolves dependencies from the DLL's own
+directory and the system directories, not `PATH`, so they must ship beside it.
+`ensure_spatial()` copies every sibling DLL into `<prefix>/lib`, and the CI job
+runs `scripts/spike_spatial.py` against the unpacked zip. `installer/pins.json` still has **no** Windows asset entry: it is
+deliberately left empty until the first release carrying the zip is published,
+then the URL/size/SHA-256 from `dist/*.sha256` must be copied into
+`spatial.assets.windows-x86_64`. Until then `ensure_spatial()` skips with a
+warning, which is a supported configuration. See
+[[concepts/release-versioning]] for the bump-and-tag flow.
 ## Gotchas
 
 - **Default prefix must not follow scratch pointers.** `resolve_prefix()` reads

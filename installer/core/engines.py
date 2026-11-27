@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
+from . import cosyvoice_rl
 from .detect import SystemInfo, detect_vulkan
 from .download import download, hf_url
 from .paths import (
@@ -18,9 +21,13 @@ from .paths import (
     legacy_breeze_de_root,
     legacy_breeze_model,
     legacy_breeze_repo,
+    legacy_cosyvoice_models,
+    legacy_cosyvoice_root,
+    whisper_cache_root,
 )
 from .progress import Progress
 from .util import (
+    Cancelled,
     InstallerError,
     command_output,
     ensure_dir,
@@ -260,6 +267,255 @@ def install_breeze_de(
             )
     progress.update("breeze-de", 1.0, f"Breeze German ready at {binary}")
     return binary, model, cpu_fallback, created
+
+
+# --------------------------------------------------------------------------- CosyVoice
+
+#: Asked of the app itself, so the installer and a render agree on what works.
+_COSYVOICE_PROBE = (
+    "import sys; from drama_studio.engines.cosyvoice_runtime import main; sys.exit(main())"
+)
+
+
+@dataclass(frozen=True)
+class CosyVoiceInstall:
+    cli: Path
+    ggml_source: str
+    cpu_fallback: bool
+    #: Only what this installer put there, so uninstall leaves the rest alone.
+    created: list[Path]
+
+
+def install_cosyvoice(
+    paths: InstallPaths,
+    pins: dict,
+    system: SystemInfo,
+    progress: Progress,
+    *,
+    device: str,
+    allow_elevated: bool = False,
+    home: Path | None = None,
+) -> CosyVoiceInstall:
+    """Reuse what is already on the machine; download only what is missing."""
+    meta = pins["cosyvoice"]
+    root = legacy_cosyvoice_root(home)
+    created: list[Path] = []
+    progress.update("cosyvoice", 0.02, "Looking for cosyvoice-cli…")
+    source = str(pins.get("app", {}).get("repository", "the Drama Llama repository"))
+    cli = _cosyvoice_cli(paths, meta, system, progress, root, created, source)
+    # Before the models: a converted RL model makes the download unnecessary.
+    cosyvoice_rl.build_if_possible(
+        paths, pins, paths.python(system=system.os_name), progress, home, created
+    )
+    _cosyvoice_models(meta, progress, home, created)
+
+    if device == "gpu" and not detect_vulkan(system.os_name):
+        progress.log("Vulkan loader not detected; trying to install it (optional)…")
+        if allow_elevated and ensure_vulkan_loader(system, progress):
+            system.vulkan = True
+
+    progress.update("cosyvoice", 0.9, "Checking the GGML libraries…")
+    probe, problem = probe_cosyvoice(paths, system, device, home)
+    if probe is None:
+        progress.log(f"no installed GGML libraries are usable: {problem}")
+        _cosyvoice_ggml(paths, meta, system, progress, root, created)
+        probe, problem = probe_cosyvoice(paths, system, device, home)
+    if probe is None:
+        hint = (
+            " On Windows it needs the Microsoft Visual C++ Redistributable "
+            "(2015-2022, x64)."
+            if is_windows(system.os_name)
+            else ""
+        )
+        raise InstallerError(f"CosyVoice cannot start: {problem}{hint}")
+    spare = root / "ggml"
+    if probe["ggml_source"] != "pinned" and not any(spare.glob("*ggml*")):
+        # An installed copy (Ollama) can update into something broken; keep the
+        # small pinned build so a render has something to fall back to.
+        try:
+            _cosyvoice_ggml(paths, meta, system, progress, root, created)
+        except Cancelled:
+            raise
+        except InstallerError as exc:
+            progress.log(f"warning: no spare GGML copy was installed: {exc}")
+    cpu_fallback = device == "gpu" and probe["backend"].upper() == "CPU"
+    if cpu_fallback:
+        progress.log(
+            "CosyVoice will use its CPU backend (no Vulkan GPU found). "
+            "Install libvulkan1/vulkan-loader and re-run to enable the GPU."
+        )
+    progress.update(
+        "cosyvoice", 1.0, f"CosyVoice ready ({probe['ggml_source']} GGML, {probe['backend']})"
+    )
+    return CosyVoiceInstall(cli, probe["ggml_source"], cpu_fallback, created)
+
+
+def _cosyvoice_cli(
+    paths: InstallPaths,
+    meta: dict,
+    system: SystemInfo,
+    progress: Progress,
+    root: Path,
+    created: list[Path],
+    source: str,
+) -> Path:
+    windows = is_windows(system.os_name)
+    name = "cosyvoice-cli.exe" if windows else "cosyvoice-cli"
+    found = which(name)
+    if found:
+        progress.log(f"using the installed {found}")
+        return Path(found)
+    target = root / "bin"
+    cli = target / name
+    if cli.is_file():
+        progress.log(f"cosyvoice-cli already installed at {cli}")
+        return cli
+    asset = meta.get("assets", {}).get(system.platform_key) or {}
+    if not asset.get("url") or not asset.get("sha256"):
+        raise InstallerError(
+            f"no cosyvoice-cli build is published for {system.platform_key} yet. "
+            f"Build it from a Drama Llama source checkout ({source}) with "
+            "`python scripts/build_cosyvoice.py --install` (or put cosyvoice-cli "
+            "on PATH), then re-run the installer."
+        )
+    staging = _cosyvoice_unpack(paths, asset, f"cosyvoice.cpp {meta['release']}", progress)
+    try:
+        binary = find_file(staging, name)
+        if binary is None:
+            raise InstallerError(f"the CosyVoice archive did not contain {name}")
+        remove_tree(target)
+        shutil.copytree(binary.parent, target, symlinks=True)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    if not windows:
+        cli.chmod(0o755)
+    created.append(target)
+    return cli
+
+
+def _cosyvoice_unpack(
+    paths: InstallPaths, asset: dict, label: str, progress: Progress
+) -> Path:
+    archive = paths.cache / "downloads" / Path(str(asset["url"])).name
+    download(
+        str(asset["url"]),
+        archive,
+        sha256=str(asset["sha256"]),
+        size=asset.get("size"),
+        label=label,
+        progress=lambda item: progress.download("cosyvoice", item),
+        cancel=progress.cancelled,
+    )
+    staging = Path(tempfile.mkdtemp(prefix="drama-cosyvoice-"))
+    try:
+        extract_archive(archive, staging)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return staging
+
+
+def _cosyvoice_models(
+    meta: dict, progress: Progress, home: Path | None, created: list[Path]
+) -> None:
+    """Each group lists acceptable files; the first one is what gets downloaded."""
+    models = meta["models"]
+    target_root = legacy_cosyvoice_models(home)
+    hub = whisper_cache_root(home)  # the shared Hugging Face hub layout
+    repos = (
+        "models--" + str(models["repo"]).replace("/", "--"),
+        "models--FunAudioLLM--Fun-CosyVoice3-0.5B-2512",
+    )
+    groups = models["files"]
+    for index, group in enumerate(groups):
+        progress.update(
+            "cosyvoice", 0.1 + 0.75 * index / len(groups), "Checking the CosyVoice models…"
+        )
+        roots = [target_root]
+        for repo in repos:
+            roots.extend(sorted((hub / repo / "snapshots").glob("*")))
+        present = next(
+            (
+                candidate
+                for item in group
+                for base in roots
+                for candidate in (base / item["path"], base / Path(item["path"]).name)
+                if candidate.is_file()
+                and verify_file(
+                    candidate,
+                    size=int(item["size"]),
+                    sha256=str(item["sha256"]),
+                    cancel=progress.cancelled,
+                )
+            ),
+            None,
+        )
+        if present is not None:
+            progress.log(f"using the installed {present}")
+            continue
+        item = group[0]
+        target = target_root / item["path"]
+        download(
+            hf_url(str(models["repo"]), str(models["revision"]), str(item["path"])),
+            target,
+            sha256=str(item["sha256"]),
+            size=int(item["size"]),
+            label=Path(item["path"]).name,
+            progress=lambda update: progress.download("cosyvoice", update),
+            cancel=progress.cancelled,
+            retries=4,
+        )
+        created.append(target)
+
+
+def probe_cosyvoice(
+    paths: InstallPaths, system: SystemInfo, device: str, home: Path | None
+) -> tuple[dict | None, str]:
+    env = dict(os.environ)
+    env["DRAMA_LLAMA_COSYVOICE_HOME"] = str(legacy_cosyvoice_root(home))
+    env["DRAMA_LLAMA_COSYVOICE_MODELS"] = str(legacy_cosyvoice_models(home))
+    env["DRAMA_LLAMA_DATA"] = str(paths.cache / "cosyvoice-probe")
+    if device == "cpu":
+        env["DRAMA_LLAMA_COSYVOICE_BACKEND"] = "cpu"
+    result = run(
+        [paths.python(system=system.os_name), "-c", _COSYVOICE_PROBE],
+        env=env,
+        timeout=300,
+    )
+    if result.returncode != 0:
+        return None, (result.stderr or result.stdout or "").strip()[-600:]
+    try:
+        return json.loads(result.stdout.strip().splitlines()[-1]), ""
+    except (ValueError, IndexError):
+        return None, f"unreadable probe output: {result.stdout[-300:]}"
+
+
+def _cosyvoice_ggml(
+    paths: InstallPaths,
+    meta: dict,
+    system: SystemInfo,
+    progress: Progress,
+    root: Path,
+    created: list[Path],
+) -> None:
+    asset = meta.get("ggml", {}).get(system.platform_key)
+    if not asset:
+        raise InstallerError(f"no GGML build pinned for {system.platform_key}")
+    staging = _cosyvoice_unpack(paths, asset, "GGML libraries (llama.cpp)", progress)
+    target = root / "ggml"
+    # Windows backends also need the OpenMP runtime shipped beside them.
+    pattern = "*.dll" if is_windows(system.os_name) else "libggml*"
+    try:
+        libraries = sorted(staging.rglob(pattern))
+        if not libraries:
+            raise InstallerError("the GGML archive did not contain any libraries")
+        remove_tree(target)
+        ensure_dir(target)
+        for library in libraries:
+            shutil.copy2(library, target / library.name, follow_symlinks=False)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    created.append(target)
 
 
 def _os_release() -> dict[str, str]:

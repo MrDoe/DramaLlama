@@ -5,8 +5,9 @@ sourceRefs:
   - src/drama_studio/handlers.py
   - src/drama_studio/worker.py
   - src/drama_studio/aligner.py
+  - src/drama_studio/spatial.py
   - scripts/smoke_breeze.py
-lastReviewed: 2026-10-29
+lastReviewed: 2026-11-21
 ---
 
 # GPU serialization
@@ -16,7 +17,7 @@ There is one 16 GB RTX 4090 Laptop GPU. Everything must be scheduled around it.
 | Workload | Approx. VRAM |
 |---|---:|
 | Breeze TTS 2 eager | 8.5 GB peak |
-| Chatterbox Multilingual 0.5B (external server) | ~2–4 GB |
+| Chatterbox Multilingual 0.5B (external Docker server) | ~4.4 GB, held only while rendering |
 | Ollama `gemma4:12b` | ~7.6 GB |
 | faster-whisper large-v3 | CPU int8 (no GPU) |
 
@@ -24,6 +25,10 @@ Breeze + Ollama does not fit. Breeze + Whisper on GPU does not fit. The worker
 is single-threaded and the API never imports torch; LLM calls happen before a
 render and Ollama is invoked with `keep_alive: 0`. Chatterbox and Suno live in
 separate server processes, so `EngineManager` only swaps local Breeze models.
+Chatterbox's container is started on demand and stopped after every render, so
+its VRAM is not held between jobs. Staging
+([[concepts/spatial-stage-rendering]]) is pure CPU and deliberately outside
+this queue.
 
 ## Preflight
 

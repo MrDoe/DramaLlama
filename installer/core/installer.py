@@ -16,6 +16,7 @@ from .engines import (
     install_breeze_en,
     install_breeze_repo,
     install_chatterbox,
+    install_cosyvoice,
 )
 from .launchers import write_launchers
 from .plan import (
@@ -23,6 +24,7 @@ from .plan import (
     BREEZE_EN,
     CHATTERBOX,
     CORE,
+    COSYVOICE,
     Selection,
     build_steps,
     effective_device,
@@ -88,7 +90,7 @@ def _tee_progress(progress: Progress, log: _FileLog) -> None:
 
 
 def _step_component(step_id: str) -> str:
-    if step_id in {BREEZE_EN, BREEZE_DE, CHATTERBOX}:
+    if step_id in {BREEZE_EN, BREEZE_DE, CHATTERBOX, COSYVOICE}:
         return step_id
     return CORE
 
@@ -159,6 +161,7 @@ def run_install(
     steps = build_steps(selection, pins, system)
     warnings_by_step: list[str] = list(warnings)
     breeze_de_cpu = bool(state.get("breeze_de_cpu", False))
+    cosyvoice_cpu = bool(state.get("cosyvoice_cpu", False))
     channel = torch_channel_for(selection, pins, system)
     verification: VerifyResult | None = None
     progress.log(f"torch channel: {channel}")
@@ -225,6 +228,20 @@ def run_install(
                         allow_elevated=selection.allow_docker_install,
                     )
                     record_docker(state, **details)
+                elif step.id == COSYVOICE:
+                    cosyvoice = install_cosyvoice(
+                        paths,
+                        pins,
+                        system,
+                        progress,
+                        device=device,
+                        allow_elevated=selection.allow_docker_install,
+                    )
+                    cosyvoice_cpu = cosyvoice.cpu_fallback
+                    state["cosyvoice_cpu"] = cosyvoice_cpu
+                    state["cosyvoice_ggml"] = cosyvoice.ggml_source
+                    for path in cosyvoice.created:
+                        add_created_path(state, path)
                 elif step.id == "launchers":
                     write_launchers(
                         paths,
@@ -234,6 +251,7 @@ def run_install(
                         progress,
                         device=device,
                         breeze_de_cpu=breeze_de_cpu,
+                        cosyvoice_cpu=cosyvoice_cpu,
                         state=state,
                     )
                 elif step.id == "verify":
@@ -244,6 +262,7 @@ def run_install(
                         selection,
                         progress,
                         breeze_de_cpu=breeze_de_cpu,
+                        cosyvoice_cpu=cosyvoice_cpu,
                     )
                     warnings_by_step.extend(verification.warnings)
                     result = verification

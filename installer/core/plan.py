@@ -13,7 +13,8 @@ CORE = "core"
 BREEZE_EN = "breeze-en"
 BREEZE_DE = "breeze-de"
 CHATTERBOX = "chatterbox"
-ALL_COMPONENTS = (CORE, BREEZE_EN, BREEZE_DE, CHATTERBOX)
+COSYVOICE = "cosyvoice"
+ALL_COMPONENTS = (CORE, BREEZE_EN, BREEZE_DE, CHATTERBOX, COSYVOICE)
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,20 @@ COMPONENTS: dict[str, ComponentSpec] = {
         ),
         needs_docker=True,
         licence="Chatterbox and the chatterbox-tts-api image carry their own licences.",
+    ),
+    COSYVOICE: ComponentSpec(
+        id=COSYVOICE,
+        title="CosyVoice 3",
+        description=(
+            "German and English voice cloning steered by line directions "
+            "(cosyvoice.cpp). About 2 GB; installed copies of the program and "
+            "the models are reused, and Ollama's GGML libraries are used with a "
+            "small spare copy kept. Runs on Vulkan or CPU."
+        ),
+        licence=(
+            "cosyvoice.cpp and the GGML libraries are MIT, the CosyVoice 3 "
+            "weights Apache-2.0, ONNX Runtime MIT."
+        ),
     ),
 }
 
@@ -152,6 +167,15 @@ def core_download_bytes(pins: dict, system: SystemInfo, device: str) -> int:
     )
 
 
+def cosyvoice_download_bytes(pins: dict, system: SystemInfo) -> int:
+    """The most this component can fetch; installed copies are reused."""
+    meta = pins.get("cosyvoice", {})
+    total = int((meta.get("assets", {}).get(system.platform_key) or {}).get("size", 0))
+    total += int((meta.get("ggml", {}).get(system.platform_key) or {}).get("size", 0))
+    total += sum(int(group[0]["size"]) for group in meta.get("models", {}).get("files", []))
+    return total
+
+
 def download_estimate(selection: Selection, pins: dict, system: SystemInfo) -> int:
     device = effective_device(selection, system)
     total = core_download_bytes(pins, system, device)
@@ -165,6 +189,8 @@ def download_estimate(selection: Selection, pins: dict, system: SystemInfo) -> i
         variant = chatterbox_variant(device)
         meta = pins.get("chatterbox", {}).get("variants", {}).get(variant, {})
         total += int(meta.get("size", 0))
+    if selection.has(COSYVOICE):
+        total += cosyvoice_download_bytes(pins, system)
     return total
 
 
@@ -322,6 +348,15 @@ def build_steps(selection: Selection, pins: dict, system: SystemInfo) -> list[St
             14,
             optional=True,
             download_bytes=int(meta.get("size", 0)),
+        ))
+    if selection.has(COSYVOICE):
+        steps.append(Step(
+            COSYVOICE,
+            "Install CosyVoice 3",
+            COSYVOICE,
+            12,
+            optional=True,
+            download_bytes=cosyvoice_download_bytes(pins, system),
         ))
     steps.extend([
         Step("launchers", "Create launchers and shortcuts", CORE, 1),

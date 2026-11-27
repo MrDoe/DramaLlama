@@ -75,12 +75,17 @@ class ProjectStore:
         directory = self.project_dir(project.id)
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / "project.json"
-        temp = directory / "project.json.tmp"
-        temp.write_text(
-            json.dumps(project.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temp.replace(path)
+        # Unique per save: API threads and the worker write concurrently, and a
+        # shared temp name lets one save rename another's half-written file.
+        temp = directory / f"project.json.{uuid.uuid4().hex}.tmp"
+        try:
+            temp.write_text(
+                json.dumps(project.model_dump(mode="json"), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temp.replace(path)
+        finally:
+            temp.unlink(missing_ok=True)
         # A plain-text copy is handy for git and external tools.
         (directory / "script.md").write_text(project.raw_script, encoding="utf-8")
         return project

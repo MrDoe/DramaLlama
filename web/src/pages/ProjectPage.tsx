@@ -35,6 +35,7 @@ import type {
   Job,
   Line,
   Project,
+  ProjectSettings,
   SfxItem,
   Stem,
   SunoLibraryClip,
@@ -44,6 +45,7 @@ import {
   autoEngine,
   engineLabel,
   formatDuration,
+  freshSeed,
   initials,
   speakerStyle,
 } from "../utils";
@@ -797,6 +799,7 @@ function CastPanel({
             const engine = projectEngine(project);
             const isSuno = engine === "suno";
             const isChatterbox = engine === "chatterbox";
+            const isCosyVoice = engine === "cosyvoice";
             const isBreeze =
               engine === "breeze" || engine === "breeze-de" || engine === "fake";
             return (
@@ -810,8 +813,8 @@ function CastPanel({
                     {character.count} line{character.count === 1 ? "" : "s"} ·{" "}
                     {isSuno
                       ? "Suno voice"
-                      : isChatterbox
-                        ? "Chatterbox clone"
+                      : isChatterbox || isCosyVoice
+                        ? `${engineLabel(engine)} clone`
                         : `${engineLabel(engine)} reference`}
                   </p>
                   {character.description ? (
@@ -886,7 +889,7 @@ function CastPanel({
                         Add voice
                       </button>
                     ) : null}
-                    {isBreeze || isChatterbox ? (
+                    {isBreeze || isChatterbox || isCosyVoice ? (
                       <button
                         type="button"
                         className="button button-ghost button-sm"
@@ -920,6 +923,9 @@ function RenderBoard({
   onBuild,
   onRender,
   onRenderAll,
+  autoExtractVocals,
+  onAutoExtractChange,
+  onExtractAll,
   onShowError,
   onSelectTake,
   onRefVoiceChange,
@@ -944,8 +950,11 @@ function RenderBoard({
   building: boolean;
   sunoPlan: "free" | "pro";
   onBuild: () => void;
+  autoExtractVocals: boolean;
+  onAutoExtractChange: (value: boolean) => void;
   onRender: (stem: Stem) => void;
   onRenderAll: (stems: Stem[], includeRendered: boolean) => void;
+  onExtractAll: () => void;
   onShowError: (title: string, body: string) => void;
   onSelectTake: (stem: Stem, takeId: string) => void;
   onRefVoiceChange: (stem: Stem, refVoiceId: string) => void;
@@ -1001,6 +1010,13 @@ function RenderBoard({
             {engineLabel(defaultEngine)} default{" "}
             {defaultEngine === "suno" ? "via BetterSuno" : "on GPU"} · Whisper on CPU
           </p>
+          {defaultEngine === "cosyvoice" ? (
+            <p className="panel-note">
+              Line directions steer delivery (labelled by a local language model).
+              Every rendered piece is checked with Whisper and retried if it does
+              not match.
+            </p>
+          ) : null}
         </div>
         <div className="panel-actions">
           <button
@@ -1030,6 +1046,26 @@ function RenderBoard({
           >
             {batch.state === "running" ? "Generating…" : "Generate all"}
           </button>
+          {defaultEngine === "suno" ? (
+            <label className="panel-sub" title="Runs Demucs on the CPU after each Suno render to produce a vocals-only take">
+              <input
+                type="checkbox"
+                checked={autoExtractVocals}
+                onChange={(event) => onAutoExtractChange(event.target.checked)}
+              />{" "}
+              extract vocals after render
+            </label>
+          ) : null}
+          {defaultEngine === "suno" ? (
+            <button
+              type="button"
+              className="button button-ghost button-sm"
+              onClick={onExtractAll}
+              title="Extract isolated vocals for each stem's current Suno take, if it has none yet"
+            >
+              Extract all vocals
+            </button>
+          ) : null}
           <button type="button" className="button button-ghost button-sm" onClick={onRefresh}>
             Refresh
           </button>
@@ -1070,7 +1106,8 @@ function RenderBoard({
                   const showRefVoice =
                     (selectedEngine === "breeze" ||
                       selectedEngine === "breeze-de" ||
-                      selectedEngine === "chatterbox") &&
+                      selectedEngine === "chatterbox" ||
+                      selectedEngine === "cosyvoice") &&
                     Boolean(character) &&
                     (Boolean(character?.ref_file) || refVoices.length > 0);
                   const job = jobs[stem.id];
@@ -1290,6 +1327,17 @@ function RenderBoard({
                         </button>
                       </div>
 
+                      {take?.warnings?.length ? (
+                        <div className="warnings">
+                          {take.warnings.map((warning) => (
+                            <div className="warning-item" key={warning}>
+                              <WarningCircle size={11} weight="fill" />
+                              <span>{warning}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+
                       {alignment ? (
                         <div className="render-align">
                           <span>
@@ -1410,7 +1458,13 @@ function RenderBoard({
                           <button
                             type="button"
                             className="button button-primary button-sm"
-                            onClick={() => onRender(stem)}
+                            onClick={() => {
+                              // Leave "New" so the finished takes show with the
+                              // engine's pick selected. Staying here hid them,
+                              // and clicking one to listen changed the pick.
+                              setNewMode((prev) => ({ ...prev, [stem.id]: false }));
+                              onRender(stem);
+                            }}
                             disabled={!readyForStem || renderBusy}
                           >
                             {busy ? <span className="spinner" /> : <Waveform size={14} weight="bold" />}
@@ -1919,14 +1973,61 @@ function MixBoard({
   job,
   onRender,
   onRefresh,
+  onSettingsChange,
+  onError,
 }: {
   project: Project;
   job?: Job;
   onRender: () => void;
   onRefresh: () => void;
+  onSettingsChange: (settings: ProjectSettings) => Promise<void>;
+  onError: (message: string) => void;
 }) {
   const mix = project.mix;
   const busy = job?.status === "queued" || job?.status === "running";
+  const reverb = project.settings.master_reverb ?? {
+    enabled: false,
+    ir_path: null,
+    wet: 0.35,
+  };
+  const [uploadingIr, setUploadingIr] = useState(false);
+
+  // The slider moves locally and saves on release: every save rewrites the
+  // whole project, so one request per step would be far too many.
+  const [wetDraft, setWetDraft] = useState<number | null>(null);
+  const wet = wetDraft ?? reverb.wet;
+
+  const patchReverb = async (patch: Partial<typeof reverb>) => {
+    onError("");
+    try {
+      await onSettingsChange({
+        ...project.settings,
+        master_reverb: { ...reverb, wet, ...patch },
+      });
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "Could not save reverb settings");
+    }
+  };
+
+  const commitWet = async () => {
+    if (wetDraft === null) return;
+    if (wetDraft !== reverb.wet) await patchReverb({ wet: wetDraft });
+    setWetDraft((current) => (current === wetDraft ? null : current));
+  };
+
+  const uploadIr = async (file: File | undefined) => {
+    if (!file) return;
+    setUploadingIr(true);
+    try {
+      const { ir_path } = await api.uploadIr(project.id, file);
+      await patchReverb({ ir_path, enabled: true });
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : "upload failed";
+      onError(`Could not upload the impulse response: ${detail}`);
+    } finally {
+      setUploadingIr(false);
+    }
+  };
   return (
     <div className="mix-layout">
       <section className="panel mix-hero">
@@ -2069,6 +2170,60 @@ function MixBoard({
           ) : null}
         </section>
       ) : null}
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2 className="panel-title">
+              <Waveform size={15} weight="fill" />
+              Master reverb
+            </h2>
+            <p className="panel-note">
+              A convolution tail on the finished mix. The room sim only buffers
+              0.68 s; this adds up to 2 s for large spaces. Off by default —
+              re-render the mix after changing it.
+            </p>
+          </div>
+        </div>
+        <div className="panel-actions">
+          <label className="panel-sub">
+            <input
+              type="checkbox"
+              checked={reverb.enabled}
+              onChange={(event) => void patchReverb({ enabled: event.target.checked })}
+              disabled={!reverb.ir_path}
+            />{" "}
+            enable
+          </label>
+          <input
+            type="file"
+            accept="audio/*,.wav,.flac,.ogg"
+            disabled={uploadingIr}
+            onChange={(event) => {
+              void uploadIr(event.target.files?.[0]);
+              // Allow picking the same file again after a failed upload.
+              event.target.value = "";
+            }}
+            title="Upload an impulse response WAV (capped at 2 s)"
+          />
+          {reverb.ir_path ? <span className="panel-sub">{reverb.ir_path}</span> : null}
+          <label className="panel-sub">
+            wet{" "}
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={wet}
+              onChange={(event) => setWetDraft(Number(event.target.value))}
+              onPointerUp={() => void commitWet()}
+              onKeyUp={() => void commitWet()}
+              onBlur={() => void commitWet()}
+            />{" "}
+            {Math.round(wet * 100)}%
+          </label>
+        </div>
+      </section>
     </div>
   );
 }
@@ -2101,6 +2256,8 @@ export function ProjectPage() {
   }>({ state: "idle", current: null, done: [], failed: [], skipped: [], total: 0 });
   const [errorDialog, setErrorDialog] = useState<{ title: string; body: string } | null>(null);
   const [recheckingCaptcha, setRecheckingCaptcha] = useState(false);
+  // Held here so single renders, "Generate all" and the captcha resume agree.
+  const [autoExtractVocals, setAutoExtractVocals] = useState(false);
 
   useEffect(() => {
     api.engines().then(setEngines).catch(() => setEngines([]));
@@ -2134,6 +2291,15 @@ export function ProjectPage() {
       active = false;
     };
   }, [id]);
+
+  const saveSettings = useCallback(
+    async (settings: ProjectSettings) => {
+      if (!project) return;
+      const updated = await api.updateProject(project.id, { settings });
+      setProject(updated);
+    },
+    [project],
+  );
 
   const dirty = Boolean(project && rawScript !== project.raw_script);
 
@@ -2231,6 +2397,15 @@ export function ProjectPage() {
         setJobs((previous) => ({ ...previous, [key]: update }));
         if (update.status === "succeeded") {
           void refreshProject();
+          // A Suno render can queue a vocal extraction when it finishes.
+          const followUp = update.result?.extract_job_id;
+          if (typeof followUp === "string") {
+            const followKey = `${String(update.result?.stem_id)}:extract`;
+            api.watchJob(followUp, (next) => {
+              setJobs((previous) => ({ ...previous, [followKey]: next }));
+              if (next.status === "succeeded") void refreshProject();
+            });
+          }
         }
       });
     },
@@ -2245,14 +2420,15 @@ export function ProjectPage() {
         const job = await api.renderStem(project.id, stem.id, {
           candidates: 2,
           cfg_scale: stem.cfg_scale,
-          seed: stem.seed,
+          seed: freshSeed(),
+          auto_extract_vocals: autoExtractVocals,
         });
         trackJob(stem.id, job);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Could not start render");
       }
     },
-    [project, trackJob],
+    [project, trackJob, autoExtractVocals],
   );
 
   const extractStem = useCallback(
@@ -2278,6 +2454,23 @@ export function ProjectPage() {
     },
     [project, trackJob],
   );
+
+  const extractAllVocals = useCallback(async () => {
+    if (!project) return;
+    setError("");
+    try {
+      const result = await api.extractAllStems(project.id);
+      for (const job of result.jobs) {
+        const stem = project.stems.find(
+          (item) => item.id === String(job.payload.stem_id ?? ""),
+        );
+        if (stem) trackJob(`${stem.id}:extract`, job);
+      }
+      if (result.count === 0) setError("No Suno takes need vocal extraction.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not start extraction");
+    }
+  }, [project, trackJob]);
 
   const importSunoTake = useCallback(
     async (stem: Stem, clipId: string) => {
@@ -2306,7 +2499,8 @@ export function ProjectPage() {
           job = await api.renderStem(project.id, stem.id, {
             candidates: 2,
             cfg_scale: stem.cfg_scale,
-            seed: stem.seed,
+            seed: freshSeed(),
+            auto_extract_vocals: autoExtractVocals,
           });
         } catch (reason) {
           const message = reason instanceof Error ? reason.message : "render failed";
@@ -2335,7 +2529,7 @@ export function ProjectPage() {
       setBatch((prev) => ({ ...prev, state: "done", current: null }));
       await refreshProject();
     },
-    [project, trackJob, refreshProject],
+    [project, trackJob, refreshProject, autoExtractVocals],
   );
 
   const changeRefVoice = useCallback(
@@ -3045,6 +3239,9 @@ export function ProjectPage() {
             sunoPlan={sunoPlan}
             onBuild={buildStems}
             onRender={renderStem}
+            autoExtractVocals={autoExtractVocals}
+            onAutoExtractChange={setAutoExtractVocals}
+            onExtractAll={() => void extractAllVocals()}
             onExtractStem={extractStem}
             onImportSuno={(stem, clipId) => void importSunoTake(stem, clipId)}
             onRenderAll={(stems, includeRendered) => void renderAll(stems, includeRendered)}
@@ -3073,6 +3270,8 @@ export function ProjectPage() {
           job={jobs["mix"]}
           onRender={() => void renderMix()}
           onRefresh={() => void refreshProject()}
+          onSettingsChange={saveSettings}
+          onError={setError}
         />
       )}
 

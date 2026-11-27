@@ -9,7 +9,7 @@ sourceRefs:
   - web/src/pages/ProjectsPage.tsx
   - web/src/styles.css
   - web/index.html
-lastReviewed: 2026-10-30
+lastReviewed: 2026-11-21
 ---
 
 # Drama Llama mascot and rename

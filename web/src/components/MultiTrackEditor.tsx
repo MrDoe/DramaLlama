@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowClockwise,
+  ArrowCounterClockwise,
   CaretLeft,
   CaretRight,
   CornersOut,
@@ -2880,6 +2882,27 @@ export function MultiTrackEditor({
             title="Show the whole timeline"
           >
             Fit
+          </button>
+          <span className="mt-sep" />
+          <button
+            type="button"
+            className="button button-ghost button-sm"
+            onClick={() => { if (undoEdit()) flashHint("Undo"); }}
+            disabled={pastRef.current.length === 0}
+            title="Undo the last edit (Ctrl+Z)"
+            aria-label="Undo last edit"
+          >
+            <ArrowCounterClockwise size={14} />
+          </button>
+          <button
+            type="button"
+            className="button button-ghost button-sm"
+            onClick={() => { if (redoEdit()) flashHint("Redo"); }}
+            disabled={futureRef.current.length === 0}
+            title="Redo the last undone edit (Ctrl+Y)"
+            aria-label="Redo last edit"
+          >
+            <ArrowClockwise size={14} />
           </button>
           <span className="mt-view-label">{viewLabel}</span>
         </div>

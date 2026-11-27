@@ -5,12 +5,76 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-from scipy.signal import butter, resample_poly, sosfilt
+from scipy.signal import butter, fftconvolve, resample_poly, sosfilt
 
 from .models import MixResult, Project
 
 SR = 24000
 TAIL_S = 2.0
+# The SFX bed has no Ambisonic representation of its own. Fold it into the
+# omni (W) channel of the Ambisonic *export* at this gain so cues are audible
+# there; the stereo mix keeps its existing separate effects sum unchanged.
+SFX_AMBISONIC_GAIN = 0.8
+
+
+def _apply_master_reverb(mix, project_dir: Path, cfg, sr: int, warnings: list[str]):
+    """Convolve the finished stereo mix with an impulse response.
+
+    The room sim is limited to its 32768-sample history by SAF, so a long tail
+    has to be a post-mix effect. The IR is truncated to TAIL_S (the slack the
+    mix already carries after the last line), which keeps the master and the
+    Ambisonic export the same length. Any failure degrades to the dry mix with
+    a warning — reverb must never break a render.
+    """
+    if not cfg.enabled or not cfg.ir_path:
+        return mix
+    try:
+        ir_path = (project_dir / cfg.ir_path).resolve()
+        ir_path.relative_to(project_dir.resolve())
+    except (ValueError, TypeError):
+        warnings.append("master reverb: IR path must be inside the project")
+        return mix
+    if not ir_path.is_file():
+        warnings.append(f"master reverb: IR file not found ({cfg.ir_path})")
+        return mix
+    try:
+        data, ir_sr = sf.read(str(ir_path), always_2d=True, dtype="float32")
+    except Exception as exc:
+        warnings.append(f"master reverb: could not read IR ({exc})")
+        return mix
+
+    limit = int(TAIL_S * sr)
+    # The input is still at the IR's own rate, so cap it in those samples.
+    ir_limit = int(TAIL_S * ir_sr)
+    if data.shape[0] > ir_limit:
+        data = data[:ir_limit]
+        warnings.append(f"master reverb: IR truncated to {TAIL_S:g}s")
+    if int(ir_sr) != sr:
+        try:
+            data = np.stack(
+                [resample_poly(data[:, index], sr, int(ir_sr)) for index in range(data.shape[1])],
+                axis=1,
+            )[:limit]
+        except Exception as exc:
+            warnings.append(f"master reverb: IR resample failed ({exc})")
+            return mix
+
+    # Normalise by IR energy (not the sum of samples — a dense, zero-mean IR
+    # would otherwise be scaled almost to silence). An impulse IR passes the
+    # mix through unchanged; a decaying IR gives a diffuse tail.
+    norm = 1.0 / max(1e-6, float(np.sqrt(np.square(data).sum())))
+    wet = np.zeros_like(mix)
+    try:
+        if mix.ndim == 1:
+            wet = fftconvolve(mix, data[:, 0] * norm)[: mix.shape[0]]
+        else:
+            for channel in range(mix.shape[0]):
+                ir = data[:, min(channel, data.shape[1] - 1)] * norm
+                wet[channel] = fftconvolve(mix[channel], ir)[: mix.shape[1]]
+    except Exception as exc:
+        warnings.append(f"master reverb: convolution failed ({exc})")
+        return mix
+    return mix * (1.0 - float(cfg.wet)) + wet * float(cfg.wet)
 
 
 def _load_audio(path: Path, sample_rate: int = SR) -> np.ndarray:
@@ -562,6 +626,11 @@ def build_mix(
         mix[0] = dialogue_stereo[0] + dialogue + effects
         mix[1] = dialogue_stereo[1] + dialogue + effects
 
+    if project.settings.master_reverb.enabled:
+        mix = _apply_master_reverb(
+            mix, project_dir, project.settings.master_reverb, sr, warnings
+        )
+
     peak = float(np.max(np.abs(mix))) if mix.size else 0.0
     if peak > 0:
         mix = mix * (0.89 / peak)
@@ -574,8 +643,15 @@ def build_mix(
 
     ambisonic_path: str | None = None
     if bed is not None and stage is not None and stage.export_ambisonic:
+        # Add the SFX bed to a *copy* so the stereo decode above stays exactly
+        # as it was. The W channel is the omni component, so a mono cue folded
+        # in there reaches the Ambisonic master without changing the dialogue
+        # image. Unstaged scenes remain silent there (no SH representation).
+        ambisonic_bed = bed.copy()
+        if effects.size:
+            ambisonic_bed[0] += effects[: ambisonic_bed.shape[1]] * SFX_AMBISONIC_GAIN
         ambisonic_path = _write_ambisonic_master(
-            mix_dir / f"{name}_ambisonic.wav", bed, stage, sr, spatial_render
+            mix_dir / f"{name}_ambisonic.wav", ambisonic_bed, stage, sr, spatial_render
         )
         if ambisonic_path is None:
             warnings.append("could not write the Ambisonic master")

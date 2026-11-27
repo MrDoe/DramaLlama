@@ -4,7 +4,7 @@ tags: [engine, chatterbox, german, voice-clone]
 sourceRefs:
   - src/drama_studio/engines/chatterbox.py
   - src/drama_studio/config.py
-lastReviewed: 2026-10-30
+lastReviewed: 2026-11-21
 ---
 
 # Chatterbox engine
@@ -12,6 +12,17 @@ lastReviewed: 2026-10-30
 German/English engine, `engines/chatterbox.py`. It talks to a separate
 Chatterbox Multilingual 0.5B HTTP server at `CHATTERBOX_URL`
 (default `http://127.0.0.1:4123`); the server owns the model and GPU memory.
+
+## Container lifecycle
+
+Drama Llama owns the Docker container rather than leaving it running idle.
+`ChatterboxEngine.load()` runs `docker start` on
+`DRAMA_LLAMA_CHATTERBOX_CONTAINER` (default `chatterbox-tts-api`, with a legacy
+`DRAMA_STUDIO_*` fallback) and polls `/health` for up to 180 s. `unload()` and
+the `finally` in `render_stem()` run `docker stop`, so the server's ~4.4 GB of
+VRAM is released when each render finishes; the next render restarts it. An
+empty container name disables Docker management and only health-checks an
+external server, which keeps tests hermetic. See [[concepts/gpu-serialization]].
 
 ## Voice workflow
 

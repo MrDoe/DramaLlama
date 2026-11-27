@@ -5,7 +5,7 @@ sourceRefs:
   - src/drama_studio/cuts.py
   - src/drama_studio/handlers.py
   - src/drama_studio/api.py
-lastReviewed: 2026-10-31
+lastReviewed: 2026-11-21
 ---
 
 # Cuts module (`src/drama_studio/cuts.py`)
@@ -24,8 +24,10 @@ queue, no store, no numpy import at module load.
   cuts whose take disappeared, rewrite affected line clips. Raises
   `FileNotFoundError` when the replacement audio is missing (callers map to
   `PermanentJobError` / `404`), instead of silently leaving dead take ids.
-- `normalize_alignment(alignment, takes)` — fill legacy `None` with the
-  selected (or first) take on load. Called in `ProjectStore.get`.
+- `normalize_alignment(alignment, takes)` — fill legacy `None` **and rebind
+  unknown take ids** to the selected (or first) take on load, so a project whose
+  take disappeared stays editable instead of rendering empty. Called in
+  `ProjectStore.get`.
 - `pick_selected_take(takes, selected_take_id)` — honor
   `StemRenderResult.selected_take_id`, then flagged take, then first. Fixes
   the old Suno path that always picked `result.takes[0]`.

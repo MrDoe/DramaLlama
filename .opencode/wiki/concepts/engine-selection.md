@@ -7,7 +7,7 @@ sourceRefs:
   - src/drama_studio/handlers.py
   - src/drama_studio/api.py
   - web/src/pages/ProjectPage.tsx
-lastReviewed: 2026-10-31
+lastReviewed: 2026-11-21
 ---
 
 # Engine selection (project-level only)

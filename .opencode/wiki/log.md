@@ -1,5 +1,91 @@
 # Wiki log
 
+## [2026-11-26] fix | cloud review findings
+
+- Vocal extraction is chained to a successful render by `take_id`;
+  `extract_stem` no longer overwrites concurrent edits.
+- `ProjectStore.save` uses a unique temp file. The reverb wet slider saves on
+  release; the IR cap is applied at the IR sample rate.
+- Windows spatial: the zip bundles the OpenBLAS DLLs and CI verifies it; the
+  installer copies them and no longer splits the DLL name into characters.
+
+## [2026-11-21] implement | items 1–5 (vocal extraction, undo UI, reverb, SFX ambisonics, Windows spatial CI)
+
+Implemented and verified the five planned improvements. Full suite
+(399 tests) and `npm run build` pass; UI changes were driven in a live Firefox
+session against the running app and the scratch projects were deleted.
+
+- **Suno vocal extraction**: `RenderBody.auto_extract_vocals` queues an
+  idempotent `stem.extract` follow-up (`auto_latest_suno`) after a Suno render;
+  added `POST /stems/extract-all`, a Stems checkbox and bulk button.
+- **Cut board history**: added toolbar Undo/Redo buttons beside the keyboard
+  shortcuts; verified duplicate → undo → redo against the Save-all count.
+- **Master reverb**: optional project-level convolution IR upload and wet
+  control on the Mix page, applied to a copy of the mix before loudnorm.
+  IR energy normalisation (not `sum(abs)`) is the critical detail.
+- **Ambisonic SFX**: fold the mono effects bed into a copy of the SH bed's W
+  channel for the export only, leaving the stereo path byte-identical.
+- **Windows spatial build**: CMake now names the DLL
+  `drama_llama_spatial.dll`, skips the Unix `m` library and builds under
+  `Release/`; `scripts/build_spatial.py` searches recursively and accepts extra
+  CMake defines; a `spatial-windows` CI job packages the zip. The pins entry
+  stays empty until a release actually carries the zip.
+
+Updated [[concepts/suno-vocal-extraction]] (new),
+[[concepts/cut-board-multitrack]], [[concepts/sfx-library-and-mix]],
+[[entities/installer]], and [[index]].
+
+## [2026-11-21] implement | splines for auto-staged 3D audio paths
+
+Authored Stage motion paths were already cubic Hermite splines, but the walks
+"Spread the cast" derives from stage directions were two-key straight lines.
+`spatial.plan_path()` now emits a third key at the walk's midpoint, offset
+perpendicular to the direction of travel (max 45 cm or 18% of the distance and
+clamped into the room), so the generated path is a real curve in both the board
+and the room render. Start, end, timing and resting places are unchanged.
+`layout_scene` facing now reads `keys[-1]`; four layout tests were updated and a
+new test asserts the midpoint deviates from the chord and that `sample_path`
+passes through it. `StagePath`'s docstring now says scene-relative spline keys
+instead of absolute-time linear keys. Full suite: 393 passed. Updated
+[[concepts/spatial-stage-rendering]] and the spline quirk.
+
+## [2026-11-21] lint | wiki health pass
+
+`wiki_lint` reported 20 findings: 18 stale pages, one orphan
+(`sources/log-from-2138-story`) and one dangling link
+(`concepts/spatial-stage-rendering` → `tests/test_mixer.py`, a source file, not
+a wiki page). Re-read the stale pages against the 2026-11-13 feature commits
+and corrected real drift, not just dates:
+
+- LLM parse is normalize-then-parse, not JSON ([[concepts/script-to-stem-pipeline]]).
+- Cues can be freeform on the timeline or anchored to a line
+  ([[concepts/sfx-library-and-mix]]).
+- Chatterbox's Docker container starts on demand and stops after each render
+  ([[entities/chatterbox-engine]], [[concepts/gpu-serialization]]).
+- Stale take ids are rebound on load and by the Cut board's "Use selected take"
+  action ([[entities/cuts-module]], [[concepts/take-aware-cuts]]).
+- Suno paid knobs are Pro-only, extraction is manual, and the persona picker
+  lives in Render ([[entities/suno-engine]]).
+- The batch-render page is marked shipped rather than a future plan.
+- The installer release section now reflects 0.3.9 and the pinned spatial asset.
+- Added [[concepts/release-versioning]] to record the seven-file bump and
+  annotated-tag flow, and linked it from [[entities/installer]] and the index.
+- Linked the 2138 story source from [[entities/suno-engine]] so it is no longer
+  an orphan; replaced the dangling `[[tests/test_mixer.py]]` link with a plain
+  source-file reference.
+
+Re-lint: 20 findings → 1. The remaining one is `summary.json` being reported
+as a dirty sourceRef on [[sources/log-from-2138-story]]: that file is the
+user's untracked Gemini export, so git cannot verify it regardless of the
+review date. Left untouched deliberately — staging or ignoring someone else's
+work to satisfy the linter would be wrong. All structural findings (staleness,
+orphan, dangling, catalog and frontmatter coverage) were clear at that point.
+
+The later spline edit modified tracked sourceRefs (`spatial.py`, `models.py`),
+so lint now reports 9 "stale" pages until those changes are committed. This is
+the same dirty-file artifact, not new factual drift; no review date can clear
+it while the working tree is dirty.
+
 ## [2026-10-29] seed | Drama Studio knowledge base
 
 Seeded the wiki from the M0–M5 implementation and the sibling Breeze

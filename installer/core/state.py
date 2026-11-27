@@ -35,6 +35,8 @@ def new_state(
         "shortcuts": [],
         "docker": {},
         "breeze_de_cpu": False,
+        "cosyvoice_cpu": False,
+        "cosyvoice_ggml": "",
         "pending_reboot": False,
         "pending_reason": "",
         "completed": False,

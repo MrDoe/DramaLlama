@@ -7,7 +7,7 @@ sourceRefs:
   - installer/core/engines.py
   - installer/pins.json
   - INSTALL.md
-lastReviewed: 2026-11-01
+lastReviewed: 2026-11-21
 ---
 
 # GPU-optional installation

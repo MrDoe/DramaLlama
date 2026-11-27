@@ -21,6 +21,8 @@ def launcher_env(
     device: str,
     breeze_de: bool = False,
     breeze_de_cpu: bool = False,
+    cosyvoice: bool = False,
+    cosyvoice_cpu: bool = False,
 ) -> dict[str, str]:
     """Environment shared by the Linux/Windows launchers and verification."""
     env = {
@@ -36,6 +38,8 @@ def launcher_env(
         env["BREEZE_DE_URL"] = "http://127.0.0.1:8137"
         if breeze_de_cpu or device == "cpu":
             env["BREEZE_DE_CPU"] = "1"
+    if cosyvoice and (cosyvoice_cpu or device == "cpu"):
+        env["DRAMA_LLAMA_COSYVOICE_BACKEND"] = "cpu"
     return env
 
 
@@ -139,6 +143,7 @@ def write_launchers(
     *,
     device: str,
     breeze_de_cpu: bool = False,
+    cosyvoice_cpu: bool = False,
     state: dict | None = None,
 ) -> dict[str, str]:
     del pins  # kept in the signature for callers that only have the pin bundle
@@ -147,6 +152,8 @@ def write_launchers(
         device=device,
         breeze_de=selection.has("breeze-de"),
         breeze_de_cpu=breeze_de_cpu,
+        cosyvoice=selection.has("cosyvoice"),
+        cosyvoice_cpu=cosyvoice_cpu,
     )
     progress.update("launchers", 0.1, "Writing the launcher…")
     launch = paths.prefix / "launch.py"

@@ -358,7 +358,24 @@ def plan_path(
             round(mouth_z, 2),
         )
 
-    path = StagePath(speaker=speaker, keys=[key(t0, begin), key(t1, end)])
+    # A third key bends the generated walk into the same cubic Hermite curve
+    # that authored paths get from sample_path(). Hand-authored two-key paths
+    # stay exactly straight — their one-sided tangents are the segment slope —
+    # so this only changes the walks "Spread the cast" generates.
+    dx, dy = end[0] - begin[0], end[1] - begin[1]
+    length = float(np.hypot(dx, dy))
+    if length > 1e-6:
+        # Perpendicular to the walk, by at most 45 cm or 18% of the distance.
+        # key() clamps the result, so a short step in a small room still fits.
+        bend = min(0.45, length * 0.18)
+        mid = (
+            (begin[0] + end[0]) * 0.5 - (dy / length) * bend,
+            (begin[1] + end[1]) * 0.5 + (dx / length) * bend,
+        )
+        keys = [key(t0, begin), key(t0 + (t1 - t0) * 0.5, mid), key(t1, end)]
+    else:
+        keys = [key(t0, begin), key(t1, end)]
+    path = StagePath(speaker=speaker, keys=keys)
     return path, (float(rest[0]), float(rest[1]))
 
 
@@ -400,9 +417,11 @@ def layout_scene(
 
     When `lines` (the scene's script lines) are supplied, each speaker's stage
     directions are read for motion cues — "(approaching)", "(through the
-    hatch)", "(pacing)" — and a speaker who moves gets a two-key path over the
-    window in `timing` in which they actually speak. A mover's resting position
-    is where the move ends, so the board shows the resolved spot, not the start.
+    hatch)", "(pacing)" — and a speaker who moves gets a three-key spline over
+    the window in `timing` in which they actually speak: a bent midpoint makes
+    the walk a curve in both the board and the room render. A mover's resting
+    position is where the move ends, so the board shows the resolved spot, not
+    the start.
     Without `lines` the layout is exactly the old geometric arc.
 
     A scene that is already staged keeps its room: the button re-places the
@@ -440,7 +459,7 @@ def layout_scene(
         # Face the listener, except someone walking off: they speak where they
         # are going, which is the whole point of staging the exit.
         if path is not None and cue in ("retreat", "leave"):
-            travel = (path.keys[1][1] - path.keys[0][1], path.keys[1][2] - path.keys[0][2])
+            travel = (path.keys[-1][1] - path.keys[0][1], path.keys[-1][2] - path.keys[0][2])
             facing = float(np.degrees(np.arctan2(travel[0], -travel[1])))
         else:
             dx = listener.position_m[0] - rest[0]

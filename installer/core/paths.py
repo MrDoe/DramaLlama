@@ -205,6 +205,15 @@ def legacy_breeze_de_model(home: Path | None = None) -> Path:
     )
 
 
+def legacy_cosyvoice_root(home: Path | None = None) -> Path:
+    """``bin/`` holds cosyvoice-cli, ``ggml/`` a downloaded GGML build."""
+    return Path(home or Path.home()) / "code" / "cosyvoice-cpp"
+
+
+def legacy_cosyvoice_models(home: Path | None = None) -> Path:
+    return Path(home or Path.home()) / "models" / "CosyVoice3-GGUF"
+
+
 def whisper_cache_root(home: Path | None = None) -> Path:
     """The exact cache layout ``vendor/breeze_stems.find_asr()`` expects.
 

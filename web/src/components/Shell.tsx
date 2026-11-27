@@ -84,7 +84,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <main>{children}</main>
 
       <footer className="footer">
-        <span>Breeze · Chatterbox · Suno · Whisper alignment</span>
+        <span>Breeze · Chatterbox · CosyVoice · Suno · Whisper alignment</span>
         <span>Research / non-commercial weights</span>
       </footer>
     </div>

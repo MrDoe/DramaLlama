@@ -274,12 +274,12 @@ def trim_and_normalize(
     duration = len(trimmed) / sample_rate
     if duration < MIN_REF_S:
         raise ReferenceTooShortError(
-            f"the selected clip is {duration:.1f} s after trimming; Breeze "
+            f"the selected clip is {duration:.1f} s after trimming; cloning "
             f"needs at least {MIN_REF_S:.0f} s"
         )
     if duration > MAX_REF_S:
         raise ReferenceTooShortError(
-            f"the selected clip is {duration:.1f} s after trimming; Breeze "
+            f"the selected clip is {duration:.1f} s after trimming; cloning "
             f"accepts at most {MAX_REF_S:.0f} s"
         )
     return peak_normalize(trimmed, peak=0.95).astype(np.float32)

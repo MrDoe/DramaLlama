@@ -115,6 +115,8 @@ file is a summary, not a replacement for the upstream licence texts.
   only downloaded when Breeze German is selected.
 - Chatterbox and chatterbox-tts-api (MIT and upstream model licences),
   pulled as a Docker image only when selected.
+- cosyvoice.cpp (MIT), the CosyVoice 3 weights (Apache-2.0), GGML libraries
+  from llama.cpp (MIT) and ONNX Runtime (MIT), only when CosyVoice is selected.
 - BetterSuno MCP (MIT), bundled with its pure-JavaScript dependencies.
 - imageio-ffmpeg {pins.get('ffmpeg', {}).get('pip_package', '')}: the Python
   package is BSD-2-Clause; the static ffmpeg binary it downloads is a GPL

@@ -23,10 +23,14 @@ lastReviewed: 2026-11-13
 - Markdown emphasis is stripped from spoken text, but `<sigh>` tags are kept
 - coverage = dialogue lines / (dialogue + unparsed); metadata/appendix excluded
 
-The optional LLM path asks Ollama for JSON, then validates that every line is a
-verbatim normalized substring of the source. Below 85% coverage it raises
-`LLMParseError`; the API falls back to the deterministic result and records a
-warning.
+The optional LLM path does **not** emit JSON. `normalize_llm_text()` asks the
+configured local or hosted model to rewrite any attribution style
+(`[NAME] "x"`, `Name: "x"`, `NAME (dir) text`) into the canonical
+`NAME (direction): text` form; `parse_normalized()` then runs the deterministic
+parser over that text and checks every parsed line is a verbatim normalized
+substring of the pasted source. Below 85% coverage it raises `LLMParseError`;
+the API falls back to the deterministic result and records a warning. The gate
+is what stops the model from paraphrasing dialogue.
 
 ## Stems
 

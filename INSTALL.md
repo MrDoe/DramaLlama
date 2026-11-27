@@ -62,7 +62,7 @@ Double-click the installer, or start it from a terminal. The wizard:
 1. Detects the OS, CPU/RAM, free disk, NVIDIA GPU + driver, Vulkan loader,
    Docker daemon, ffmpeg and any existing install.
 2. Asks which *optional* engines to add: Breeze English, Breeze German,
-   Chatterbox. The core app is always installed.
+   Chatterbox, CosyVoice 3. The core app is always installed.
 3. Asks where to install and where to keep projects.
 4. Shows the Breeze research/non-commercial licence when a Breeze component
    is selected.
@@ -99,6 +99,8 @@ rather than inside the prefix:
 | Breeze English weights | `~/models/Breeze-TTS-2` |
 | Breeze German sidecar | `~/code/breeze-tts-cpp/breeze-tts-2-v0.1.6-<platform>/breeze-server` |
 | Breeze German GGUF | `~/models/Articulatio-DE-Stream-TTS-v1.5-Q8_0.gguf` |
+| CosyVoice runtime | `~/code/cosyvoice-cpp/bin` (and `ggml/` when downloaded) |
+| CosyVoice models | `~/models/CosyVoice3-GGUF` |
 | Whisper large-v3 (CTranslate2) | `~/.cache/huggingface/hub/models--Systran--faster-whisper-large-v3/snapshots/<rev>` |
 
 The Whisper cache path is deliberately not derived from `HF_HOME`: the
@@ -127,6 +129,18 @@ the app payload and the Suno bridge.
   Q8_0 GGUF. It prefers Vulkan and falls back to CPU automatically.
 - **Chatterbox** runs as a Docker container, not in the Python virtualenv. It
   clones an uploaded voice sample and has no voice-design mode.
+- **CosyVoice 3** adds at most about 2.0 GiB (the model, the speech tokenizer,
+  the program and GGML libraries). Anything already installed is reused:
+  `cosyvoice-cli` on `PATH` or in `~/code/cosyvoice-cpp/bin` and model files in
+  the Hugging Face cache (verified by SHA-256). Ollama's GGML 1.x libraries are
+  used if they pass a probe, and a pinned GGML build (about 40 MB) is kept as a
+  spare. If the official CosyVoice sources are already cached, the better RL
+  model is converted locally instead of downloading the published one. On Linux
+  the installer downloads Drama Llama's build (Ubuntu 22.04 or newer). Where
+  `installer/pins.json` pins none for the platform, build it from a source
+  checkout with `python scripts/build_cosyvoice.py --install`; the optional step
+  fails with that hint. Windows downloads the pinned upstream build and needs the
+  Microsoft Visual C++ Redistributable (x64).
 
 ### GPU mode
 
@@ -176,6 +190,8 @@ and stops the container around each render.
 - **Breeze-TTS-2.cpp** and the **Articulatio-DE GGUF** are research releases;
   check upstream terms before commercial use.
 - **Chatterbox** and its Docker image carry their own licences.
+- **CosyVoice 3** weights are Apache-2.0; cosyvoice.cpp, the GGML libraries
+  and ONNX Runtime are MIT.
 - The bundled ffmpeg comes from `imageio-ffmpeg`: the static binary is GPL,
   fetched by pip at install time and not redistributed by the installer.
 
@@ -243,7 +259,7 @@ Useful flags:
 | `--prefix PATH` | install root (default: per-user data dir) |
 | `--data-dir PATH` | projects directory (default: `<prefix>/data`) |
 | `--device auto\|gpu\|cpu` | device mode (`--cpu` / `--gpu` shortcuts) |
-| `--components LIST` | `core`, `breeze-en`, `breeze-de`, `chatterbox`, `all` |
+| `--components LIST` | `core`, `breeze-en`, `breeze-de`, `chatterbox`, `cosyvoice`, `all` |
 | `--accept-breeze-license` | required for any Breeze component |
 | `--allow-docker-install`, `--yes` | allow elevated Docker installation |
 | `--json` | machine-readable result |

@@ -313,8 +313,8 @@ function GeneratedReview({
           spellCheck={false}
         />
         <small>
-          Breeze clones from this text. It must match the audio word-for-word;
-          punctuation is fine, paraphrasing is not.
+          The voice is cloned from this text. It must match the audio
+          word-for-word; punctuation is fine, paraphrasing is not.
         </small>
       </label>
       <label className="voice-check">
@@ -380,7 +380,10 @@ export function VoiceStudio({
 }) {
   const character = project.script.characters[speaker];
   const engine = projectEngine(project);
-  const isBreeze = engine === "breeze" || engine === "breeze-de" || engine === "fake";
+  const canDesign = engine === "breeze" || engine === "breeze-de" || engine === "fake";
+  const isCosyVoice = engine === "cosyvoice";
+  // Reference clip plus transcript, prepared from an uploaded sample.
+  const canGenerate = canDesign || isCosyVoice;
   const isChatterbox = engine === "chatterbox";
   const references = useMemo(
     () => character?.references ?? [],
@@ -568,8 +571,8 @@ export function VoiceStudio({
               <SpeakerHigh size={16} weight="fill" /> Voices for {character.name}
             </h2>
             <p className="panel-note">
-              {isBreeze
-                ? "Breeze clones from a 6–11 s clip plus its exact transcript."
+              {canGenerate
+                ? `${isCosyVoice ? "CosyVoice" : "Breeze"} clones from a 6–11 s clip plus its exact transcript.`
                 : isChatterbox
                   ? "Chatterbox clones directly from an uploaded sample; no transcript is needed."
                   : "Manage this character's reference voices."}
@@ -577,28 +580,30 @@ export function VoiceStudio({
           </div>
         </div>
 
-        <div className="voice-direction">
-          <label className="voice-field">
-            <span>Voice direction</span>
-            <textarea
-              className="input voice-transcript"
-              rows={2}
-              value={direction}
-              onChange={(event) => setDirection(event.target.value)}
-              placeholder="Woman in her fifties, gravelly, clipped military diction, barely-contained fear"
-              spellCheck={false}
-              aria-label={`Voice direction for ${character?.name ?? speaker}`}
-            />
-          </label>
-          <button
-            type="button"
-            className="button button-secondary button-sm"
-            onClick={() => void saveDirection()}
-            disabled={!directionDirty || directionBusy}
-          >
-            {directionBusy ? "Saving…" : "Save direction"}
-          </button>
-        </div>
+        {isCosyVoice ? null : (
+          <div className="voice-direction">
+            <label className="voice-field">
+              <span>Voice direction</span>
+              <textarea
+                className="input voice-transcript"
+                rows={2}
+                value={direction}
+                onChange={(event) => setDirection(event.target.value)}
+                placeholder="Woman in her fifties, gravelly, clipped military diction, barely-contained fear"
+                spellCheck={false}
+                aria-label={`Voice direction for ${character?.name ?? speaker}`}
+              />
+            </label>
+            <button
+              type="button"
+              className="button button-secondary button-sm"
+              onClick={() => void saveDirection()}
+              disabled={!directionDirty || directionBusy}
+            >
+              {directionBusy ? "Saving…" : "Save direction"}
+            </button>
+          </div>
+        )}
 
         <div className="voice-dialog-body">
           {designBusy ? (
@@ -684,7 +689,9 @@ export function VoiceStudio({
                   <p>
                     {designBusy
                       ? "The first voice is being designed above."
-                      : "No voices yet. Design one or generate one from a sample."}
+                      : isCosyVoice
+                        ? "No voices yet. Generate one from a sample."
+                        : "No voices yet. Design one or generate one from a sample."}
                   </p>
                 </div>
               ) : (
@@ -923,7 +930,7 @@ export function VoiceStudio({
 
         {mode === "list" ? (
           <div className="voice-dialog-foot">
-            {isBreeze ? (
+            {canGenerate ? (
               <>
                 <button
                   type="button"
@@ -937,6 +944,7 @@ export function VoiceStudio({
                 >
                   <Waveform size={14} /> Generate from sample
                 </button>
+                {canDesign ? (
                 <button
                   type="button"
                   className="button button-ghost button-sm"
@@ -957,6 +965,7 @@ export function VoiceStudio({
                 >
                   <SpeakerHigh size={14} /> Design from description
                 </button>
+                ) : null}
               </>
             ) : null}
             {isChatterbox ? (

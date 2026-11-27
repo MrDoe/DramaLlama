@@ -13,6 +13,7 @@ import soundfile as sf
 from drama_studio import spatial
 from drama_studio.models import (
     Character,
+    Cue,
     Line,
     Project,
     ProjectSettings,
@@ -496,6 +497,49 @@ def test_ambisonic_master_is_exported_on_demand(tmp_path):
 
 
 @needs_native
+def test_ambisonic_master_includes_sfx_bed(tmp_path):
+    """The SFX bed has no SH representation, but must be audible in the
+    Ambisonic export: fold it into W without touching the stereo mix."""
+    from types import SimpleNamespace
+
+    stage = stage_with(
+        StageActor(speaker="MARA", position_m=(2.0, 2.0, 1.5)),
+        export_ambisonic=True,
+    )
+    project, directory = make_project(tmp_path, spatial_stage=stage)
+    from drama_studio.mixer import build_mix
+
+    sfx_file = directory / "rain.wav"
+    tone = (0.5 * np.sin(2 * np.pi * 330 * np.arange(24000) / 24000)).astype(np.float32)
+    sf.write(sfx_file, tone, 24000)
+    lookup = lambda _: SimpleNamespace(path=str(sfx_file))
+
+    project.cues = [
+        Cue(
+            id="c1", kind="one_shot", sfx_id="s1", name="Rain",
+            position_s=0.2, gain_db=0.0, duck=False,
+        )
+    ]
+    with_cue = build_mix(project, directory, lookup)
+    assert with_cue.ambisonic
+    amb_with, _ = sf.read(str(directory / with_cue.ambisonic), dtype="float32")
+    stereo_with, _ = sf.read(str(directory / with_cue.file), dtype="float32")
+
+    project.cues = []
+    without_cue = build_mix(project, directory, lookup)
+    amb_without, _ = sf.read(str(directory / without_cue.ambisonic), dtype="float32")
+    stereo_without, _ = sf.read(str(directory / without_cue.file), dtype="float32")
+
+    # W (channel 0) carries the omni SFX energy; the stereo master is built
+    # from the unchanged dialogue decode plus its own effects sum.
+    assert float(np.abs(amb_with[:, 0]).sum()) > float(
+        np.abs(amb_without[:, 0]).sum()
+    ) * 1.05
+    assert amb_with.shape[0] == stereo_with.shape[0]
+    assert stereo_with.shape == stereo_without.shape
+
+
+@needs_native
 def test_ambisonic_master_is_omitted_by_default(tmp_path):
     stage = stage_with(StageActor(speaker="MARA", position_m=(2.0, 2.0, 1.5)))
     project, directory = make_project(tmp_path, spatial_stage=stage)
@@ -623,7 +667,7 @@ def test_entering_speaker_starts_at_the_door_and_rests_inside():
     path = stage.paths[0]
     # Alone in a 6 m room the slot is dead centre, so the threshold is too.
     assert (path.keys[0][1], path.keys[0][2]) == pytest.approx((3.0, 0.2), abs=0.01)
-    assert path.keys[0][0] == 6.0 and path.keys[1][0] == 11.5
+    assert path.keys[0][0] == 6.0 and path.keys[-1][0] == 11.5
     # The dot on the board is where they end up, not where they came from.
     assert stage.actors[0].position_m == pytest.approx((3.0, 1.5, 1.5), abs=0.01)
 
@@ -637,7 +681,7 @@ def test_approaching_speaker_ends_where_they_are_placed():
         timing={"MERIAN": (2.0, 9.0)},
     )
     path = stage.paths[0]
-    start, end = path.keys[0], path.keys[1]
+    start, end = path.keys[0], path.keys[-1]
     assert (end[1], end[2]) == pytest.approx(stage.actors[0].position_m[:2], abs=0.02)
     # Walks in from farther back: the first key is deeper into the room.
     assert (start[1] - 3.0) ** 2 + (start[2] - 4.1) ** 2 > (end[1] - 3.0) ** 2 + (end[2] - 4.1) ** 2
@@ -653,8 +697,8 @@ def test_leaving_speaker_faces_the_exit_not_the_listener():
     )
     actor = next(actor for actor in stage.actors if actor.speaker == "SANDT")
     path = next(path for path in stage.paths if path.speaker == "SANDT")
-    travel_x = path.keys[1][1] - path.keys[0][1]
-    travel_y = path.keys[1][2] - path.keys[0][2]
+    travel_x = path.keys[-1][1] - path.keys[0][1]
+    travel_y = path.keys[-1][2] - path.keys[0][2]
     expected = float(np.degrees(np.arctan2(travel_x, -travel_y)))
     assert actor.facing_deg == pytest.approx(expected, abs=0.2)
 
@@ -668,8 +712,30 @@ def test_pacing_speaker_traverses_the_room_width():
         lines=_lines(("SANDT", "pacing")),
         timing={"SANDT": (0.0, 6.0)},
     )
-    first, last = stage.paths[0].keys
+    first, last = stage.paths[0].keys[0], stage.paths[0].keys[-1]
     assert first[1] < last[1] and first[2] == pytest.approx(last[2])
+
+
+def test_auto_staged_walk_is_a_curve_not_a_straight_line():
+    """'Spread the cast' now hands the renderer a spline, not a chord.
+
+    The mid key is offset perpendicular to the walk, so the curve passes
+    through it instead of following the straight line between the endpoints.
+    sample_path() must agree with the board at that key.
+    """
+    stage = spatial.layout_scene(
+        StageProject(default_room=StageRoom(dims_m=(6.0, 5.0, 3.0))),
+        1,
+        ["MERIAN"],
+        lines=_lines(("MERIAN", "through the hatch")),
+        timing={"MERIAN": (0.0, 6.0)},
+    )
+    keys = stage.paths[0].keys
+    assert len(keys) == 3
+    assert keys[0][0] < keys[1][0] < keys[2][0]
+    straight_mid = ((keys[0][1] + keys[2][1]) * 0.5, (keys[0][2] + keys[2][2]) * 0.5)
+    assert (keys[1][1] - straight_mid[0]) ** 2 + (keys[1][2] - straight_mid[1]) ** 2 > 0.01
+    assert spatial.sample_path(keys, keys[1][0])[:2] == pytest.approx((keys[1][1], keys[1][2]))
 
 
 def test_motion_cue_keywords_are_matched_case_insensitively():

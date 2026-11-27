@@ -17,6 +17,7 @@ import types
 import urllib.error
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -829,6 +830,39 @@ def test_ensure_spatial_rejects_a_library_that_does_not_load(
         runtimes.ensure_spatial(paths, spatial_pins(archive), make_system(), Progress())
 
 
+def test_ensure_spatial_keeps_the_windows_runtime_dlls(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """OpenBLAS ships beside the renderer and must be installed with it."""
+    from installer.core import runtimes
+
+    archive = tmp_path / "asset.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("drama_llama_spatial.dll", b"shim")
+        bundle.writestr("openblas.dll", b"blas")
+    pins = spatial_pins(archive)
+    pins["spatial"]["assets"] = {
+        "windows-x86_64": {
+            "url": "https://example.invalid/dramallama-spatial-windows.zip",
+            "sha256": sha256_file(archive),
+            "size": archive.stat().st_size,
+        }
+    }
+    paths = InstallPaths(prefix=tmp_path / "prefix").ensure()
+    monkeypatch.setattr(
+        runtimes, "download", lambda url, dest, **kw: copy_over_url(url, dest, archive)
+    )
+    library = mock.MagicMock()
+    library.dl_abi_version.return_value = 1
+    monkeypatch.setattr(runtimes.ctypes, "CDLL", lambda _path: library)
+    windows = make_system(os_name="windows", platform_key="windows-x86_64")
+
+    installed = runtimes.ensure_spatial(paths, pins, windows, Progress())
+
+    assert installed == paths.lib / "drama_llama_spatial.dll"
+    assert (paths.lib / "openblas.dll").read_bytes() == b"blas"
+
+
 def test_estimates_grow_with_components() -> None:
     pins = load_pins()
     system = make_system()
@@ -973,7 +1007,14 @@ def test_purge_models_only_removes_installer_created_paths(tmp_path: Path) -> No
 
 
 def test_engine_registry_contract() -> None:
-    assert verify.ENGINE_NAMES == {"fake", "breeze", "breeze-de", "chatterbox", "suno"}
+    assert verify.ENGINE_NAMES == {
+        "fake",
+        "breeze",
+        "breeze-de",
+        "chatterbox",
+        "cosyvoice",
+        "suno",
+    }
 
 
 def test_verify_files_reports_missing_checks(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ import type {
   Job,
   Language,
   Project,
+  ProjectSettings,
   ProjectSummary,
   RefVoice,
   SceneStage,
@@ -144,6 +145,7 @@ export const api = {
       language?: Language;
       raw_script?: string;
       default_engine?: EngineName | "auto" | null;
+      settings?: ProjectSettings;
     },
   ) =>
     request<Project>(`/projects/${id}`, {
@@ -372,6 +374,16 @@ export const api = {
     }),
   fileUrl: (projectId: string, path: string) =>
     `${BASE}/projects/${projectId}/files/${path}`,
+  uploadIr: async (projectId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(`${BASE}/projects/${projectId}/ir/upload`, {
+      method: "POST",
+      body: form,
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return (await response.json()) as { ir_path: string };
+  },
   uploadVoiceSample: async (
     projectId: string,
     speaker: string,
@@ -468,6 +480,7 @@ export const api = {
       suno_audio_weight?: number | null;
       suno_mv?: string | null;
       suno_vocal_gender?: string | null;
+      auto_extract_vocals?: boolean;
     },
   ) =>
     request<Job>(`/projects/${projectId}/stems/${stemId}/render`, {
@@ -483,6 +496,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  extractAllStems: (projectId: string) =>
+    request<{ jobs: Job[]; count: number }>(
+      `/projects/${projectId}/stems/extract-all`,
+      { method: "POST" },
+    ),
   importSunoTake: (projectId: string, stemId: string, clipId: string) =>
     request<Job>(`/projects/${projectId}/stems/${stemId}/import-suno`, {
       method: "POST",

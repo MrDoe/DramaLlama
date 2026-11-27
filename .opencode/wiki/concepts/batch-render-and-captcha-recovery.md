@@ -1,5 +1,5 @@
 ---
-title: Batch render and captcha recovery — implementation plan
+title: Batch render and captcha recovery
 tags: [suno, render, batch, captcha, ux, plan]
 sourceRefs:
   - web/src/pages/ProjectPage.tsx
@@ -8,10 +8,14 @@ sourceRefs:
   - src/drama_studio/worker.py
   - src/drama_studio/jobs.py
   - suno-bridge/server.mjs
-lastReviewed: 2026-10-30
+lastReviewed: 2026-11-21
 ---
 
-# Batch render and captcha recovery — implementation plan
+# Batch render and captcha recovery
+
+> **Status: shipped (2026-10-30).** The phases below are the design that was
+> implemented and verified live; [[concepts/render-error-dialog]] describes the
+> resulting UI. This page is kept as the rationale and verification record.
 
 Goal: turn "one human tick per stem" into **at most one tick per batch**, and
 make the tick land in the right place when Cloudflare insists. See

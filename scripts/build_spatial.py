@@ -63,6 +63,12 @@ def main(argv: list[str] | None = None) -> int:
         "--output",
         help="copy the built library into this directory (CI artifact staging)",
     )
+    parser.add_argument(
+        "--cmake-arg",
+        action="append",
+        default=[],
+        help="extra CMake argument, e.g. a -D define (repeatable)",
+    )
     args = parser.parse_args(argv)
 
     if shutil.which("cmake") is None:
@@ -73,7 +79,10 @@ def main(argv: list[str] | None = None) -> int:
         shutil.rmtree(BUILD_DIR)
 
     configured = subprocess.run(
-        ["cmake", "-S", str(SOURCE_DIR), "-B", str(BUILD_DIR), "-DCMAKE_BUILD_TYPE=Release", f"-DSAF_DIR={saf}"],
+        [
+            "cmake", "-S", str(SOURCE_DIR), "-B", str(BUILD_DIR),
+            "-DCMAKE_BUILD_TYPE=Release", f"-DSAF_DIR={saf}", *args.cmake_arg,
+        ],
         capture_output=True,
         text=True,
     )
@@ -82,7 +91,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("cmake configure failed")
 
     built = subprocess.run(
-        ["cmake", "--build", str(BUILD_DIR), "--parallel", str(args.jobs)],
+        [
+            "cmake", "--build", str(BUILD_DIR), "--config", "Release",
+            "--parallel", str(args.jobs),
+        ],
         capture_output=True,
         text=True,
     )
@@ -90,7 +102,12 @@ def main(argv: list[str] | None = None) -> int:
         print(built.stderr or built.stdout, file=sys.stderr)
         raise SystemExit("build failed")
 
-    libraries = sorted(BUILD_DIR.glob("libdrama_llama_spatial.*"))
+    # Windows drops the `lib` prefix (ctypes loads drama_llama_spatial.dll).
+    # Multi-config generators (Visual Studio) put the DLL in a Release/
+    # subfolder, so search recursively; SAF's own libraries have other names.
+    libraries = sorted(BUILD_DIR.rglob("libdrama_llama_spatial.*")) + sorted(
+        BUILD_DIR.rglob("drama_llama_spatial.*")
+    )
     library = next((p for p in libraries if p.suffix in {".so", ".dylib", ".dll"}), None)
     if library is None:
         raise SystemExit("build produced no loadable library")

@@ -3,7 +3,7 @@ title: Log from 2138 — story summary
 tags: [source, audio-drama, suno, cyberpunk, story]
 sourceRefs:
   - summary.json
-lastReviewed: 2026-11-13
+lastReviewed: 2026-11-21
 ---
 
 # Log from 2138 — story summary

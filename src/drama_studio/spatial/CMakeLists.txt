@@ -83,8 +83,7 @@ target_include_directories(drama_llama_spatial PRIVATE
 target_link_libraries(drama_llama_spatial
     PRIVATE
         saf
-        saf_example_ambi_roomsim
-        m)
+        saf_example_ambi_roomsim)
 
 # Hidden symbols keep the ctypes surface to the dl_* entry points.
 set_target_properties(drama_llama_spatial PROPERTIES
@@ -92,5 +91,10 @@ set_target_properties(drama_llama_spatial PROPERTIES
     VISIBILITY_INLINES_HIDDEN ON)
 
 if(WIN32)
+    # ctypes loads `drama_llama_spatial.dll` on Windows (no lib prefix), and
+    # the math functions come from the CRT — there is no separate `m` library.
+    set_target_properties(drama_llama_spatial PROPERTIES OUTPUT_NAME "drama_llama_spatial")
     target_link_libraries(drama_llama_spatial PRIVATE msvcrt)
+else()
+    target_link_libraries(drama_llama_spatial PRIVATE m)
 endif()

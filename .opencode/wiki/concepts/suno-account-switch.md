@@ -5,7 +5,7 @@ sourceRefs:
   - third_party/bettersuno-mcp/src/auth.js
   - third_party/bettersuno-mcp/src/ws-bridge.js
   - src/drama_studio/engines/suno.py
-lastReviewed: 2026-10-30
+lastReviewed: 2026-11-21
 ---
 
 # Suno account switch breaks downloads

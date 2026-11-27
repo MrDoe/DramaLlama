@@ -43,6 +43,7 @@ from ..core.plan import (
     BREEZE_EN,
     CHATTERBOX,
     CORE,
+    COSYVOICE,
     Selection,
     build_steps,
     download_estimate,
@@ -79,6 +80,10 @@ Breeze German — Breeze-TTS-2.cpp + Articulatio-DE
 Chatterbox
   Chatterbox Multilingual and the chatterbox-tts-api Docker image carry their
   own licences. The image is pulled from Docker Hub only if you select it.
+
+CosyVoice 3
+  The cosyvoice.cpp runtime and the GGML libraries are MIT, the CosyVoice 3
+  model weights are Apache-2.0 and ONNX Runtime is MIT.
 
 Drama Llama itself is provided as-is, without warranty. Third-party notices
 are written to NOTICE.md inside the install directory.
@@ -393,6 +398,14 @@ class ComponentsPage(QWizardPage):
             "CUDA is available, otherwise the smaller CPU image.",
         )
 
+        self.cosyvoice = self._option(
+            layout,
+            "CosyVoice 3",
+            "German and English voice cloning that follows line directions. "
+            "About 2 GB; already installed models and libraries are reused. "
+            "Runs on Vulkan or CPU.",
+        )
+
         self.allow_docker = QCheckBox(
             "Allow the wizard to request administrator permission to install Docker"
         )
@@ -404,7 +417,7 @@ class ComponentsPage(QWizardPage):
         layout.addWidget(self.estimate)
         layout.addStretch(1)
 
-        for box in (self.breeze_en, self.breeze_de, self.chatterbox):
+        for box in (self.breeze_en, self.breeze_de, self.chatterbox, self.cosyvoice):
             box.toggled.connect(self.update_estimate)
         self.allow_docker.toggled.connect(self.update_estimate)
 
@@ -430,6 +443,7 @@ class ComponentsPage(QWizardPage):
         self.breeze_en.setChecked(BREEZE_EN in (requested or installed))
         self.breeze_de.setChecked(BREEZE_DE in (requested or installed))
         self.chatterbox.setChecked(CHATTERBOX in (requested or installed))
+        self.cosyvoice.setChecked(COSYVOICE in (requested or installed))
         self.allow_docker.setChecked(bool(self.wizard_ref.args.allow_docker_install))
         self.update_estimate()
 
@@ -439,6 +453,7 @@ class ComponentsPage(QWizardPage):
             (BREEZE_EN, self.breeze_en),
             (BREEZE_DE, self.breeze_de),
             (CHATTERBOX, self.chatterbox),
+            (COSYVOICE, self.cosyvoice),
         ):
             if box.isChecked():
                 components.append(name)

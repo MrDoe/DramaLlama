@@ -46,6 +46,14 @@ export function NewProjectPage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
 
+  // What "Auto" turns into: new German projects start on CosyVoice when the
+  // server reports it installed (the API makes the same choice).
+  const newProjectEngine: EngineName =
+    language === "de" &&
+    engines.some((engine) => engine.name === "cosyvoice" && engine.available)
+      ? "cosyvoice"
+      : autoEngine(language);
+
   useEffect(() => {
     api.engines().then(setEngines).catch(() => setEngines([]));
   }, []);
@@ -171,7 +179,7 @@ export function NewProjectPage() {
               }
             >
               <option value="auto">
-                Auto · {engineLabel(autoEngine(language))}
+                Auto · {engineLabel(newProjectEngine)}
               </option>
               {engines
                 .filter(
@@ -279,7 +287,8 @@ export function NewProjectPage() {
             <span>
               The engine is a project default, not a language: Breeze designs
               reference voices for English, Breeze-DE for German, Chatterbox
-              clones a sample in either language, and Suno renders dialogue
+              and CosyVoice clone a sample in either language (new German
+              projects start on CosyVoice when it is installed), Suno renders dialogue
               through BetterSuno with preset or persona voices. All share the
               same stem and alignment pipeline, and each stem can override it.
             </span>

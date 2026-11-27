@@ -3,6 +3,9 @@ from __future__ import annotations
 from .base import EngineInfo, TTSEngine
 from .manager import ENGINES
 
+#: Engines that clone a stored reference clip and cannot render without one.
+REFERENCE_REQUIRED_ENGINES = frozenset({"breeze", "breeze-de", "cosyvoice"})
+
 
 def create_engine(name: str) -> TTSEngine:
     try:

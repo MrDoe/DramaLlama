@@ -18,7 +18,16 @@ from pydantic import BaseModel, Field
 
 from . import __version__, spatial
 from .config import DB_PATH, PROJECTS_DIR, SUNO_BRIDGE_URL, WEB_DIST
-from .engines import ENGINES, all_engine_info
+from .engines import (
+    ENGINES,
+    REFERENCE_REQUIRED_ENGINES,
+    all_engine_info,
+    cosyvoice_runtime,
+)
+
+def _cosyvoice_installed() -> bool:
+    return cosyvoice_runtime.installed()
+
 
 def _engine_available(name: str) -> bool:
     factory = ENGINES.get(name)
@@ -28,7 +37,8 @@ def _engine_available(name: str) -> bool:
         return bool(factory().available())
     except Exception:
         return False
-from .jobs import JobQueue
+from .cuts import suno_take_needing_extraction
+from .jobs import JobQueue, enqueue_vocal_extraction
 from .llm import (
     LLMClient,
     LLMError,
@@ -132,6 +142,9 @@ class RenderBody(BaseModel):
     suno_audio_weight: float | None = Field(default=None, ge=0, le=100)
     suno_mv: str | None = None
     suno_vocal_gender: str | None = None
+    # After a successful Suno render, queue a Demucs extraction of its take.
+    # Only meaningful when the project engine is Suno; ignored otherwise.
+    auto_extract_vocals: bool = False
 
 
 class StemUpdate(BaseModel):
@@ -515,8 +528,13 @@ def create_app(
     @app.post("/api/projects", status_code=201)
     def create_project(body: ProjectCreate) -> dict[str, Any]:
         check_engine(body.default_engine, body.language)
+        engine = body.default_engine
+        if engine is None and body.language == "de" and _cosyvoice_installed():
+            # Stored explicitly, and for new projects only: existing "auto"
+            # projects keep resolving to Chatterbox, next to their takes.
+            engine = "cosyvoice"
         project = store.create(
-            body.title, body.language, body.script_text, default_engine=body.default_engine
+            body.title, body.language, body.script_text, default_engine=engine
         )
         return project.model_dump(mode="json")
 
@@ -998,18 +1016,32 @@ def create_app(
         existing = active_job(project_id, "stem.extract", stem_id)
         if existing is not None:
             return existing.model_dump(mode="json")
-        job = queue.enqueue(
-            "stem.extract",
-            {
-                "project_id": project_id,
-                "stem_id": stem_id,
-                "take_id": take_id,
-                "method": method,
-                "align": bool(body.get("align", True)),
-            },
-            priority=10,
+        job = enqueue_vocal_extraction(
+            queue,
+            project_id,
+            stem_id,
+            take_id,
+            method=method,
+            align=bool(body.get("align", True)),
         )
         return job.model_dump(mode="json")
+
+    @app.post("/api/projects/{project_id}/stems/extract-all", status_code=202)
+    def extract_all_project_stems(project_id: str) -> dict[str, Any]:
+        """Extract isolated vocals for each stem's current Suno take, if needed."""
+        project = project_or_404(project_id)
+        jobs: list[dict[str, Any]] = []
+        for stem in project.stems:
+            take = suno_take_needing_extraction(stem)
+            if take is None:
+                continue
+            existing = active_job(project_id, "stem.extract", stem.id)
+            if existing is not None:
+                jobs.append(existing.model_dump(mode="json"))
+                continue
+            job = enqueue_vocal_extraction(queue, project_id, stem.id, take.id)
+            jobs.append(job.model_dump(mode="json"))
+        return {"jobs": jobs, "count": len(jobs)}
 
     @app.post("/api/projects/{project_id}/stems/{stem_id}/import-suno", status_code=202)
     def import_suno_take(
@@ -1371,6 +1403,14 @@ def create_app(
         character = project.script.characters.get(speaker)
         if character is None:
             raise HTTPException(status_code=404, detail="character not found")
+        if project.default_engine == "cosyvoice":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "CosyVoice cannot design a voice; generate one from a sample "
+                    "in the Voices step"
+                ),
+            )
         existing = active_job(project_id, "reference.design", speaker=speaker)
         if existing is not None:
             return existing.model_dump(mode="json")
@@ -1408,11 +1448,11 @@ def create_app(
         engine_name = project.default_engine or (
             "breeze" if project.language == "en" else "chatterbox"
         )
-        if engine_name not in {"breeze", "breeze-de", "fake"}:
+        if engine_name not in REFERENCE_REQUIRED_ENGINES | {"fake"}:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"{engine_name} does not use prepared Breeze reference "
+                    f"{engine_name} does not use prepared reference "
                     "voices; use its native sample flow instead"
                 ),
             )
@@ -1579,7 +1619,7 @@ def create_app(
         engine_name = project.default_engine or (
             "breeze" if project.language == "en" else "chatterbox"
         )
-        if engine_name in {"breeze", "breeze-de"}:
+        if engine_name in REFERENCE_REQUIRED_ENGINES:
             voice_ok = bool(character.ref_file)
             if not voice_ok and (body.ref_voice_id or stem.ref_voice_id):
                 voice_ok = any(
@@ -1587,10 +1627,12 @@ def create_app(
                     for item in character.references
                 )
             if not voice_ok:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"design a reference voice for {stem.speaker} first",
+                remedy = (
+                    f"generate a voice for {stem.speaker} from a sample first"
+                    if engine_name == "cosyvoice"
+                    else f"design a reference voice for {stem.speaker} first"
                 )
+                raise HTTPException(status_code=409, detail=remedy)
         existing = active_job(project_id, "stem.render", stem_id)
         if existing is not None:
             return existing.model_dump(mode="json")
@@ -1610,6 +1652,7 @@ def create_app(
                 "suno_audio_weight": body.suno_audio_weight,
                 "suno_mv": body.suno_mv,
                 "suno_vocal_gender": body.suno_vocal_gender,
+                "auto_extract_vocals": body.auto_extract_vocals,
             },
             priority=10,
         )
@@ -1991,6 +2034,20 @@ def create_app(
         finally:
             temp.unlink(missing_ok=True)
         return item.model_dump(mode="json")
+
+    @app.post("/api/projects/{project_id}/ir/upload", status_code=201)
+    def upload_master_reverb_ir(project_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        """Upload an impulse response into the project for the master reverb."""
+        project_or_404(project_id)
+        directory = store.project_dir(project_id)
+        ir_dir = directory / "irs"
+        ir_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = Path(file.filename or "ir.wav").name
+        target = ir_dir / f"{uuid.uuid4().hex[:8]}-{safe_name}"
+        with target.open("wb") as handle:
+            while chunk := file.file.read(1024 * 1024):
+                handle.write(chunk)
+        return {"ir_path": str(target.relative_to(directory))}
 
     @app.get("/api/sfx/{sfx_id}/audio")
     def sfx_audio(sfx_id: str) -> FileResponse:

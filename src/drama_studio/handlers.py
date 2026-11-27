@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import config
 from .aligner import WhisperAligner
 from .config import DATA_DIR, PROJECTS_DIR
 from .cuts import (
@@ -19,10 +20,13 @@ from .cuts import (
     pick_selected_take,
     remap_removed_cuts,
 )
-from .engines import engine_info
+from .engines import REFERENCE_REQUIRED_ENGINES, engine_info
+from .engines.cosyvoice_directions import classify_directions, local_llm_client
 from .engines.fake import FakeEngine
 from .engines.manager import EngineManager
 from .engines.suno import CaptchaRequiredError, _convert_to_wav, _pick_vocal_stem
+from .jobs import enqueue_vocal_extraction
+from .llm import LLMError
 from .mixer import build_mix
 from .models import (
     AlignedLine,
@@ -33,6 +37,8 @@ from .models import (
     Project,
     ReferenceRequest,
     RefVoice,
+    RenderSegment,
+    Stem,
     StemRenderRequest,
     SunoTrack,
     Take,
@@ -45,10 +51,14 @@ from .refvoice import (
 )
 from .settings import resolve_suno
 from .sfx import SfxLibrary
+from .stems import delivery_segments, join_line_texts
 from .store import ProjectStore, slugify
 from .suno import SunoBridge, SunoError
 from .suno_lyrics import format_suno_lyrics
 from .worker import Handler, JobCancelled, JobContext, PermanentJobError
+
+#: Free VRAM a fresh load needs, in GB; anything unlisted needs 5.
+_GPU_NEEDED_GB = {"breeze": 9.0, "cosyvoice": 2.5}
 
 _MANAGER = EngineManager()
 _STORE = ProjectStore(PROJECTS_DIR)
@@ -115,11 +125,13 @@ def _gpu_free_gb() -> float | None:
 def _require_gpu(engine_name: str) -> None:
     if engine_name in {"fake", "chatterbox", "suno"}:
         return
+    if engine_name == "cosyvoice" and config.COSYVOICE_BACKEND.lower() == "cpu":
+        return
     if _MANAGER.is_loaded(engine_name):
         # Resident already: rendering reuses the loaded model instead of
         # paying the load spike again, so the free-VRAM gate does not apply.
         return
-    needed = 9.0 if engine_name == "breeze" else 5.0
+    needed = _GPU_NEEDED_GB.get(engine_name, 5.0)
     free = _gpu_free_gb()
     if free is not None and free < needed:
         raise PermanentJobError(
@@ -249,11 +261,86 @@ def _save_character(project_id: str, speaker: str, mutate) -> Project:
     return _STORE.save(fresh)
 
 
+def _cosyvoice_segments(
+    project: Project, stem: Stem, ctx: JobContext
+) -> tuple[list[RenderSegment], list[str]]:
+    """Split a stem by delivery, labelling new directions with a local LLM.
+
+    The labels are cached in the project, so a model is only needed when a
+    direction appears for the first time. Returns ``(segments, notes)``.
+    """
+    lines = _lines_for_stem(project, stem.line_ids)
+    directed = any(line.direction.strip() for line in lines)
+    if directed and stem.text != join_line_texts(lines):
+        return delivery_segments(stem, lines, {}), [
+            "The stem text was edited, so line directions were not applied."
+        ]
+    notes: list[str] = []
+    if any(
+        line.direction.strip() and line.direction.strip() not in project.direction_styles
+        for line in lines
+    ):
+        # Label the whole project at once: one model load instead of one per stem.
+        unknown = sorted(
+            {
+                line.direction.strip()
+                for scene in project.script.scenes
+                for line in scene.lines
+                if line.direction.strip()
+            }
+            - project.direction_styles.keys()
+        )
+        client = local_llm_client()
+        if client is None:
+            notes.append(
+                "No local language model is available, so new line directions "
+                "were not applied."
+            )
+        else:
+            _MANAGER.unload_all()
+            ctx.progress(0.01, f"reading {len(unknown)} stage directions (local model)")
+            try:
+                styles = classify_directions(unknown, client)
+            except LLMError as exc:
+                notes.append(f"Line directions were not applied: {exc}")
+            else:
+                project.direction_styles.update(styles)
+                fresh = _load_project(project.id)
+                fresh.direction_styles.update(styles)
+                _STORE.save(fresh)
+    return delivery_segments(stem, lines, project.direction_styles), notes
+
+
+def _delete_replaced_audio(project_id: str, replaced: dict[str, Take]) -> None:
+    """Remove the audio of takes a re-render replaced.
+
+    Every generation uses a new seed and therefore new file names, so without
+    this each re-render would leave its predecessor's audio behind. Files any
+    take still refers to are kept.
+    """
+    if not replaced:
+        return
+    directory = _STORE.project_dir(project_id)
+    takes_dir = (directory / "audio" / "takes").resolve()
+    in_use = {
+        take.file for stem in _load_project(project_id).stems for take in stem.takes
+    }
+    for take in replaced.values():
+        path = (directory / take.file).resolve()
+        if take.file not in in_use and path.parent == takes_dir:
+            path.unlink(missing_ok=True)
+
+
 def design_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
     payload = job.payload
     project_id = payload["project_id"]
     speaker = payload["speaker"]
     project = _load_project(project_id)
+    if _engine_name(project) == "cosyvoice":
+        raise PermanentJobError(
+            "CosyVoice cannot design a voice; generate one from a sample in the "
+            "Voices step"
+        )
     character = project.script.characters.get(speaker)
     if character is None:
         raise PermanentJobError(f"character {speaker!r} not found in project")
@@ -374,9 +461,9 @@ def generate_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
         raise PermanentJobError(f"character {speaker!r} not found in project")
 
     engine_name = _engine_name(project)
-    if engine_name not in {"breeze", "breeze-de", "fake"}:
+    if engine_name not in REFERENCE_REQUIRED_ENGINES | {"fake"}:
         raise PermanentJobError(
-            f"{engine_name} does not use prepared Breeze reference voices"
+            f"{engine_name} does not use prepared reference voices"
         )
     expected_language = {"breeze": "en", "breeze-de": "de"}.get(engine_name)
     if expected_language and project.language != expected_language:
@@ -415,7 +502,7 @@ def generate_reference(job: Job, ctx: JobContext) -> dict[str, Any]:
         output = directory / "refs" / f"{speaker_slug}-{ref_id}.wav"
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    language = "de" if engine_name == "breeze-de" else "en"
+    language = project.language
 
     def _progress(value: float, message: str) -> None:
         ctx.progress(0.02 + 0.93 * max(0.0, min(1.0, value)), message)
@@ -523,14 +610,19 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     ref_path = None
     ref_text = character.ref_text
     resolved: ResolvedReference | None = None
-    if engine_name in {"breeze", "breeze-de", "chatterbox"}:
+    if engine_name in REFERENCE_REQUIRED_ENGINES | {"chatterbox"}:
         resolved = _resolve_reference(character, directory, ref_voice_id)
-    if engine_name in {"breeze", "breeze-de"}:
+    if engine_name in REFERENCE_REQUIRED_ENGINES:
         # A per-stem voice override wins; otherwise the default reference.
-        # Either way Breeze needs a usable reference file and transcript.
+        # Either way these engines need a usable reference file and transcript.
         if resolved is None:
+            remedy = (
+                "generate one from a sample in the Voices step"
+                if engine_name == "cosyvoice"
+                else "design it first"
+            )
             raise PermanentJobError(
-                f"no reference voice for {stem.speaker}; design it first"
+                f"no reference voice for {stem.speaker}; {remedy}"
             )
         ref_path = resolved.path
         ref_text = resolved.ref_text
@@ -570,7 +662,14 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             value = getattr(stem, name, None)
         return default if value is None else value
 
+    segments: list[RenderSegment] = []
+    notes: list[str] = []
+    if engine_name == "cosyvoice":
+        # Before the GPU gate: the local model must be done and unloaded first.
+        segments, notes = _cosyvoice_segments(project, stem, ctx)
+
     request = StemRenderRequest(
+        segments=segments,
         project_id=project.id,
         stem_id=stem.id,
         speaker=stem.speaker,
@@ -620,6 +719,8 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         if "cancelled" in str(exc).lower():
             raise JobCancelled(str(exc)) from exc
         raise
+    for take in result.takes:
+        take.warnings = [*notes, *take.warnings]
 
     old_selected = next((take for take in stem.takes if take.selected), None)
     existing_alignment = project.alignments.get(stem.id)
@@ -751,11 +852,30 @@ def render_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
             _save_job_result(project, stem_id=stem.id, alignment_key=stem.id)
         alignment = existing_alignment
 
+    # Queued here, after the render has succeeded, so a failed or cancelled
+    # render never extracts anything and a second worker cannot get ahead of it.
+    extract_job_id = None
+    if (
+        payload.get("auto_extract_vocals")
+        and engine_name == "suno"
+        and selected is not None
+        and not selected.vocal_isolated
+    ):
+        ctx.check_cancelled()
+        extract_job_id = enqueue_vocal_extraction(
+            ctx.queue, project.id, stem.id, selected.id
+        ).id
+
+    if engine_name != "suno":
+        # Last: the cuts have been moved to the new take by now.
+        _delete_replaced_audio(project.id, removed)
+
     ctx.progress(1.0, "stem ready")
     return {
         "stem_id": stem.id,
         "render": result.model_dump(mode="json"),
         "alignment": alignment.model_dump(mode="json") if alignment else None,
+        "extract_job_id": extract_job_id,
     }
 
 
@@ -998,7 +1118,7 @@ def extract_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     payload = job.payload
     project_id = payload["project_id"]
     stem_id = payload["stem_id"]
-    take_id = payload["take_id"]
+    take_id = payload.get("take_id")
     method = str(payload.get("method") or "demucs").strip().lower()
     if method not in {"demucs", "suno"}:
         raise PermanentJobError(f"unknown extraction method {method!r}")
@@ -1007,6 +1127,8 @@ def extract_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
     stem = next((item for item in project.stems if item.id == stem_id), None)
     if stem is None:
         raise PermanentJobError(f"stem {stem_id!r} not found in project")
+    if not take_id:
+        raise PermanentJobError("take_id is required")
     take = next((item for item in stem.takes if item.id == take_id), None)
     if take is None:
         raise PermanentJobError(f"take {take_id!r} not found in stem")
@@ -1156,6 +1278,12 @@ def extract_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
         vocal_isolated=True,
         selected=True,
     )
+    # Extraction runs for minutes. Apply the result to the file as it is now,
+    # not to the copy loaded at the start, or edits made meanwhile are reverted.
+    project = _load_project(project_id)
+    stem = next((item for item in project.stems if item.id == stem_id), None)
+    if stem is None:
+        raise PermanentJobError(f"stem {stem_id!r} was removed during extraction")
     old_selected = next((item for item in stem.takes if item.selected), None)
     existing_alignment = project.alignments.get(stem.id)
     _freeze_legacy_cuts(existing_alignment, old_selected)
@@ -1205,9 +1333,11 @@ def extract_stem(job: Job, ctx: JobContext) -> dict[str, Any]:
                 from .cuts import seed_positions
 
                 seed_positions(alignment)
-                project.alignments[stem.id] = alignment
-                project.mix_stale = True
-                _STORE.save(project)
+                # Whisper is slow too: reload before writing the cut sheet.
+                fresh = _load_project(project_id)
+                fresh.alignments[stem.id] = alignment
+                fresh.mix_stale = True
+                _STORE.save(fresh)
             except Exception:
                 alignment = None
 

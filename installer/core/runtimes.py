@@ -299,8 +299,8 @@ def ensure_spatial(
         cancel=progress.cancelled,
     )
     progress.update("spatial", 0.7, "Installing the spatial renderer…")
-    names = tuple(
-        "drama_llama_spatial.dll"
+    names = (
+        ("drama_llama_spatial.dll",)
         if is_windows(system.os_name)
         else ("libdrama_llama_spatial.so", "libdrama_llama_spatial.dylib")
     )
@@ -313,7 +313,12 @@ def ensure_spatial(
         ensure_dir(paths.lib)
         target = paths.lib / binary.name
         shutil.copy2(binary, target)
-        if not is_windows(system.os_name):
+        if is_windows(system.os_name):
+            # OpenBLAS and its runtime DLLs ship beside the renderer; Windows
+            # resolves them from the directory of the DLL being loaded.
+            for dependency in binary.parent.glob("*.dll"):
+                shutil.copy2(dependency, paths.lib / dependency.name)
+        else:
             target.chmod(0o755)
     finally:
         shutil.rmtree(staging, ignore_errors=True)

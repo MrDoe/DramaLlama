@@ -6,14 +6,16 @@ from .base import BaseEngine, EngineNotAvailable, TTSEngine
 from .breeze import BreezeEngine
 from .breeze_de import BreezeDeEngine
 from .chatterbox import ChatterboxEngine
-from .suno import SunoEngine
+from .cosyvoice import CosyVoiceEngine
 from .fake import FakeEngine
+from .suno import SunoEngine
 
 ENGINES: dict[str, Callable[[], TTSEngine]] = {
     "fake": FakeEngine,
     "breeze": BreezeEngine,
     "breeze-de": BreezeDeEngine,
     "chatterbox": ChatterboxEngine,
+    "cosyvoice": CosyVoiceEngine,
     "suno": SunoEngine,
 }
 
