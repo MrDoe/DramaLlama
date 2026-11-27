@@ -187,7 +187,7 @@
       "url": "https://raw.githubusercontent.com/FunAudioLLM/CosyVoice/074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc/asset/zero_shot_prompt.wav",
       "size": 334138,
       "sha256": "c7b31d6dbe7cc6a716dded00550db5b50940bf209e424e4ad207b12e657c8ff6",
-      "text": "希望你以后能够做的比我还好呦。"
+      "text": "\u5e0c\u671b\u4f60\u4ee5\u540e\u80fd\u591f\u505a\u7684\u6bd4\u6211\u8fd8\u597d\u5466\u3002"
     },
     "upstream": {
       "repo": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",

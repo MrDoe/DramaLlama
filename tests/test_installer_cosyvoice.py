@@ -427,3 +427,11 @@ def test_an_existing_rl_model_is_not_rebuilt(converting):
 
     assert converting.conversions == []
     assert converting.model() not in result.created
+
+
+def test_pins_stay_plain_ascii():
+    """CI steps read pins.json with the platform encoding; Windows is cp1252."""
+    pins_file = Path(__file__).resolve().parents[1] / "installer" / "pins.json"
+
+    pins_file.read_bytes().decode("ascii")
+    assert load_pins()["cosyvoice"]["smoke_reference"]["text"].startswith("希望")
